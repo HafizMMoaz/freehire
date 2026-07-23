@@ -18,6 +18,7 @@
   import RealityBadge from './RealityBadge.svelte';
   import ReferralBlock from './ReferralBlock.svelte';
   import ReportDialog from './ReportDialog.svelte';
+  import VoteControl from './VoteControl.svelte';
 
   // The job is server-rendered: it arrives as a prop from the route's `load`, so
   // the article's content is in the initial HTML. Only the per-user interactions
@@ -386,15 +387,29 @@
       </div>
 
       <div class="border-t border-border pt-4 first:border-t-0 first:pt-0">
-        <Button
-          variant="ghost"
-          size="sm"
-          onclick={onReportClick}
-          class="w-full text-muted-foreground"
-        >
-          <Flag class="size-4" />
-          Report this job
-        </Button>
+        <div class="flex items-center justify-between gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onclick={onReportClick}
+            class="text-muted-foreground"
+          >
+            <Flag class="size-4" />
+            Report this job
+          </Button>
+          <!-- Keyed on the slug so a client-side navigation to another job remounts
+               the control and re-seeds its counts/highlight (JobView itself is not
+               remounted on param change). -->
+          {#key job.public_slug}
+            <VoteControl
+              target="job"
+              slug={job.public_slug}
+              upvoteCount={job.upvote_count ?? 0}
+              downvoteCount={job.downvote_count ?? 0}
+              myVote={job.my_vote ?? 0}
+            />
+          {/key}
+        </div>
       </div>
     </div>
   </aside>
