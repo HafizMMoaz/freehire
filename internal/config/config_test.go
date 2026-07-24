@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"testing"
 	"time"
 )
@@ -185,5 +186,33 @@ func TestLoad_EmailNotifyEmptyWhenUnset(t *testing.T) {
 	s := Load()
 	if s.AWSRegion != "" || s.NotifyEmailFrom != "" {
 		t.Errorf("email-notify settings should be empty when unset, got %q/%q", s.AWSRegion, s.NotifyEmailFrom)
+	}
+}
+
+func TestLoad_ExtensionRedirectAllowlistFromEnv(t *testing.T) {
+	t.Setenv("EXTENSION_REDIRECT_ALLOWLIST", "abcdefghijklmnop, qrstuvwxyzabcdef")
+
+	got := Load().ExtensionRedirectAllowlist
+	want := []string{"abcdefghijklmnop", "qrstuvwxyzabcdef"}
+	if !slices.Equal(got, want) {
+		t.Errorf("ExtensionRedirectAllowlist = %v, want %v", got, want)
+	}
+}
+
+func TestLoad_ExtensionRedirectAllowlistDropsBlankEntries(t *testing.T) {
+	t.Setenv("EXTENSION_REDIRECT_ALLOWLIST", " , abcdefghijklmnop ,,  ")
+
+	got := Load().ExtensionRedirectAllowlist
+	want := []string{"abcdefghijklmnop"}
+	if !slices.Equal(got, want) {
+		t.Errorf("ExtensionRedirectAllowlist = %v, want %v", got, want)
+	}
+}
+
+func TestLoad_ExtensionRedirectAllowlistNilWhenUnset(t *testing.T) {
+	t.Setenv("EXTENSION_REDIRECT_ALLOWLIST", "")
+
+	if got := Load().ExtensionRedirectAllowlist; got != nil {
+		t.Errorf("ExtensionRedirectAllowlist should be nil when unset, got %v", got)
 	}
 }

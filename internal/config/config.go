@@ -124,6 +124,11 @@ type Settings struct {
 	// sender address (e.g. notifications@freehire.dev).
 	AWSRegion       string
 	NotifyEmailFrom string
+
+	// ExtensionRedirectAllowlist bounds where the browser-extension connect flow
+	// may hand back a minted token: only https://<id>.chromiumapp.org redirects
+	// whose <id> is listed here are accepted. Empty disables the connect flow.
+	ExtensionRedirectAllowlist []string
 }
 
 // OAuthCredentials is one OAuth provider's client id/secret pair.
@@ -178,7 +183,21 @@ func Load() Settings {
 
 		AWSRegion:       os.Getenv("AWS_REGION"),
 		NotifyEmailFrom: os.Getenv("NOTIFY_EMAIL_FROM"),
+
+		ExtensionRedirectAllowlist: splitCSV(os.Getenv("EXTENSION_REDIRECT_ALLOWLIST")),
 	}
+}
+
+// splitCSV parses a comma-separated env value into trimmed, non-empty entries.
+// An empty or all-blank value yields nil.
+func splitCSV(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // decodeKey base64-decodes an AES key, returning nil unless it is exactly 32

@@ -94,6 +94,9 @@ type API struct {
 	oauthCodes *oauth.CodeStore
 	// frontendOrigin is where OAuth callbacks send the browser back to.
 	frontendOrigin string
+	// extensionRedirectAllowlist bounds the browser-extension connect flow to the
+	// chromiumapp.org redirect ids listed here. Empty refuses every redirect.
+	extensionRedirectAllowlist []string
 	// gmailConnector + gmailCipher back the "Connect Gmail" inbox. Both nil when
 	// the feature is unconfigured (Google creds / token key absent) — the connect
 	// routes are then not registered and the inbox reads empty.
@@ -275,6 +278,10 @@ type Config struct {
 	// Telegram-only (email disabled). NotifyEmailFrom is the verified SES sender address.
 	AWSRegion       string
 	NotifyEmailFrom string
+	// ExtensionRedirectAllowlist bounds the browser-extension connect flow: only
+	// https://<id>.chromiumapp.org redirects whose <id> is listed may receive a
+	// minted token. Empty leaves the connect endpoint refusing every redirect.
+	ExtensionRedirectAllowlist []string
 }
 
 // Register wires all routes onto the application from cfg. Auth is same-origin
@@ -293,6 +300,9 @@ func Register(app *fiber.App, cfg Config) {
 		oauth:          cfg.OAuthRegistry,
 		oauthCodes:     oauth.NewCodeStore(60 * time.Second),
 		frontendOrigin: cfg.FrontendOrigin,
+
+		extensionRedirectAllowlist: cfg.ExtensionRedirectAllowlist,
+
 		gmailConnector: cfg.GmailConnector,
 		gmailCipher:    cfg.GmailCipher,
 		mailDomain:     cfg.MailboxDomain,
@@ -716,4 +726,13 @@ func Register(app *fiber.App, cfg Config) {
 	// Mobile-only: redeem the one-time code from the custom-scheme callback for a
 	// session. Public; the code is the credential.
 	authGroup.Post("/oauth/exchange", a.OAuthExchange)
+
+	// Browser-extension sign-in ("Sign in with freehire"): the extension opens
+	// this in the freehire origin via launchWebAuthFlow. Cookie-only (RequireAuth)
+	// like key management — a leaked key must not mint further keys. GET shows the
+	// consent screen; POST mints a named key and redirects the token in the
+	// fragment. Both refuse any redirect outside the configured allowlist.
+	extAuth := auth.RequireAuth(a.issuer)
+	authGroup.Get("/extension/connect", extAuth, a.ExtensionConnect)
+	authGroup.Post("/extension/connect", extAuth, a.ExtensionConnectSubmit)
 }

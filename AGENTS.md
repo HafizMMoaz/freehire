@@ -44,7 +44,7 @@ cmd/backfill-company-names/main.go  resolves real display names for slug-named c
 cmd/import-yc/main.go      enriches companies from yc-oss directory
 sources/                   board files + sources/custom.yml + sources/telegram.yml
 internal/
-  config/            env config (server: PORT, DATABASE_URL, FRONTEND_ORIGIN, JWT_SECRET/JWT_TTL, COOKIE_SECURE, MEILI_URL/MEILI_MASTER_KEY, OAUTH_*, SENTRY_*; workers: LLM_BASE_URL/LLM_API_KEY/LLM_MODEL, EMBED_*)
+  config/            env config (server: PORT, DATABASE_URL, FRONTEND_ORIGIN, JWT_SECRET/JWT_TTL, COOKIE_SECURE, MEILI_URL/MEILI_MASTER_KEY, OAUTH_*, EXTENSION_REDIRECT_ALLOWLIST, SENTRY_*; workers: LLM_BASE_URL/LLM_API_KEY/LLM_MODEL, EMBED_*)
   observability/     optional Sentry error reporting (see observability/AGENTS.md)
   database/          pgxpool connection pool
   db/                GENERATED sqlc code + queries/*.sql (see db/AGENTS.md)
