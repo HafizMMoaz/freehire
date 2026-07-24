@@ -396,7 +396,7 @@
           terminal
         </figcaption>
         <pre class="overflow-x-auto p-4 leading-relaxed"><span class="text-muted-foreground"># install — no Go needed</span>
-curl -fsSL <span class="text-foreground">https://freehire.dev/install.sh</span> | sh
+curl -fsSL <span class="text-foreground">https://freehire.me/install.sh</span> | sh
 
 <span class="text-muted-foreground"># authenticate once, then search &amp; track</span>
 freehire auth login --token <span class="text-foreground">fhk_…</span>

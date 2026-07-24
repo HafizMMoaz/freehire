@@ -5,7 +5,7 @@
   const repoUrl = 'https://github.com/strelov1/freehire';
   const telegramUrl = 'https://t.me/freehiredev';
   // TODO(strelov1): confirm the contact address you want published here.
-  const contactEmail = 'hello@freehire.dev';
+  const contactEmail = 'hello@freehire.me';
 
   const canonical = $derived(`${page.url.origin}/privacy`);
 
@@ -32,8 +32,8 @@
 
     <p class="text-base leading-relaxed text-muted-foreground">
       freehire (<a
-        href="https://freehire.dev"
-        class="font-medium text-foreground underline-offset-4 hover:underline">freehire.dev</a
+        href="https://freehire.me"
+        class="font-medium text-foreground underline-offset-4 hover:underline">freehire.me</a
       >) is a free, open-source IT job aggregator. This policy explains what data we collect, why,
       and who we share it with. We collect only what the product needs to work, and we never sell
       your data.
