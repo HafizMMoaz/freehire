@@ -491,6 +491,9 @@ func Register(app *fiber.App, cfg Config) {
 	api.Delete("/jobs/:slug/track", keyAuth, a.Untrack)
 	// Read-only per-job skill match against the caller's profile (no writes).
 	api.Get("/jobs/:slug/match", keyAuth, a.JobMatch)
+	// Ad-hoc skill match for a job posting scraped off any page (title + text),
+	// no catalog job required — powers the browser extension's on-any-page card.
+	api.Post("/me/match-text", keyAuth, a.MatchText)
 	// The on-demand LLM match analysis (GET cached / POST run / SSE stream).
 	api.Get("/jobs/:slug/match-analysis", keyAuth, a.GetMatchAnalysis)
 	api.Post("/jobs/:slug/match-analysis", keyAuth, a.PostMatchAnalysis)
