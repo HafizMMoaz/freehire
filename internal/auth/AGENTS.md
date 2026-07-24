@@ -28,6 +28,28 @@ OAuth sign-in (`internal/auth/oauth/`) adds a provider registry (Google/GitHub/L
 
 `internal/handler/oauth.go` owns the OAuth HTTP handlers.
 
+### Browser-extension connect flow
+
+The browser extension signs in with `chrome.identity.launchWebAuthFlow`, which
+opens `GET /api/v1/auth/extension/connect` **in the freehire origin** (so the
+session cookie is present) and waits for a redirect to
+`https://<extension-id>.chromiumapp.org/`. Handlers live in
+`internal/handler/extension_connect.go`, both **cookie-only (`RequireAuth`)** like
+key management — a leaked key must not mint further keys:
+
+- `GET` validates `redirect_uri` (`validateExtensionRedirect`: https +
+  `<id>.chromiumapp.org` + `<id>` on the allowlist) and renders a consent page.
+- `POST` re-validates, then on `decision=allow` **mints an ordinary named API key**
+  (`extensionKeyName`, via `GenerateAPIKey`/`CreateAPIKey`) and 302s to
+  `redirect_uri#token=…&state=…` — the token rides the **fragment**, never the
+  query, so it is not logged or sent in `Referer`. Any other decision mints
+  nothing and 302s `#error=access_denied`.
+
+The redirect target is bounded by `EXTENSION_REDIRECT_ALLOWLIST` (comma-separated
+extension ids, parsed in `internal/config`); an empty allowlist disables the flow.
+The minted key is a normal revocable key — it shows up in `/me/api-keys` and
+authenticates per-user endpoints via `Authorization: Bearer`.
+
 ## Limitations
 - No token revocation/refresh (logout clears the cookie but the JWT lives until `exp`; modest TTL instead).
 - No CSRF token — only `SameSite=Lax` + same-origin defense; a CSRF token is needed only if a future need forces `SameSite=None`.

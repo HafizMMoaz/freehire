@@ -191,6 +191,8 @@ func main() {
 
 		AWSRegion:       cfg.AWSRegion,
 		NotifyEmailFrom: cfg.NotifyEmailFrom,
+
+		ExtensionRedirectAllowlist: cfg.ExtensionRedirectAllowlist,
 	})
 
 	// Run the server in a goroutine so main can wait for a shutdown signal.
