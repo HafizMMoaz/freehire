@@ -5,7 +5,7 @@
 // the generated contracts so it stays in lock-step with the Go StringFacets.
 
 /** Production base URL for every path below. */
-export const BASE_URL = 'https://freehire.dev/api/v1';
+export const BASE_URL = 'https://freehire.me/api/v1';
 
 /** Authentication requirement for an endpoint, rendered as a badge. */
 export type Auth = 'none' | 'cookie-or-key' | 'cookie' | 'moderator';
@@ -222,6 +222,31 @@ export const GROUPS: Group[] = [
         curl: `curl "${BASE_URL}/jobs/search?q=golang&seniority=senior&work_mode=remote&regions=cis&sort=posted_at"`,
         responseExample: `{
   "data": [ { "public_slug": "...", "title": "Senior Go Engineer", "...": "..." } ],
+  "meta": { "total": 137, "limit": 20, "offset": 0 }
+}`,
+      },
+      {
+        method: 'GET',
+        path: '/agent/jobs/search',
+        auth: 'none',
+        summary: 'Search with full descriptions, for programmatic/agent consumers.',
+        description:
+          'Same query and filters as `/jobs/search`, but each result carries the ' +
+          '`description` in full (verbatim from the database) instead of the truncated ' +
+          'index preview. Use `description_format` to choose how it is rendered.',
+        filterable: true,
+        query: [
+          { name: 'q', type: 'string', description: 'Full-text query over title, company, and description.', example: 'golang' },
+          { name: 'description_format', type: 'string', description: 'One of `html` (default, verbatim), `text` (tags stripped), `markdown` (HTML converted to Markdown). Unknown values fall back to `html`.', example: 'markdown' },
+          { name: 'sort', type: 'string', description: 'One of `created_at`, `posted_at`, `salary_min`, `salary_max`. Omit for relevance/newest.', example: 'posted_at' },
+          { name: 'order', type: 'string', description: '`asc` or `desc` (default `desc`).', example: 'desc' },
+          { name: 'semantic_ratio', type: 'number', description: 'Opt-in hybrid search, 0–1 (default 0 = pure keyword). Needs the optional semantic index.', example: '0' },
+          { name: 'limit', type: 'integer', description: 'Page size, 1–100.', example: '20' },
+          { name: 'offset', type: 'integer', description: 'Rows to skip; `offset + limit` ≤ 10000.', example: '0' },
+        ],
+        curl: `curl "${BASE_URL}/agent/jobs/search?q=golang&work_mode=remote&description_format=markdown"`,
+        responseExample: `{
+  "data": [ { "public_slug": "...", "title": "Senior Go Engineer", "description": "## About the role\\n...", "...": "..." } ],
   "meta": { "total": 137, "limit": 20, "offset": 0 }
 }`,
       },
