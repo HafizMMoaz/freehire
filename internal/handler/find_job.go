@@ -20,11 +20,15 @@ func (a *API) FindJob(c *fiber.Ctx) error {
 	if company == "" || title == "" {
 		return c.JSON(fiber.Map{"data": nil})
 	}
+	// The catalog title must appear within the page title (real page titles carry
+	// noise like "Remote … Job at Stripe"), scoped to an exact company match.
+	// Prefer the longest (most specific) catalog title.
 	var slug string
 	err := a.pool.QueryRow(c.Context(),
 		`SELECT public_slug FROM jobs
-		 WHERE company ILIKE $1 AND title ILIKE $2 AND public_slug IS NOT NULL
-		 ORDER BY posted_at DESC NULLS LAST
+		 WHERE company ILIKE $1 AND $2 ILIKE '%' || title || '%'
+		   AND public_slug IS NOT NULL AND length(title) >= 6
+		 ORDER BY length(title) DESC, posted_at DESC NULLS LAST
 		 LIMIT 1`, company, title).Scan(&slug)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
