@@ -413,6 +413,8 @@ func Register(app *fiber.App, cfg Config) {
 	// rejects, so these public detail reads can overlay the caller's own vote
 	// (my_vote) while staying open to anonymous visitors.
 	optionalAuth := auth.OptionalAuth(a.issuer, a.queries)
+	// Static route registered before /jobs/:slug so it isn't captured as a slug.
+	api.Get("/jobs/find", a.FindJob)
 	api.Get("/jobs/:slug", optionalAuth, a.GetJob)
 	api.Get("/jobs/:slug/similar", a.SimilarJobs)
 	api.Get("/jobs/:slug/copies", a.JobCopies)
