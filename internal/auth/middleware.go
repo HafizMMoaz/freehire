@@ -72,12 +72,12 @@ func RequireAuthOrKey(iss *Issuer, keys APIKeyAuthenticator) fiber.Handler {
 				return c.Next()
 			}
 		}
-		if key := bearerToken(c); key != "" {
-			if id, err := keys.AuthenticateAPIKey(c.Context(), HashAPIKey(key)); err == nil {
-				c.Locals(localsUserID, id)
+		if id, viaKey, ok := resolveBearer(c, iss, keys); ok {
+			c.Locals(localsUserID, id)
+			if viaKey {
 				c.Locals(localsViaAPIKey, true)
-				return c.Next()
 			}
+			return c.Next()
 		}
 		return fiber.NewError(fiber.StatusUnauthorized, "not authenticated")
 	}
@@ -96,9 +96,9 @@ func OptionalAuth(iss *Issuer, keys APIKeyAuthenticator) fiber.Handler {
 				return c.Next()
 			}
 		}
-		if key := bearerToken(c); key != "" {
-			if id, err := keys.AuthenticateAPIKey(c.Context(), HashAPIKey(key)); err == nil {
-				c.Locals(localsUserID, id)
+		if id, viaKey, ok := resolveBearer(c, iss, keys); ok {
+			c.Locals(localsUserID, id)
+			if viaKey {
 				c.Locals(localsViaAPIKey, true)
 			}
 		}
@@ -164,6 +164,25 @@ func RequireModeratorOrBeta(roles RoleLoader, beta BetaLoader) fiber.Handler {
 		}
 		return c.Next()
 	}
+}
+
+// resolveBearer authenticates an `Authorization: Bearer <token>` credential,
+// accepting EITHER a session JWT or an API key. The browser extension presents
+// its session JWT here (it has no cross-origin cookie), so a JWT bearer is a full
+// session — viaKey is false; only an actual API key sets viaKey. Returns ok=false
+// when there is no bearer or neither interpretation resolves.
+func resolveBearer(c *fiber.Ctx, iss *Issuer, keys APIKeyAuthenticator) (id int64, viaKey bool, ok bool) {
+	tok := bearerToken(c)
+	if tok == "" {
+		return 0, false, false
+	}
+	if id, err := iss.Parse(tok); err == nil {
+		return id, false, true
+	}
+	if id, err := keys.AuthenticateAPIKey(c.Context(), HashAPIKey(tok)); err == nil {
+		return id, true, true
+	}
+	return 0, false, false
 }
 
 // bearerToken extracts the credential from an `Authorization: Bearer <token>`
