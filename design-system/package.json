@@ -1,0 +1,16 @@
+{
+  "name": "freehire-design-system",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Design system for freehire's web frontend — tokens, primitives, Storybook, docs.",
+  "packageManager": "pnpm@11.7.0",
+  "scripts": {
+    "build": "echo \"build: nothing to build yet (phases 03-04 add token + component builds)\"",
+    "test": "echo \"test: no tests yet\"",
+    "tokens:build": "echo \"tokens:build: nothing to build yet (phase 03 adds Style Dictionary)\"",
+    "validate:docs": "echo \"validate:docs: nothing to validate yet (phase 06 adds DSDS)\"",
+    "storybook": "echo \"storybook: not configured yet (phase 05)\"",
+    "build-storybook": "echo \"build-storybook: not configured yet (phase 05)\""
+  }
+}

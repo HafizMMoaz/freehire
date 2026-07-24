@@ -15,5 +15,6 @@ Closes #
 - [ ] `go build ./...`, `go vet ./...`, and `gofmt -l .` (prints nothing) pass.
 - [ ] `go test ./...` passes (and `go test -tags=integration ./...` if I touched DB/handlers).
 - [ ] I regenerated committed artifacts when their source changed (`make sqlc` for SQL/migrations, `make gen-contracts` for contract types).
-- [ ] For `web/` changes: `npm run check` and `npm run build` pass.
+- [ ] For `design-system/` changes: `pnpm run check` and `pnpm run build` pass.
+- [ ] For `web/` changes: `pnpm run check` and `pnpm run build` pass.
 - [ ] This stays within freehire's core/extension boundary (see CONTRIBUTING.md) — it does not bloat the core.

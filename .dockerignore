@@ -1,4 +1,8 @@
 web/node_modules
 web/dist
+web/.svelte-kit
+web/build
+design-system/node_modules
+design-system/dist
 .git
 openspec

@@ -71,6 +71,7 @@ internal/
   skilltag/          deterministic skill tagging dictionary (see skilltag/AGENTS.md)
   viewlog/           parses nginx access logs into per-job view counts (see viewlog/AGENTS.md)
 migrations/          SQL schema — source for BOTH sqlc and Postgres initdb
+design-system/         design system package (tokens, primitives, Storybook, docs) — pnpm, sibling to web/, linked via file:../design-system (see design-system/AGENTS.md)
 ```
 
 ## Commands
@@ -152,6 +153,7 @@ For the full architecture and conventions, see the **module files** below. Each 
 | Area | Reference |
 |---|---|
 | **SPA sub-context** (SvelteKit, auth flow, API conventions) | [web/AGENTS.md](web/AGENTS.md) |
+| **Design system** (tokens, primitives, Storybook, DSDS docs) | [design-system/AGENTS.md](design-system/AGENTS.md) |
 
 ## Conventions (quick reference)
 

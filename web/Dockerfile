@@ -6,15 +6,29 @@
 #   - everything else -> the Node SSR server (127.0.0.1:3000)
 # The Node server fetches the Go API server-to-server via API_INTERNAL_URL.
 #
-# Build context is the web/ directory:
-#   docker build -f web/Dockerfile web/
+# Build context is the repo root (the sibling design-system/ package is reached
+# via the file:../design-system dependency):
+#   docker build -f web/Dockerfile .
 
-# --- build stage ---
+# --- design-system build stage ---
+# Must build before web — web's file:../design-system dependency links here.
+FROM node:22-alpine AS ds-build
+RUN corepack enable && corepack prepare pnpm@latest --activate
+WORKDIR /design-system
+COPY design-system/package.json design-system/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY design-system/ ./
+RUN pnpm build
+
+# --- web build stage ---
 FROM node:22-alpine AS build
+RUN corepack enable && corepack prepare pnpm@latest --activate
 WORKDIR /src
-COPY package.json package-lock.json ./
-RUN npm ci
-COPY . .
+# The file:../design-system dependency resolves to /design-system from WORKDIR /src.
+COPY --from=ds-build /design-system /design-system
+COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY web/ ./
 # Sentry source-map upload (optional). When SENTRY_AUTH_TOKEN is passed as a build
 # arg, the sentrySvelteKit() Vite plugin uploads source maps (matched by debug-id,
 # so no release coordination is needed) and production frontend stack traces are
@@ -26,10 +40,10 @@ ARG SENTRY_PROJECT=""
 ENV SENTRY_AUTH_TOKEN=$SENTRY_AUTH_TOKEN
 ENV SENTRY_ORG=$SENTRY_ORG
 ENV SENTRY_PROJECT=$SENTRY_PROJECT
-RUN npm run build
+RUN pnpm run build
 # Keep only production deps for the runtime image (the build tools are no longer
 # needed; adapter-node has already bundled the app).
-RUN npm prune --omit=dev
+RUN pnpm prune --prod
 
 # --- runtime stage ---
 FROM node:22-alpine
@@ -40,8 +54,8 @@ COPY --from=build /src/node_modules ./node_modules
 COPY --from=build /src/package.json ./package.json
 # The CLI install script is served as a static file by nginx (see nginx.conf).
 COPY --from=build /src/public/install.sh /usr/share/nginx/html/install.sh
-COPY nginx.conf /etc/nginx/http.d/default.conf
-COPY docker-entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY web/nginx.conf /etc/nginx/http.d/default.conf
+COPY web/docker-entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Node SSR server settings. ORIGIN must be set at deploy to the public site URL

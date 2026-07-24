@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Web frontend for the freehire job aggregator.",
+  "packageManager": "pnpm@11.7.0",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -58,6 +59,7 @@
     "satori-html": "^0.3.2",
     "shiki": "^3.23.0",
     "svelte-dnd-action": "^0.9.70",
-    "tailwind-merge": "^3.6.0"
+    "tailwind-merge": "^3.6.0",
+    "freehire-design-system": "file:../design-system"
   }
 }

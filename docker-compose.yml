@@ -67,8 +67,8 @@ services:
   # to this container.
   web:
     build:
-      context: ./web
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: web/Dockerfile
     environment:
       # Public origin for canonical/sitemap/JSON-LD — match the host-facing URL.
       ORIGIN: "${WEB_ORIGIN:-http://localhost:8090}"

@@ -84,9 +84,8 @@ Regenerate committed artifacts when their source changed, and commit the result:
 For the frontend (`web/`):
 
 ```bash
-cd web
-npm run check          # svelte-check
-npm run build
+cd design-system && pnpm install && pnpm build   # design-system must build first
+cd ../web && pnpm install && pnpm run check && pnpm run build
 ```
 
 ## Adding a Source
