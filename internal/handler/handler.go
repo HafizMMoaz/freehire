@@ -496,6 +496,9 @@ func Register(app *fiber.App, cfg Config) {
 	// Ad-hoc skill match for a job posting scraped off any page (title + text),
 	// no catalog job required — powers the browser extension's on-any-page card.
 	api.Post("/me/match-text", keyAuth, a.MatchText)
+	// Canonical autofill fields (name/email/phone/location/links) for the browser
+	// extension to write into application forms. keyAuth (Bearer).
+	api.Get("/me/autofill-profile", keyAuth, a.AutofillProfile)
 	// The on-demand LLM match analysis (GET cached / POST run / SSE stream).
 	api.Get("/jobs/:slug/match-analysis", keyAuth, a.GetMatchAnalysis)
 	api.Post("/jobs/:slug/match-analysis", keyAuth, a.PostMatchAnalysis)
