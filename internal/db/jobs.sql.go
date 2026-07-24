@@ -475,10 +475,10 @@ type GetJobDescriptionsByIDsRow struct {
 	Description string `json:"description"`
 }
 
-// Batch-load full descriptions by internal id to rehydrate the truncated preview
-// the search index serves — the agent search endpoint replaces each hit's preview
-// with the full text. Narrow projection (no SELECT *) so it drags only the one
-// field it patches, not the whole wide row, for a page of at most maxLimit ids.
+// Batch-load full descriptions by internal id when the agent search endpoint
+// explicitly asks to include the full text instead of the truncated search
+// preview. Narrow projection (no SELECT *) so it drags only the one field it
+// patches, not the whole wide row, for a page of at most maxLimit ids.
 func (q *Queries) GetJobDescriptionsByIDs(ctx context.Context, ids []int64) ([]GetJobDescriptionsByIDsRow, error) {
 	rows, err := q.db.Query(ctx, getJobDescriptionsByIDs, ids)
 	if err != nil {

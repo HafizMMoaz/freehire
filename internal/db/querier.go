@@ -504,10 +504,10 @@ type Querier interface {
 	// Load a job by its dedup identity (source, external_id) — the key the Job
 	// aggregate's repository loads by, mirroring the CloseJobBySourceExternalID key.
 	GetJobBySourceExternalID(ctx context.Context, arg GetJobBySourceExternalIDParams) (Job, error)
-	// Batch-load full descriptions by internal id to rehydrate the truncated preview
-	// the search index serves — the agent search endpoint replaces each hit's preview
-	// with the full text. Narrow projection (no SELECT *) so it drags only the one
-	// field it patches, not the whole wide row, for a page of at most maxLimit ids.
+	// Batch-load full descriptions by internal id when the agent search endpoint
+	// explicitly asks to include the full text instead of the truncated search
+	// preview. Narrow projection (no SELECT *) so it drags only the one field it
+	// patches, not the whole wide row, for a page of at most maxLimit ids.
 	GetJobDescriptionsByIDs(ctx context.Context, ids []int64) ([]GetJobDescriptionsByIDsRow, error)
 	// Slim slug->id lookup for the view/apply interaction path, which needs only the
 	// internal id (the user_jobs FK) and must not drag the wide description/enrichment

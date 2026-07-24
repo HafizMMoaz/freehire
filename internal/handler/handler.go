@@ -109,9 +109,9 @@ type API struct {
 	// search is the job-search backend. Nil when Meilisearch is unconfigured —
 	// the search endpoint then reports 503 and the rest of the API is unaffected.
 	search searcher
-	// descriptions loads full job descriptions by internal id, to rehydrate the
-	// truncated search preview on the agent search endpoint. *db.Queries in
-	// production; a fake in tests.
+	// descriptions loads full job descriptions by internal id when the agent
+	// search endpoint explicitly asks to include them. *db.Queries in production;
+	// a fake in tests.
 	descriptions jobDescriptions
 	// companySearch is the company-search backend backing GET /api/v1/companies,
 	// kept separate from `search` so the companies index stays fully decoupled from
@@ -412,8 +412,8 @@ func Register(app *fiber.App, cfg Config) {
 	api.Get("/jobs", a.ListJobs)
 	// Literal routes before the :slug param route so they are not read as slugs.
 	api.Get("/jobs/search", a.SearchJobs)
-	// Agent search: same query as /jobs/search but full descriptions in a
-	// selectable format, for programmatic consumers. Public, like the other reads.
+	// Agent search: same query as /jobs/search, with opt-in full descriptions in a
+	// selectable format for programmatic consumers. Public, like the other reads.
 	api.Get("/agent/jobs/search", a.AgentSearchJobs)
 	api.Get("/jobs/facets", a.JobFacets)
 	api.Get("/jobs/sitemap", a.JobSitemap)
