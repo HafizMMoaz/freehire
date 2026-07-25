@@ -374,6 +374,16 @@ type ProcessedViewLog struct {
 	ProcessedAt pgtype.Timestamptz `json:"processed_at"`
 }
 
+type PrunedJob struct {
+	ID          int64              `json:"id"`
+	Source      string             `json:"source"`
+	ExternalID  string             `json:"external_id"`
+	Title       string             `json:"title"`
+	CompanySlug string             `json:"company_slug"`
+	Rule        string             `json:"rule"`
+	PrunedAt    pgtype.Timestamptz `json:"pruned_at"`
+}
+
 type ReferralOffer struct {
 	ID             int64              `json:"id"`
 	UserID         int64              `json:"user_id"`
