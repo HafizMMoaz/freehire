@@ -100,8 +100,12 @@ func TestScanRefusesCompanyRulesWhileTheBoardIsListed(t *testing.T) {
 		t.Errorf("targeted %d rows, want 0 — the board is still crawled, so the deletion would undo itself", len(p.targets))
 	}
 
-	// Strike the board and the same row becomes a target.
-	retired := boards{listed: map[boardKey]bool{}, byProvider: map[string]map[string]bool{}}
+	// Strike the board — the provider is still a crawled platform, this one board is
+	// gone — and the same row becomes a target.
+	retired := boards{
+		listed:     map[boardKey]bool{{"greenhouse", "still-here"}: true},
+		byProvider: map[string]map[string]bool{"greenhouse": {"still-here": true}},
+	}
 	p, err = scan(context.Background(), &fakeCandidates{rows: rows}, ev, retired, 0, 10, testRand())
 	if err != nil {
 		t.Fatalf("scan: %v", err)
@@ -191,7 +195,11 @@ func TestScanWalksEveryPageAndTerminates(t *testing.T) {
 // false. The scan must preserve that distinction, because only the first is a target
 // under the unknown rule.
 func TestScanPreservesTheTriStateSignal(t *testing.T) {
-	brd := boards{listed: map[boardKey]bool{}, byProvider: map[string]map[string]bool{}}
+	// The provider is a crawled platform; the rows' own board is retired.
+	brd := boards{
+		listed:     map[boardKey]bool{{"greenhouse", "still-here"}: true},
+		byProvider: map[string]map[string]bool{"greenhouse": {"still-here": true}},
+	}
 	rows := []db.PruneCandidatesRow{
 		row(1, "greenhouse", "gone:1", "acme", "Team Member", ""),
 		func() db.PruneCandidatesRow {
@@ -278,5 +286,31 @@ func TestDeleteTargetsKeepsTheCountOnFailure(t *testing.T) {
 	}
 	if p.deleted != 0 {
 		t.Errorf("deleted = %d, want 0 — nothing committed in this run", p.deleted)
+	}
+}
+
+// The gate the first prod dry run exposed: a source with no boards satisfies "the board
+// is absent" for free, so the company-scoped rules fired on 2991 hand-curated Telegram
+// vacancies that no crawl restores.
+func TestScanNeverTouchesASourceWithNoBoards(t *testing.T) {
+	brd := boards{
+		listed:     map[boardKey]bool{{"greenhouse", "acme"}: true},
+		byProvider: map[string]map[string]bool{"greenhouse": {"acme": true}},
+	}
+	rows := []db.PruneCandidatesRow{
+		row(1, "telegram", "jobnetworkng/34050/0", "acme", "Crane Operator", ""),
+		row(2, "telegram", "huntmejob/33477/0", "acme", "Dispatcher", "management"),
+		row(3, "telegram", "huggabletalents/2892/0", "acme", "Registered Nurse", ""),
+	}
+
+	p, err := scan(context.Background(), &fakeCandidates{rows: rows}, nil, brd, 0, 10, testRand())
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(p.targets) != 0 {
+		t.Fatalf("targeted %+v, want none — nothing re-crawls a Telegram vacancy", p.targets)
+	}
+	if len(p.refused) == 0 {
+		t.Error("the source gate must be visible in the report, or the operator cannot tell it ran")
 	}
 }

@@ -78,6 +78,19 @@ func loadBoards(dir string) (boards, error) {
 	return b, nil
 }
 
+// knownProvider reports whether a source is a crawled board platform at all.
+//
+// It is a separate gate from crawls(), and the dry run showed why it has to be. A
+// source with no boards — Telegram extraction, moderator rows, anything written
+// outside the ingest pipeline — trivially satisfies "the board is absent", which is
+// what the company-scoped rules require. So the very property that protects those
+// postings from the title rule was qualifying them for the other two: the first prod
+// dry run planned to delete 2991 hand-curated Telegram vacancies, which no crawl could
+// ever restore. The spec forbids removing them by ANY rule; this is the gate that says so.
+func (b boards) knownProvider(source string) bool {
+	return b.byProvider[source] != nil
+}
+
 // crawls reports whether a posting came from a board the crawl still visits, resolved
 // from the "<board>:<native id>" external_id the write path writes.
 //

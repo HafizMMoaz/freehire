@@ -48,9 +48,10 @@ type evidence struct {
 // matchRule reports which rule makes a job a deletion target, if any. The empty result
 // means keep.
 //
-// boardCrawled — whether the posting's board is still in the source files — is read in
-// OPPOSITE directions by the two families of rule, and that is the whole safety design
-// in one boolean.
+// Two booleans carry the safety design. knownProvider gates everything: a source with
+// no boards at all is written outside the ingest pipeline and no crawl restores it.
+// boardCrawled — whether the posting's board is still in the source files — is then read
+// in OPPOSITE directions by the two families of rule.
 //
 // The title rule requires it TRUE. A listed board is by definition re-crawlable, which
 // is what makes a title deletion recoverable: withdraw an over-broad dictionary term and
@@ -64,7 +65,13 @@ type evidence struct {
 // Between them sits the technical veto, for the same reason it vetoes the ingest filter:
 // the non-tech dictionary matches anywhere in a title and was written assuming the tech
 // check runs first, so "Backend Engineer — Teller Systems" must survive "teller".
-func matchRule(c candidate, ev evidence, boardCrawled bool) (string, bool) {
+func matchRule(c candidate, ev evidence, knownProvider, boardCrawled bool) (string, bool) {
+	// A source that is not a crawled board platform is out of reach of every rule. It
+	// would otherwise pass the company-scoped rules for free: they ask for an absent
+	// board, and a source with no boards has nothing but absent ones.
+	if !knownProvider {
+		return "", false
+	}
 	techEvidence := jobderive.TechEvidence(c.Category, c.Title)
 
 	if classify.ConfirmedNonTech(c.Title, techEvidence) {

@@ -104,9 +104,24 @@ func TestMatchRule(t *testing.T) {
 		},
 	}
 
+	// A source with no boards at all satisfies "the board is absent" for free, so the
+	// company-scoped rules would fire on it — the first prod dry run planned to remove
+	// 2991 Telegram vacancies that way. Nothing re-crawls them, so no rule may apply.
+	t.Run("a source that is not a board platform is out of reach of every rule", func(t *testing.T) {
+		for _, c := range []candidate{
+			{CompanySlug: "acme", Title: "Registered Nurse"},
+			{CompanySlug: "acme", Title: "Crane Operator"},
+			{CompanySlug: "acme", Title: "Менеджер по продажам", Category: "sales", IsTech: techPtr(false)},
+		} {
+			if rule, ok := matchRule(c, evidence{}, false, false); ok {
+				t.Errorf("matchRule(%q) matched %q, want kept — no crawl restores it", c.Title, rule)
+			}
+		}
+	})
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := matchRule(tc.c, tc.ev, tc.crawled)
+			got, ok := matchRule(tc.c, tc.ev, true, tc.crawled)
 			if tc.want == "" {
 				if ok {
 					t.Errorf("matched %q, want kept", got)

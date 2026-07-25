@@ -181,9 +181,16 @@ func scan(ctx context.Context, q candidateSource, ev []db.CompanyTechEvidenceRow
 				v := row.IsTech.Bool
 				c.IsTech = &v
 			}
+			known := brd.knownProvider(row.Source)
 			rule, ok := matchRule(c, byCompany[companyKey{row.Source, row.CompanySlug}],
-				brd.crawls(row.Source, row.ExternalID))
+				known, brd.crawls(row.Source, row.ExternalID))
 			if !ok {
+				// Surface what the source gate turned down. Without this the operator
+				// sees only what would go, never what the guards held back — and the
+				// guards are the reason to trust the number at all.
+				if !known && wouldMatchButForTheSource(c) {
+					p.refuse("source is not a crawled board platform: " + row.Source)
+				}
 				continue
 			}
 			if limit > 0 && len(p.targets) >= limit {
@@ -231,6 +238,14 @@ func deleteTargets(ctx context.Context, q batchDeleter, index docDeleter, p *pla
 		}
 	}
 	return nil
+}
+
+// wouldMatchButForTheSource reports whether a rule would have fired had the posting come
+// from a crawled board platform. It exists only so the report can count what the source
+// gate held back; it must never decide a deletion.
+func wouldMatchButForTheSource(c candidate) bool {
+	_, ok := matchRule(c, evidence{}, true, false)
+	return ok
 }
 
 // The two dependencies the destructive path needs, named so it can be tested without a
