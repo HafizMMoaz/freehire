@@ -14,12 +14,12 @@ a dictionary term). See the "Measured" section of `design.md`.
 
 ## 2. Ingest-time rejection
 
-- [ ] 2.1 Add the catalogue-fit predicate as a package-private helper in `internal/pipeline`, taking the constructed `job.Job` and reporting whether the posting is rejected by the non-tech title rule
-- [ ] 2.2 Add `Rejected` to the pipeline run stats, kept distinct from `Skipped`
-- [ ] 2.3 Wire the predicate between `normalizeJob` and `Store.Save` in the batch path (`internal/pipeline/pipeline.go:336`)
-- [ ] 2.4 Wire the same predicate in the stream path (`internal/pipeline/pipeline.go:476`)
-- [ ] 2.5 Log one line per board with a non-zero rejected count, including the rejected share of that board's postings
-- [ ] 2.6 Assert in tests that `cmd/tg-extract` and the other non-crawled write paths remain unfiltered
+- [x] 2.1 Add the catalogue-fit predicate as a package-private helper in `internal/pipeline`, taking the constructed `job.Job` and reporting whether the posting is rejected by the non-tech title rule
+- [x] 2.2 Add `Rejected` to the pipeline run stats, kept distinct from `Skipped`
+- [x] 2.3 Wire the predicate between `normalizeJob` and `Store.Save` in the batch path (`internal/pipeline/pipeline.go:336`)
+- [x] 2.4 Wire the same predicate in the stream path (`internal/pipeline/pipeline.go:476`)
+- [x] 2.5 Log one line per board with a non-zero rejected count, including the rejected share of that board's postings
+- [x] 2.6 Assert in tests that `cmd/tg-extract` and the other non-crawled write paths remain unfiltered
 
 ## 3. Deletion archive
 
