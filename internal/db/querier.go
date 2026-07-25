@@ -20,10 +20,11 @@ type Querier interface {
 	// tuple) so a file's rows land in a single round trip; view_count accumulates across
 	// a job's day-rows, and additivity lets a day spanning two rotated files sum right.
 	ApplyDailyView(ctx context.Context, arg []ApplyDailyViewParams) *ApplyDailyViewBatchResults
-	// Resolve a presented token (by its SHA-256 hash) to the owning user id, enforcing
-	// expiry and touching last_used_at in one atomic statement. No row means the key is
-	// unknown, revoked, or expired; the caller treats pgx.ErrNoRows as 401.
-	AuthenticateAPIKey(ctx context.Context, tokenHash string) (int64, error)
+	// Resolve a presented token (by its SHA-256 hash) to the owning user id and the key's
+	// scope, enforcing expiry and touching last_used_at in one atomic statement. No row
+	// means the key is unknown, revoked, or expired; the caller treats pgx.ErrNoRows as 401
+	// and an insufficient scope as 403.
+	AuthenticateAPIKey(ctx context.Context, tokenHash string) (AuthenticateAPIKeyRow, error)
 	// Find the ashby board already carrying a job with this Ashby job id — for company careers
 	// pages that embed Ashby via the ashby_jid widget param (the board slug is JS-rendered, absent
 	// from the URL/markup). external_id is "<board>:<uuid>"; served by the
@@ -34,6 +35,13 @@ type Querier interface {
 	// in the URL/page). external_id is "<board>:<id>"; served by the
 	// (split_part(external_id,':',2)) WHERE source='greenhouse' partial index.
 	BoardByGreenhouseJobID(ctx context.Context, jobID string) (string, error)
+	// Count one failed confirmation and return the new total, so the caller can burn the code
+	// once it reaches the ceiling. Atomic, so concurrent guesses cannot share an attempt.
+	BumpEmailCodeAttempts(ctx context.Context, arg BumpEmailCodeAttemptsParams) (int32, error)
+	// Invalidate every token issued for this account (sign out everywhere) by advancing
+	// the generation, returning the new value so the caller can immediately mint a
+	// replacement session for whoever asked.
+	BumpUserTokenVersion(ctx context.Context, id int64) (int32, error)
 	// Whether a builder CV is owned by a user — the authorization check before attaching a
 	// 'built' CV to a request, so a seeker cannot reference someone else's cv_id.
 	CVBelongsToUser(ctx context.Context, arg CVBelongsToUserParams) (bool, error)
@@ -250,8 +258,9 @@ type Querier interface {
 	CountUserJobs(ctx context.Context, userID int64) (CountUserJobsRow, error)
 	// Create an API key for a user. The caller passes the SHA-256 token_hash and the
 	// display token_prefix; the plaintext token is shown once and never stored.
-	// expires_at NULL means the key never expires. Returns display fields only, never
-	// the hash.
+	// expires_at NULL means the key never expires. scope confines the credential to a
+	// surface ('full' for a user-created key, 'cv' for the tailoring agent's); it comes
+	// from the server, never from client input. Returns display fields only, never the hash.
 	CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (CreateAPIKeyRow, error)
 	// Insert a new CV for a user. data is the sanitized structured document (JSON). job_id
 	// defaults NULL (the tailoring seam is unused in phase 1). Returns the metadata the list
@@ -298,6 +307,9 @@ type Querier interface {
 	// Register a new account. email is stored as given (the handler lowercases it);
 	// the unique index on lower(email) rejects duplicates regardless of case. role is
 	// returned so the new account's wire shape carries it (always 'user' at creation).
+	// email_verified is a parameter, not a default: a password registration starts
+	// unverified, while an account created from an OAuth sign-in is verified at birth
+	// because the provider already proved the address.
 	CreateUser(ctx context.Context, arg CreateUserParams) (CreateUserRow, error)
 	// Link a provider identity to an account (first OAuth sign-in). The composite
 	// primary key rejects a duplicate identity.
@@ -362,6 +374,9 @@ type Querier interface {
 	// absent.
 	DeleteCompanyVote(ctx context.Context, arg DeleteCompanyVoteParams) error
 	DeleteEmailClassificationOutbox(ctx context.Context, id int64) error
+	// Consume the code (on success) or burn it (on too many attempts). Idempotent: deleting
+	// an absent code is a no-op, so a double submit cannot fail the request.
+	DeleteEmailCode(ctx context.Context, arg DeleteEmailCodeParams) error
 	// Purge one source's mail for a user (Gmail disconnect passes 'gmail', mailbox
 	// release passes 'hosted') — the other source's mail is left untouched.
 	DeleteEmailsBySource(ctx context.Context, arg DeleteEmailsBySourceParams) error
@@ -499,6 +514,10 @@ type Querier interface {
 	// The caller's current vote for a company (0 when none). Always returns one row.
 	GetCompanyVote(ctx context.Context, arg GetCompanyVoteParams) (int16, error)
 	GetEmail(ctx context.Context, arg GetEmailParams) (GetEmailRow, error)
+	// The outstanding code for a purpose. No row means nothing was issued or it was consumed;
+	// the caller treats pgx.ErrNoRows as "request a new code". Expiry and the attempt ceiling
+	// are enforced by the caller, which must fail identically for expired and wrong codes.
+	GetEmailCode(ctx context.Context, arg GetEmailCodeParams) (GetEmailCodeRow, error)
 	// Aggregate interaction counts for the public engagement endpoint. Aggregate-only:
 	// every column is a scalar total, so no user identifier or row-level field is
 	// selected. saved / applied are user_jobs interaction-row totals across all users.
@@ -589,10 +608,13 @@ type Querier interface {
 	GetUserApplication(ctx context.Context, arg GetUserApplicationParams) (GetUserApplicationRow, error)
 	// Login lookup. Case-insensitive on email; returns password_hash so the handler
 	// can verify the password (and reject accounts that have none). role feeds the
-	// post-login wire shape.
+	// post-login wire shape. email_verified drives both the "confirm your email" prompt
+	// and the OAuth merge policy (an unverified account is seized, not silently joined).
 	GetUserByEmail(ctx context.Context, lower string) (GetUserByEmailRow, error)
-	// Profile lookup for the authenticated user. Never selects password_hash. role is
-	// included so /auth/me can tell a client whether to surface moderator-only UI.
+	// Profile lookup for the authenticated user. role is included so /auth/me can tell a
+	// client whether to surface moderator-only UI. The password hash itself never leaves
+	// the database — only whether one exists, which is what lets the SPA offer a password
+	// change to password accounts and explain itself to OAuth-only ones.
 	GetUserByID(ctx context.Context, id int64) (GetUserByIDRow, error)
 	// OAuth sign-in fast path: resolve a provider identity straight to its user.
 	GetUserByIdentity(ctx context.Context, arg GetUserByIdentityParams) (GetUserByIdentityRow, error)
@@ -607,6 +629,10 @@ type Querier interface {
 	// The caller's current stage for one application (empty string when unset), so the
 	// worker can decide a monotonic-forward advancement.
 	GetUserJobStage(ctx context.Context, arg GetUserJobStageParams) (string, error)
+	// The account's stored password hash, for verifying a current password on change.
+	// NULL when the account is passwordless (OAuth-only), which the caller treats the same
+	// as a wrong password: there is nothing to verify against.
+	GetUserPasswordHash(ctx context.Context, id int64) (pgtype.Text, error)
 	// The caller's single profile, keyed by user_id. No matching row means the user has not
 	// saved a profile yet (the handler maps that to a null payload / 404 on sub-resources).
 	GetUserProfile(ctx context.Context, userID int64) (UserProfile, error)
@@ -626,6 +652,10 @@ type Querier interface {
 	// request to a role-gated endpoint and needs only the role, so it does not drag the
 	// full user row (the GetJobIDBySlug precedent for a hot-path read).
 	GetUserRole(ctx context.Context, id int64) (string, error)
+	// The account's current session generation, read on every authenticated request to
+	// decide whether a correctly-signed token was revoked. One primary-key lookup; this
+	// is the price of making a stateless JWT revocable at all.
+	GetUserTokenVersion(ctx context.Context, id int64) (int32, error)
 	IncrementThreadReplyCount(ctx context.Context, id int64) error
 	// Mint a persona. ON CONFLICT (user_id) DO NOTHING makes a concurrent same-user mint
 	// return no row (the repository re-reads the winner); a handle-unique violation is a
@@ -677,7 +707,8 @@ type Querier interface {
 	// Manually link (or relink) an email to a chosen application, overriding any
 	// auto-link or suggestion.
 	LinkEmailToJob(ctx context.Context, arg LinkEmailToJobParams) (int64, error)
-	// A user's API keys, newest first. Metadata only — never the token_hash.
+	// A user's API keys, newest first. Metadata only — never the token_hash. scope is
+	// included so a user can see what each credential is allowed to do.
 	ListAPIKeysByUser(ctx context.Context, userID int64) ([]ListAPIKeysByUserRow, error)
 	// Every active subscription with the data the matching worker needs: the saved
 	// search query to translate into a filter, plus identity/channel for fan-out. The
@@ -1242,6 +1273,10 @@ type Querier interface {
 	// expired probes can close a job. Guarded to the non-zero case so probing an
 	// already-clean job does not churn the row.
 	ResetLivenessStrikes(ctx context.Context, id int64) error
+	// Complete a reset-by-emailed-code: set the new hash, revoke every session, and mark
+	// the address verified — receiving the code IS proof of control, so a reset doubles as
+	// verification and an unverified account stops being a merge target.
+	ResetUserPassword(ctx context.Context, arg ResetUserPasswordParams) (int32, error)
 	// Catalogue pruning: the queries that find, and eventually remove, jobs that do not
 	// belong on an IT job board. See the catalog-pruning capability spec.
 	// The residual unclassified mass grouped into clusters an operator can act on: the
@@ -1322,6 +1357,11 @@ type Querier interface {
 	// Save (bookmark) a job for a user. Idempotent and independent of a prior view:
 	// it inserts the row (viewed_at defaults) or refreshes saved_at in place.
 	SaveJob(ctx context.Context, arg SaveJobParams) (UserJob, error)
+	// Hand an unverified, password-backed account to the proven owner of its address when a
+	// provider-verified OAuth identity arrives for it: the password is destroyed and every
+	// session revoked, so a squatter who registered the address first loses both ways in.
+	// Returns the new generation for the session the sign-in is about to mint.
+	SeizeUnverifiedAccount(ctx context.Context, id int64) (int32, error)
 	// Orphan-job liveness (probe-orphan-job-liveness): open jobs whose source is NOT a
 	// registered ATS board provider — the sources no ingest run re-crawls and the sweep
 	// therefore never closes (telegram, habr_career, geekjob, …). The caller passes the
@@ -1375,6 +1415,13 @@ type Querier interface {
 	SetSubscriptionActive(ctx context.Context, arg SetSubscriptionActiveParams) (Subscription, error)
 	// Cache the derived CV ATS review for the user (keyed to their stored CV).
 	SetUserATSAnalysis(ctx context.Context, arg SetUserATSAnalysisParams) error
+	// Record that control of the address was proven. Idempotent — confirming twice is a
+	// no-op rather than an error, so a double-submitted code does not fail the request.
+	SetUserEmailVerified(ctx context.Context, id int64) error
+	// Change a known password. Revokes every other session in the same statement, so a
+	// stolen token cannot outlive the password it was minted under. Does NOT touch
+	// email_verified: knowing the current password proves nothing about the address.
+	SetUserPassword(ctx context.Context, arg SetUserPasswordParams) (int32, error)
 	// Record (or replace) the user's stored-résumé pointer, stamping the upload time.
 	// Owner-scoped by id; the object key is derived from the id, never client input.
 	// Also clears any cached ATS review so a new CV is never scored with a stale one.
@@ -1514,6 +1561,11 @@ type Querier interface {
 	// Store a Gmail message, idempotent by (user_id, source, external_id) with
 	// source fixed to 'gmail'; the hosted path has its own insert (InsertHostedMessage).
 	UpsertEmail(ctx context.Context, arg UpsertEmailParams) error
+	// Issue (or replace) the outstanding code for one purpose. The composite primary key
+	// makes this the whole "at most one live code per (user, purpose)" rule: a resend
+	// overwrites the hash and expiry and resets attempts, so a burnt code never lingers
+	// beside a fresh one. created_at is re-stamped, which is what the resend cooldown reads.
+	UpsertEmailCode(ctx context.Context, arg UpsertEmailCodeParams) error
 	// Connect (or reconnect) a user's Gmail: store the encrypted refresh token and
 	// mark connected, preserving the sync cursor on reconnect.
 	UpsertGmailConnection(ctx context.Context, arg UpsertGmailConnectionParams) error

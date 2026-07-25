@@ -11,6 +11,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const bumpUserTokenVersion = `-- name: BumpUserTokenVersion :one
+UPDATE users
+SET token_version = token_version + 1
+WHERE id = $1
+RETURNING token_version
+`
+
+// Invalidate every token issued for this account (sign out everywhere) by advancing
+// the generation, returning the new value so the caller can immediately mint a
+// replacement session for whoever asked.
+func (q *Queries) BumpUserTokenVersion(ctx context.Context, id int64) (int32, error) {
+	row := q.db.QueryRow(ctx, bumpUserTokenVersion, id)
+	var token_version int32
+	err := row.Scan(&token_version)
+	return token_version, err
+}
+
 const clearUserResume = `-- name: ClearUserResume :exec
 UPDATE users
 SET resume_object_key = NULL, resume_uploaded_at = NULL, resume_ats_analysis = NULL,
@@ -29,35 +46,41 @@ func (q *Queries) ClearUserResume(ctx context.Context, id int64) error {
 }
 
 const createUser = `-- name: CreateUser :one
-INSERT INTO users (email, password_hash)
-VALUES ($1, $2)
-RETURNING id, email, role, beta_tester, created_at
+INSERT INTO users (email, password_hash, email_verified)
+VALUES ($1, $2, $3)
+RETURNING id, email, role, beta_tester, email_verified, created_at
 `
 
 type CreateUserParams struct {
-	Email        string      `json:"email"`
-	PasswordHash pgtype.Text `json:"password_hash"`
+	Email         string      `json:"email"`
+	PasswordHash  pgtype.Text `json:"password_hash"`
+	EmailVerified bool        `json:"email_verified"`
 }
 
 type CreateUserRow struct {
-	ID         int64              `json:"id"`
-	Email      string             `json:"email"`
-	Role       string             `json:"role"`
-	BetaTester bool               `json:"beta_tester"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	ID            int64              `json:"id"`
+	Email         string             `json:"email"`
+	Role          string             `json:"role"`
+	BetaTester    bool               `json:"beta_tester"`
+	EmailVerified bool               `json:"email_verified"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
 // Register a new account. email is stored as given (the handler lowercases it);
 // the unique index on lower(email) rejects duplicates regardless of case. role is
 // returned so the new account's wire shape carries it (always 'user' at creation).
+// email_verified is a parameter, not a default: a password registration starts
+// unverified, while an account created from an OAuth sign-in is verified at birth
+// because the provider already proved the address.
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (CreateUserRow, error) {
-	row := q.db.QueryRow(ctx, createUser, arg.Email, arg.PasswordHash)
+	row := q.db.QueryRow(ctx, createUser, arg.Email, arg.PasswordHash, arg.EmailVerified)
 	var i CreateUserRow
 	err := row.Scan(
 		&i.ID,
 		&i.Email,
 		&i.Role,
 		&i.BetaTester,
+		&i.EmailVerified,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -79,23 +102,25 @@ func (q *Queries) GetUserATSAnalysis(ctx context.Context, id int64) ([]byte, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, role, beta_tester, password_hash, created_at
+SELECT id, email, role, beta_tester, email_verified, password_hash, created_at
 FROM users
 WHERE lower(email) = lower($1)
 `
 
 type GetUserByEmailRow struct {
-	ID           int64              `json:"id"`
-	Email        string             `json:"email"`
-	Role         string             `json:"role"`
-	BetaTester   bool               `json:"beta_tester"`
-	PasswordHash pgtype.Text        `json:"password_hash"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	ID            int64              `json:"id"`
+	Email         string             `json:"email"`
+	Role          string             `json:"role"`
+	BetaTester    bool               `json:"beta_tester"`
+	EmailVerified bool               `json:"email_verified"`
+	PasswordHash  pgtype.Text        `json:"password_hash"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
 // Login lookup. Case-insensitive on email; returns password_hash so the handler
 // can verify the password (and reject accounts that have none). role feeds the
-// post-login wire shape.
+// post-login wire shape. email_verified drives both the "confirm your email" prompt
+// and the OAuth merge policy (an unverified account is seized, not silently joined).
 func (q *Queries) GetUserByEmail(ctx context.Context, lower string) (GetUserByEmailRow, error) {
 	row := q.db.QueryRow(ctx, getUserByEmail, lower)
 	var i GetUserByEmailRow
@@ -104,6 +129,7 @@ func (q *Queries) GetUserByEmail(ctx context.Context, lower string) (GetUserByEm
 		&i.Email,
 		&i.Role,
 		&i.BetaTester,
+		&i.EmailVerified,
 		&i.PasswordHash,
 		&i.CreatedAt,
 	)
@@ -111,21 +137,27 @@ func (q *Queries) GetUserByEmail(ctx context.Context, lower string) (GetUserByEm
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, role, beta_tester, created_at
+SELECT id, email, role, beta_tester, email_verified,
+       (password_hash IS NOT NULL)::boolean AS has_password,
+       created_at
 FROM users
 WHERE id = $1
 `
 
 type GetUserByIDRow struct {
-	ID         int64              `json:"id"`
-	Email      string             `json:"email"`
-	Role       string             `json:"role"`
-	BetaTester bool               `json:"beta_tester"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	ID            int64              `json:"id"`
+	Email         string             `json:"email"`
+	Role          string             `json:"role"`
+	BetaTester    bool               `json:"beta_tester"`
+	EmailVerified bool               `json:"email_verified"`
+	HasPassword   bool               `json:"has_password"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
-// Profile lookup for the authenticated user. Never selects password_hash. role is
-// included so /auth/me can tell a client whether to surface moderator-only UI.
+// Profile lookup for the authenticated user. role is included so /auth/me can tell a
+// client whether to surface moderator-only UI. The password hash itself never leaves
+// the database — only whether one exists, which is what lets the SPA offer a password
+// change to password accounts and explain itself to OAuth-only ones.
 func (q *Queries) GetUserByID(ctx context.Context, id int64) (GetUserByIDRow, error) {
 	row := q.db.QueryRow(ctx, getUserByID, id)
 	var i GetUserByIDRow
@@ -134,9 +166,27 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (GetUserByIDRow, er
 		&i.Email,
 		&i.Role,
 		&i.BetaTester,
+		&i.EmailVerified,
+		&i.HasPassword,
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const getUserPasswordHash = `-- name: GetUserPasswordHash :one
+SELECT password_hash
+FROM users
+WHERE id = $1
+`
+
+// The account's stored password hash, for verifying a current password on change.
+// NULL when the account is passwordless (OAuth-only), which the caller treats the same
+// as a wrong password: there is nothing to verify against.
+func (q *Queries) GetUserPasswordHash(ctx context.Context, id int64) (pgtype.Text, error) {
+	row := q.db.QueryRow(ctx, getUserPasswordHash, id)
+	var password_hash pgtype.Text
+	err := row.Scan(&password_hash)
+	return password_hash, err
 }
 
 const getUserResume = `-- name: GetUserResume :one
@@ -225,6 +275,22 @@ func (q *Queries) GetUserRole(ctx context.Context, id int64) (string, error) {
 	return role, err
 }
 
+const getUserTokenVersion = `-- name: GetUserTokenVersion :one
+SELECT token_version
+FROM users
+WHERE id = $1
+`
+
+// The account's current session generation, read on every authenticated request to
+// decide whether a correctly-signed token was revoked. One primary-key lookup; this
+// is the price of making a stateless JWT revocable at all.
+func (q *Queries) GetUserTokenVersion(ctx context.Context, id int64) (int32, error) {
+	row := q.db.QueryRow(ctx, getUserTokenVersion, id)
+	var token_version int32
+	err := row.Scan(&token_version)
+	return token_version, err
+}
+
 const isBetaTester = `-- name: IsBetaTester :one
 SELECT beta_tester
 FROM users
@@ -238,6 +304,46 @@ func (q *Queries) IsBetaTester(ctx context.Context, id int64) (bool, error) {
 	var beta_tester bool
 	err := row.Scan(&beta_tester)
 	return beta_tester, err
+}
+
+const resetUserPassword = `-- name: ResetUserPassword :one
+UPDATE users
+SET password_hash = $2, email_verified = true, token_version = token_version + 1
+WHERE id = $1
+RETURNING token_version
+`
+
+type ResetUserPasswordParams struct {
+	ID           int64       `json:"id"`
+	PasswordHash pgtype.Text `json:"password_hash"`
+}
+
+// Complete a reset-by-emailed-code: set the new hash, revoke every session, and mark
+// the address verified — receiving the code IS proof of control, so a reset doubles as
+// verification and an unverified account stops being a merge target.
+func (q *Queries) ResetUserPassword(ctx context.Context, arg ResetUserPasswordParams) (int32, error) {
+	row := q.db.QueryRow(ctx, resetUserPassword, arg.ID, arg.PasswordHash)
+	var token_version int32
+	err := row.Scan(&token_version)
+	return token_version, err
+}
+
+const seizeUnverifiedAccount = `-- name: SeizeUnverifiedAccount :one
+UPDATE users
+SET password_hash = NULL, email_verified = true, token_version = token_version + 1
+WHERE id = $1
+RETURNING token_version
+`
+
+// Hand an unverified, password-backed account to the proven owner of its address when a
+// provider-verified OAuth identity arrives for it: the password is destroyed and every
+// session revoked, so a squatter who registered the address first loses both ways in.
+// Returns the new generation for the session the sign-in is about to mint.
+func (q *Queries) SeizeUnverifiedAccount(ctx context.Context, id int64) (int32, error) {
+	row := q.db.QueryRow(ctx, seizeUnverifiedAccount, id)
+	var token_version int32
+	err := row.Scan(&token_version)
+	return token_version, err
 }
 
 const setUserATSAnalysis = `-- name: SetUserATSAnalysis :exec
@@ -255,6 +361,41 @@ type SetUserATSAnalysisParams struct {
 func (q *Queries) SetUserATSAnalysis(ctx context.Context, arg SetUserATSAnalysisParams) error {
 	_, err := q.db.Exec(ctx, setUserATSAnalysis, arg.ID, arg.ResumeAtsAnalysis)
 	return err
+}
+
+const setUserEmailVerified = `-- name: SetUserEmailVerified :exec
+UPDATE users
+SET email_verified = true
+WHERE id = $1
+`
+
+// Record that control of the address was proven. Idempotent — confirming twice is a
+// no-op rather than an error, so a double-submitted code does not fail the request.
+func (q *Queries) SetUserEmailVerified(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, setUserEmailVerified, id)
+	return err
+}
+
+const setUserPassword = `-- name: SetUserPassword :one
+UPDATE users
+SET password_hash = $2, token_version = token_version + 1
+WHERE id = $1
+RETURNING token_version
+`
+
+type SetUserPasswordParams struct {
+	ID           int64       `json:"id"`
+	PasswordHash pgtype.Text `json:"password_hash"`
+}
+
+// Change a known password. Revokes every other session in the same statement, so a
+// stolen token cannot outlive the password it was minted under. Does NOT touch
+// email_verified: knowing the current password proves nothing about the address.
+func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams) (int32, error) {
+	row := q.db.QueryRow(ctx, setUserPassword, arg.ID, arg.PasswordHash)
+	var token_version int32
+	err := row.Scan(&token_version)
+	return token_version, err
 }
 
 const setUserResume = `-- name: SetUserResume :exec
