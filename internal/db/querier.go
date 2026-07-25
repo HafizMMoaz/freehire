@@ -1184,6 +1184,14 @@ type Querier interface {
 	// expired probes can close a job. Guarded to the non-zero case so probing an
 	// already-clean job does not churn the row.
 	ResetLivenessStrikes(ctx context.Context, id int64) error
+	// Catalogue pruning: the queries that find, and eventually remove, jobs that do not
+	// belong on an IT job board. See openspec/changes/prune-non-it-catalog.
+	// The residual unclassified mass grouped into clusters an operator can act on: the
+	// most frequent titles among live jobs carrying no is_tech signal. Titles are
+	// normalized (lowercased, trimmed) so one role spelled inconsistently across boards
+	// reads as one cluster rather than several singletons. Closed and duplicate rows are
+	// excluded — only a live, canonical posting is worth a dictionary term.
+	ResidualUnclassifiedTitles(ctx context.Context, rowLimit int32) ([]ResidualUnclassifiedTitlesRow, error)
 	// Mark a sent request contacted or declined, recording the acting referrer and time. The
 	// status='sent' guard makes it race-safe: whichever referrer acts first wins; a second
 	// attempt matches no row (mapped to "already resolved").
