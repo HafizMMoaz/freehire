@@ -120,6 +120,15 @@ var nonTechTitleTerms = []string{
 	"recepcionista",
 }
 
+// NonTechTerms returns the curated non-tech title terms. Exposed so the catalogue
+// miner can check its stop-word list against them: a stop word that is also a token
+// of a known non-tech role would drop every word pair built from that phrase, hiding
+// the whole role family from mining rather than merely filtering it. Returns a copy;
+// the dictionary stays immutable.
+func NonTechTerms() []string {
+	return append([]string(nil), nonTechTitleTerms...)
+}
+
 // ptGenderSuffix strips the Brazilian-Portuguese inclusive gender parentheticals
 // ("operador(a)", "enfermeiro(a)") so a phrase term matches the common written form.
 // Without it "operador(a) de caixa" would not match "operador de caixa".
