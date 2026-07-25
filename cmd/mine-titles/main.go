@@ -8,13 +8,12 @@
 // boards reads as one cluster; closed and duplicate rows are excluded, since only a
 // live, canonical posting is worth a term.
 //
-// Two costs worth knowing before wiring it into anything automatic. The aggregate
-// runs over every unclassified job before LIMIT applies, so --limit bounds the
-// output, not the work: a small limit costs the same as a large one. And
-// array_agg(DISTINCT ...) rules out partial aggregation, so the group-by runs
-// single-threaded and can spill to disk on a large catalogue. Both are acceptable
-// for an operator tool run a few times per pruning iteration; neither would be on a
-// request path.
+// Cost, measured on prod (1.8M unclassified rows, 1.06M distinct titles): ~67s per
+// run. --limit bounds the output, not the work — the whole group-by runs before the
+// final top-N sort, so a small limit costs the same as a large one. The per-worker
+// sorts spill to temp space (~100MB across three workers); that is released at the
+// end, but it is worth knowing on a disk-constrained box. Acceptable for an operator
+// tool run a few times per pruning iteration; it would not belong on a request path.
 //
 // Usage: go run ./cmd/mine-titles [--limit=100]   (needs DATABASE_URL)
 package main
@@ -65,7 +64,8 @@ func run() int {
 	return 0
 }
 
-// report writes the clusters as an aligned table, busiest first. Sources are sorted
+// report writes the clusters as an aligned table in the order given (the query orders
+// them busiest-first). Sources are sorted here rather than trusted from the aggregate,
 // so an unchanged catalogue renders byte-identically between runs — an operator
 // diffing two iterations should see only real movement.
 func report(w io.Writer, rows []db.ResidualUnclassifiedTitlesRow) error {

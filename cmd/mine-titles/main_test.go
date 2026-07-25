@@ -31,9 +31,11 @@ func TestReportRendersFieldsInGivenOrder(t *testing.T) {
 	}
 }
 
-// array_agg(DISTINCT ...) leaves ordering to Postgres's implementation of DISTINCT.
-// The report sorts explicitly so two runs over unchanged data produce byte-identical
-// output — an operator comparing iterations should see only real movement.
+// Postgres happens to return array_agg(DISTINCT ...) sorted, because it implements
+// the DISTINCT by sorting — but that is an implementation detail of the aggregate,
+// not a documented guarantee. The report sorts on its own so its output stays
+// byte-identical between runs over unchanged data regardless, and so the renderer is
+// testable without a database.
 func TestReportSortsSources(t *testing.T) {
 	var b strings.Builder
 	rows := []db.ResidualUnclassifiedTitlesRow{
