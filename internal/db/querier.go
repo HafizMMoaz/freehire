@@ -513,6 +513,10 @@ type Querier interface {
 	GetCVByID(ctx context.Context, arg GetCVByIDParams) (GetCVByIDRow, error)
 	// Community discussion threads (see the add-community-threads change). Read paths
 	// join community_personas so a row carries the author's handle, never their user_id.
+	// Every such join is a LEFT JOIN: content outlives its author (a deleted account
+	// leaves author_user_id NULL), and an inner join would drop it from the listings
+	// instead. A null handle therefore means "no live author", which the API renders as
+	// either a deleted member or the AI persona.
 	// A user's stable pseudonymous handle, or no row when they have never posted.
 	GetCommunityPersona(ctx context.Context, userID int64) (CommunityPersona, error)
 	// A single thread with its author handle.
@@ -951,8 +955,8 @@ type Querier interface {
 	// Base CVs (job_id NULL) are excluded; the JOIN also drops tailored CVs whose job was deleted.
 	ListTailoredCVsByUser(ctx context.Context, userID int64) ([]ListTailoredCVsByUserRow, error)
 	ListThreadRepliesAfter(ctx context.Context, arg ListThreadRepliesAfterParams) ([]ListThreadRepliesAfterRow, error)
-	// First page of a thread's replies, oldest first. LEFT JOIN so a future AI reply
-	// (null author) still returns, with a null handle the API renders as the AI persona.
+	// First page of a thread's replies, oldest first. LEFT JOIN so an authorless reply
+	// still returns — a future AI reply, or one whose author deleted their account.
 	ListThreadRepliesFirst(ctx context.Context, arg ListThreadRepliesFirstParams) ([]ListThreadRepliesFirstRow, error)
 	// Every board currently failing or cooled down, worst first — the operator's
 	// "what's broken" query and the source of the per-run summary log.

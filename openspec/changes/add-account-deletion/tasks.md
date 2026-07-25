@@ -1,8 +1,8 @@
 ## 1. Schema: de-authored community content
 
-- [ ] 1.1 Add `migrations/0041_threads_author_set_null.sql`: drop `NOT NULL` on `threads.author_user_id` and recreate `threads_author_user_id_fkey` as `ON DELETE SET NULL`
-- [ ] 1.2 Change every `community_personas` join in `internal/db/queries/community.sql` from `JOIN` to `LEFT JOIN` (thread read, both list queries, reply reads) so a de-authored thread still appears; regenerate with `make sqlc`
-- [ ] 1.3 Render a de-authored author as a marker distinct from `aiAuthor` in `internal/handler/community.go` (thread and reply responses), covered by a handler test asserting a deleted author is not labelled "AI"
+- [x] 1.1 Add `migrations/0041_threads_author_set_null.sql`: drop `NOT NULL` on `threads.author_user_id` and recreate `threads_author_user_id_fkey` as `ON DELETE SET NULL`
+- [x] 1.2 Change every `community_personas` join in `internal/db/queries/community.sql` from `JOIN` to `LEFT JOIN` (thread read, both list queries, reply reads) so a de-authored thread still appears; regenerate with `make sqlc`
+- [x] 1.3 Render a de-authored author as a marker distinct from `aiAuthor` in `internal/handler/community.go` (thread and reply responses), covered by a handler test asserting a deleted author is not labelled "AI"
 
 ## 2. Session termination
 
