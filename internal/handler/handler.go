@@ -12,6 +12,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/strelov1/freehire/internal/accountdelete"
 	"github.com/strelov1/freehire/internal/accounts"
 	"github.com/strelov1/freehire/internal/atscheck"
 	"github.com/strelov1/freehire/internal/auth"
@@ -190,6 +191,10 @@ type API struct {
 	// text for the verdict). Its blob store is nil when S3 is unconfigured; Enabled()
 	// then reports false and callers degrade to per-request résumé upload.
 	resume *resume.Store
+	// accountDelete erases an account for good — rows, objects, and the Gmail grant.
+	// accountEmails resolves the caller's own email for the typed confirmation.
+	accountDelete accountEraser
+	accountEmails accountEmailLookup
 	// cvStore owns the CV-builder use cases (per-user structured CVs, CRUD + seed).
 	cvStore *cv.Store
 	// cvRenderer renders a CV to PDF. Nil when no typst binary is configured; the PDF
@@ -369,6 +374,11 @@ func Register(app *fiber.App, cfg Config) {
 	// Résumé storage is nil-safe: a nil Blob (S3 unconfigured) yields a disabled service
 	// whose Enabled() is false, so the upload/verdict paths degrade to in-request parsing.
 	a.resume = resume.New(cfg.Blob, resume.NewQueriesRepository(queries))
+	// Account deletion reaches past the FK cascade: cfg.Blob is nil when storage is
+	// unconfigured and the revoker is nil when Gmail is — either way there is nothing
+	// to erase there, which must not stop a member from leaving.
+	a.accountDelete = accountdelete.New(accountdelete.NewQueriesRepository(queries), cfg.Blob, a.revokeGmailGrant)
+	a.accountEmails = queries
 
 	// CV builder: store is always available; the renderer is enabled only when a typst
 	// binary was resolved (assign only a non-nil renderer so the interface stays nil when
@@ -675,6 +685,11 @@ func Register(app *fiber.App, cfg Config) {
 	api.Get("/me/credits", keyAuth, a.GetMyCredits)
 	api.Get("/me/credits/history", keyAuth, a.GetMyCreditsHistory)
 	api.Get("/me/recommendations", keyAuth, a.Recommendations)
+
+	// Account deletion is permanent and cookie-only, for the same reason key
+	// management is: a leaked API key must not be able to destroy the account that
+	// issued it. The body confirms the caller's own email address.
+	api.Delete("/me", auth.RequireAuth(a.issuer, a.queries), a.DeleteAccount)
 
 	// API-key management is cookie-only (RequireAuth): a leaked key must not be
 	// able to create, list, or revoke keys. The create endpoint returns the

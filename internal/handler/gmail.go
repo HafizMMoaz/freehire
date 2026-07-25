@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"log"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5"
@@ -110,14 +111,9 @@ func (a *API) GmailDisconnect(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	// Best-effort revoke with Google before purging our copy (only when the
-	// feature is wired — otherwise there is nothing to revoke through).
-	if a.gmailReady() {
-		if tok, err := a.queries.GetGmailRefreshToken(c.Context(), userID); err == nil {
-			if refresh, decErr := a.gmailCipher.Decrypt(tok.RefreshTokenEnc); decErr == nil {
-				a.gmailConnector.Revoke(c.Context(), refresh)
-			}
-		}
+	// Best-effort revoke with Google before purging our copy.
+	if err := a.revokeGmailGrant(c.Context(), userID); err != nil {
+		log.Printf("gmail disconnect: revoke for user %d: %v", userID, err)
 	}
 	// Purge only this user's Gmail-sourced mail; a hosted mailbox's mail stays.
 	if err := a.queries.DeleteEmailsBySource(c.Context(), db.DeleteEmailsBySourceParams{UserID: userID, Source: "gmail"}); err != nil {
@@ -132,4 +128,27 @@ func (a *API) GmailDisconnect(c *fiber.Ctx) error {
 // gmailReady reports whether the Gmail feature is wired (config present).
 func (a *API) gmailReady() bool {
 	return a.gmailConnector != nil && a.gmailCipher != nil
+}
+
+// revokeGmailGrant surrenders the user's Gmail grant at Google, so losing our copy of
+// the token is not the only thing standing between us and their mailbox. Shared by
+// disconnect and account deletion. A user with no connection — or a deployment with
+// Gmail unconfigured — has nothing to revoke, which is success, not failure.
+func (a *API) revokeGmailGrant(ctx context.Context, userID int64) error {
+	if !a.gmailReady() {
+		return nil
+	}
+	tok, err := a.queries.GetGmailRefreshToken(ctx, userID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	refresh, err := a.gmailCipher.Decrypt(tok.RefreshTokenEnc)
+	if err != nil {
+		return err
+	}
+	a.gmailConnector.Revoke(ctx, refresh)
+	return nil
 }

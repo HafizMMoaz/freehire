@@ -86,6 +86,20 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (CreateU
 	return i, err
 }
 
+const deleteUser = `-- name: DeleteUser :exec
+DELETE FROM users WHERE id = $1
+`
+
+// Erase the account. Every user-owned table declares ON DELETE CASCADE, so this one
+// statement is the whole database side of account deletion; the trails that outlive
+// the member (jobs.created_by, *.reviewed_by, referral decisions, thread authorship)
+// are ON DELETE SET NULL by design. Objects in storage are NOT reachable from here —
+// the caller deletes them first (see ListUserBlobKeys).
+func (q *Queries) DeleteUser(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, deleteUser, id)
+	return err
+}
+
 const getUserATSAnalysis = `-- name: GetUserATSAnalysis :one
 SELECT resume_ats_analysis
 FROM users
@@ -306,6 +320,43 @@ func (q *Queries) IsBetaTester(ctx context.Context, id int64) (bool, error) {
 	return beta_tester, err
 }
 
+const listUserBlobKeys = `-- name: ListUserBlobKeys :many
+SELECT u.resume_object_key AS key FROM users u
+WHERE u.id = $1 AND u.resume_object_key IS NOT NULL AND u.resume_object_key <> ''
+UNION
+SELECT o.proof_object_key FROM referral_offers o
+WHERE o.user_id = $1 AND o.proof_object_key <> ''
+UNION
+SELECT e.s3_key FROM emails e
+WHERE e.user_id = $1 AND e.s3_key IS NOT NULL AND e.s3_key <> ''
+`
+
+// Every object-storage key the account owns, in one read: the stored CV, each
+// referral-proof PDF, and the raw MIME of each hosted email. Account deletion
+// collects these BEFORE deleting any row — the mail and proof keys live in the rows
+// themselves, so once those are gone the objects are unreachable and would sit in
+// the bucket forever. Empty keys are filtered out so a caller never asks storage to
+// delete "".
+func (q *Queries) ListUserBlobKeys(ctx context.Context, id int64) ([]pgtype.Text, error) {
+	rows, err := q.db.Query(ctx, listUserBlobKeys, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.Text{}
+	for rows.Next() {
+		var key pgtype.Text
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		items = append(items, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const resetUserPassword = `-- name: ResetUserPassword :one
 UPDATE users
 SET password_hash = $2, email_verified = true, token_version = token_version + 1
@@ -464,4 +515,20 @@ func (q *Queries) SetUserResumeStructured(ctx context.Context, arg SetUserResume
 		arg.ResumeStructuredUploadedAt,
 	)
 	return err
+}
+
+const userEmail = `-- name: UserEmail :one
+SELECT email
+FROM users
+WHERE id = $1
+`
+
+// Slim email lookup for the delete-account confirmation, which compares the typed
+// address against the caller's own. A primitive so the handler needs no full user row
+// (same shape as GetUserRole).
+func (q *Queries) UserEmail(ctx context.Context, id int64) (string, error) {
+	row := q.db.QueryRow(ctx, userEmail, id)
+	var email string
+	err := row.Scan(&email)
+	return email, err
 }

@@ -404,6 +404,12 @@ type Querier interface {
 	DeleteSubscription(ctx context.Context, arg DeleteSubscriptionParams) (int64, error)
 	// Unlink Telegram. Returns the affected row count: 0 means there was no link.
 	DeleteTelegramLink(ctx context.Context, userID int64) (int64, error)
+	// Erase the account. Every user-owned table declares ON DELETE CASCADE, so this one
+	// statement is the whole database side of account deletion; the trails that outlive
+	// the member (jobs.created_by, *.reviewed_by, referral decisions, thread authorship)
+	// are ON DELETE SET NULL by design. Objects in storage are NOT reachable from here —
+	// the caller deletes them first (see ListUserBlobKeys).
+	DeleteUser(ctx context.Context, id int64) error
 	// Remove the caller's profile. Returns the affected row count (0 when none existed); the
 	// handler treats delete as idempotent (204 either way).
 	DeleteUserProfile(ctx context.Context, userID int64) (int64, error)
@@ -513,6 +519,10 @@ type Querier interface {
 	GetCVByID(ctx context.Context, arg GetCVByIDParams) (GetCVByIDRow, error)
 	// Community discussion threads (see the add-community-threads change). Read paths
 	// join community_personas so a row carries the author's handle, never their user_id.
+	// Every such join is a LEFT JOIN: content outlives its author (a deleted account
+	// leaves author_user_id NULL), and an inner join would drop it from the listings
+	// instead. A null handle therefore means "no live author", which the API renders as
+	// either a deleted member or the AI persona.
 	// A user's stable pseudonymous handle, or no row when they have never posted.
 	GetCommunityPersona(ctx context.Context, userID int64) (CommunityPersona, error)
 	// A single thread with its author handle.
@@ -951,8 +961,8 @@ type Querier interface {
 	// Base CVs (job_id NULL) are excluded; the JOIN also drops tailored CVs whose job was deleted.
 	ListTailoredCVsByUser(ctx context.Context, userID int64) ([]ListTailoredCVsByUserRow, error)
 	ListThreadRepliesAfter(ctx context.Context, arg ListThreadRepliesAfterParams) ([]ListThreadRepliesAfterRow, error)
-	// First page of a thread's replies, oldest first. LEFT JOIN so a future AI reply
-	// (null author) still returns, with a null handle the API renders as the AI persona.
+	// First page of a thread's replies, oldest first. LEFT JOIN so an authorless reply
+	// still returns — a future AI reply, or one whose author deleted their account.
 	ListThreadRepliesFirst(ctx context.Context, arg ListThreadRepliesFirstParams) ([]ListThreadRepliesFirstRow, error)
 	// Every board currently failing or cooled down, worst first — the operator's
 	// "what's broken" query and the source of the per-run summary log.
@@ -960,6 +970,13 @@ type Querier interface {
 	// The caller's open applications offered to the matcher (applied, saved, or staged),
 	// as (job_id, company). Closed postings are excluded.
 	ListUserApplicationsForMatch(ctx context.Context, userID int64) ([]ListUserApplicationsForMatchRow, error)
+	// Every object-storage key the account owns, in one read: the stored CV, each
+	// referral-proof PDF, and the raw MIME of each hosted email. Account deletion
+	// collects these BEFORE deleting any row — the mail and proof keys live in the rows
+	// themselves, so once those are gone the objects are unreachable and would sit in
+	// the bucket forever. Empty keys are filtered out so a caller never asks storage to
+	// delete "".
+	ListUserBlobKeys(ctx context.Context, id int64) ([]pgtype.Text, error)
 	// Existing thread→application links for the caller, so the matcher can continue a
 	// thread already attached to an application.
 	ListUserEmailThreadLinks(ctx context.Context, userID int64) ([]ListUserEmailThreadLinksRow, error)
@@ -1654,6 +1671,10 @@ type Querier interface {
 	// facet arrays (regions/remote_regions/countries/domains/company_types/company_sizes)
 	// are left untouched. Idempotent: re-running the same entry rewrites the same values.
 	UpsertYCCompany(ctx context.Context, arg UpsertYCCompanyParams) error
+	// Slim email lookup for the delete-account confirmation, which compares the typed
+	// address against the caller's own. A primitive so the handler needs no full user row
+	// (same shape as GetUserRole).
+	UserEmail(ctx context.Context, id int64) (string, error)
 	// Whether a user has a stored original résumé — the check before attaching an 'original'
 	// CV to a request, so a seeker cannot request with a résumé they never uploaded.
 	UserHasResume(ctx context.Context, id int64) (bool, error)

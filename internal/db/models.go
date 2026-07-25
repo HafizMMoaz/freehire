@@ -492,7 +492,7 @@ type Thread struct {
 	AnchorPath   pgtype.Text        `json:"anchor_path"`
 	Title        string             `json:"title"`
 	Body         string             `json:"body"`
-	AuthorUserID int64              `json:"author_user_id"`
+	AuthorUserID pgtype.Int8        `json:"author_user_id"`
 	ReplyCount   int32              `json:"reply_count"`
 	Status       string             `json:"status"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
