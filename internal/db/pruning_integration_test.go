@@ -1,8 +1,8 @@
 //go:build integration
 
-// Integration test for the residual-title miner query: ResidualUnclassifiedTitles reports
+// Integration tests for the catalogue-pruning queries. ResidualUnclassifiedTitles reports
 // the most frequent titles that still carry no is_tech signal, so each pruning iteration can
-// be aimed at the next real cluster and the remaining group measured. A SQL behavior,
+// be aimed at the next real cluster and the remaining group measured. SQL behavior,
 // verifiable only against a real Postgres. Run with: go test -tags=integration ./internal/db/
 package db
 
@@ -11,24 +11,22 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// residualJob upserts a job with the given external id, title and source, then stamps the
-// tri-state is_tech directly: UpsertJob does not carry the column, and the miner's whole
-// purpose is to select on it.
+// residualJob upserts a job with the given external id, title and source, carrying the
+// tri-state is_tech (nil = unclassified) that the miner selects on.
 func residualJob(ctx context.Context, t *testing.T, pool *pgxpool.Pool, ext, title, source string, isTech *bool) Job {
 	t.Helper()
 	p := ingestParams(ext, title)
 	p.Source = source
+	if isTech != nil {
+		p.IsTech = pgtype.Bool{Bool: *isTech, Valid: true}
+	}
 	j, err := ingestUpsert(ctx, New(pool), p)
 	if err != nil {
 		t.Fatalf("upsert %s: %v", ext, err)
-	}
-	if isTech != nil {
-		if _, err := pool.Exec(ctx, "UPDATE jobs SET is_tech = $1 WHERE id = $2", *isTech, j.ID); err != nil {
-			t.Fatalf("set is_tech on %s: %v", ext, err)
-		}
 	}
 	return j
 }
@@ -47,22 +45,24 @@ func TestResidualUnclassifiedTitlesGroupsAndFilters(t *testing.T) {
 	residualJob(ctx, t, pool, "acme:2", "registered behavior technician", "greenhouse", nil)
 	residualJob(ctx, t, pool, "acme:3", "  Registered Behavior Technician  ", "ukg", nil)
 
-	// A smaller unclassified cluster, to prove ordering is by count.
-	residualJob(ctx, t, pool, "acme:4", "Line Cook", "greenhouse", nil)
-
-	// Already classified either way — not residual, so out of the report.
-	residualJob(ctx, t, pool, "acme:5", "Senior Software Engineer", "greenhouse", &yes)
-	residualJob(ctx, t, pool, "acme:6", "Registered Nurse", "greenhouse", &no)
-
-	// Unclassified but not live: a closed posting and a duplicate of a canonical row.
-	closed := residualJob(ctx, t, pool, "acme:7", "Team Member", "greenhouse", nil)
+	// A second, smaller cluster whose live member is the ONLY row that may be reported.
+	// Every excluded row below shares its title and carries source "ukg", so an exclusion
+	// that leaked would inflate this cluster's count or add "ukg" to its sources — a
+	// filter moved into a HAVING, or dropped from the aggregate, fails here rather than
+	// passing because each excluded row happened to have a title of its own.
+	live := residualJob(ctx, t, pool, "acme:4", "Line Cook", "greenhouse", nil)
+	residualJob(ctx, t, pool, "acme:5", "Line Cook", "ukg", &no) // classified non-tech
+	closed := residualJob(ctx, t, pool, "acme:6", "Line Cook", "ukg", nil)
 	if _, err := pool.Exec(ctx, "UPDATE jobs SET closed_at = now() WHERE id = $1", closed.ID); err != nil {
-		t.Fatalf("close acme:7: %v", err)
+		t.Fatalf("close acme:6: %v", err)
 	}
-	dup := residualJob(ctx, t, pool, "acme:8", "Line Cook", "greenhouse", nil)
-	if _, err := pool.Exec(ctx, "UPDATE jobs SET duplicate_of = $1 WHERE id = $2", closed.ID, dup.ID); err != nil {
-		t.Fatalf("mark acme:8 duplicate: %v", err)
+	dup := residualJob(ctx, t, pool, "acme:7", "Line Cook", "ukg", nil)
+	if _, err := pool.Exec(ctx, "UPDATE jobs SET duplicate_of = $1 WHERE id = $2", live.ID, dup.ID); err != nil {
+		t.Fatalf("mark acme:7 duplicate: %v", err)
 	}
+
+	// Classified technical — the same predicate as acme:5, kept with a realistic title.
+	residualJob(ctx, t, pool, "acme:8", "Senior Software Engineer", "ukg", &yes)
 
 	rows, err := q.ResidualUnclassifiedTitles(ctx, 10)
 	if err != nil {
@@ -86,8 +86,15 @@ func TestResidualUnclassifiedTitlesGroupsAndFilters(t *testing.T) {
 		t.Errorf("top sources = %v, want [greenhouse ukg] distinct", sources)
 	}
 
-	if rows[1].Title != "line cook" || rows[1].Jobs != 1 {
-		t.Errorf("second row = %q/%d, want \"line cook\"/1 — the duplicate must not be counted", rows[1].Title, rows[1].Jobs)
+	cook := rows[1]
+	if cook.Title != "line cook" {
+		t.Fatalf("second title = %q, want %q", cook.Title, "line cook")
+	}
+	if cook.Jobs != 1 {
+		t.Errorf("line cook jobs = %d, want 1 — the classified, closed and duplicate rows must not be counted", cook.Jobs)
+	}
+	if !slices.Equal(cook.Sources, []string{"greenhouse"}) {
+		t.Errorf("line cook sources = %v, want [greenhouse] — every excluded row is on ukg, so its presence means one leaked", cook.Sources)
 	}
 }
 

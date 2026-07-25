@@ -1185,7 +1185,7 @@ type Querier interface {
 	// already-clean job does not churn the row.
 	ResetLivenessStrikes(ctx context.Context, id int64) error
 	// Catalogue pruning: the queries that find, and eventually remove, jobs that do not
-	// belong on an IT job board. See openspec/changes/prune-non-it-catalog.
+	// belong on an IT job board. See the catalog-pruning capability spec.
 	// The residual unclassified mass grouped into clusters an operator can act on: the
 	// most frequent titles among live jobs carrying no is_tech signal. Titles are
 	// normalized (lowercased, trimmed) so one role spelled inconsistently across boards

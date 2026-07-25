@@ -1,5 +1,5 @@
 -- Catalogue pruning: the queries that find, and eventually remove, jobs that do not
--- belong on an IT job board. See openspec/changes/prune-non-it-catalog.
+-- belong on an IT job board. See the catalog-pruning capability spec.
 
 -- name: ResidualUnclassifiedTitles :many
 -- The residual unclassified mass grouped into clusters an operator can act on: the

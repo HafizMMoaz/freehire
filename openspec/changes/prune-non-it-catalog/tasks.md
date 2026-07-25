@@ -1,6 +1,6 @@
 ## 1. Residual-title miner
 
-- [ ] 1.1 Add the SQL query that groups open, non-duplicate jobs with `is_tech IS NULL` by normalized title, returning count and distinct sources, ordered by count descending with a limit
+- [x] 1.1 Add the SQL query that groups open, non-duplicate jobs with `is_tech IS NULL` by normalized title, returning count and distinct sources, ordered by count descending with a limit
 - [ ] 1.2 Add `cmd/mine-titles`: read-only run-once worker reading `DATABASE_URL`, `--limit` flag (default 100), printing title, count, and sources
 - [ ] 1.3 Run it against prod read-only and record the top clusters in the change notes, confirming the residual set matches the design's expectation
 
