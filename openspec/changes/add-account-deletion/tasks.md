@@ -6,10 +6,10 @@
 
 ## 2. Session termination
 
-- [ ] 2.1 Add a `UserExists(ctx, id) (bool, error)` query to `internal/db/queries/users.sql` and regenerate
-- [ ] 2.2 Extend `auth.RequireAuth` and `auth.RequireAuthOrKey` with a user-existence check behind a narrow interface, returning `401` when the subject is gone; tests cover valid-token-missing-user for both the cookie and the API-key path
-- [ ] 2.3 Wire the checker at every `RequireAuth`/`RequireAuthOrKey` construction site in `internal/handler/handler.go`
-- [ ] 2.4 Update `internal/auth/AGENTS.md` with the existence check and why a valid signature is no longer sufficient
+- [x] 2.1 ~~Add a `UserExists` query~~ — dropped: session revocation landed on `main` first, and its `token_version` load answers the same question in the same round-trip
+- [x] 2.2 Cover the guarantee where it lives: tests in `internal/auth` assert `401` for a token whose account is gone, on both `RequireAuth` and the cookie path of `RequireAuthOrKey` (the key path needs none — `api_keys` cascade)
+- [x] 2.3 ~~Wire the checker at every construction site~~ — not needed: `resolveSession` already fails closed on an unreadable token version
+- [x] 2.4 Update `internal/auth/AGENTS.md`: the fail-closed version load is what terminates a deleted account's sessions, and must not be softened
 
 ## 3. Erasure orchestration (`internal/accountdelete`)
 

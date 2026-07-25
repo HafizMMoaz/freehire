@@ -43,13 +43,13 @@ func (f fakeEmailLookup) UserEmail(context.Context, int64) (string, error) {
 func deleteAccountApp(t *testing.T, eraser *fakeEraser, email string) (*fiber.App, string) {
 	t.Helper()
 	iss := auth.NewIssuer("test-secret", time.Hour)
-	token, err := iss.Issue(1)
+	token, err := iss.Issue(1, testTokenVersion)
 	if err != nil {
 		t.Fatalf("issue token: %v", err)
 	}
 	h := &API{issuer: iss, accountDelete: eraser, accountEmails: fakeEmailLookup{email: email}}
 	app := fiber.New(fiber.Config{ErrorHandler: RenderError})
-	app.Delete("/me", auth.RequireAuth(iss, liveUsers{}), h.DeleteAccount)
+	app.Delete("/me", auth.RequireAuth(iss, testVersions), h.DeleteAccount)
 	return app, token
 }
 

@@ -168,7 +168,7 @@ func TestDeleteAccountEndToEnd(t *testing.T) {
 	}
 
 	iss := auth.NewIssuer("test-secret", time.Hour)
-	cookie, _ := iss.Issue(leaver)
+	cookie, _ := iss.Issue(leaver, testTokenVersion)
 	blobs := newMemBlobs("resumes/leaver", "referral-proof/leaver/acme.pdf", "mail/leaver/msg-1", "resumes/stayer")
 	app := newDeleteAccountApp(pool, iss, blobs)
 
@@ -294,7 +294,7 @@ func TestDeleteAccountAbortsOnStorageFailure(t *testing.T) {
 	}
 
 	iss := auth.NewIssuer("test-secret", time.Hour)
-	cookie, _ := iss.Issue(userID)
+	cookie, _ := iss.Issue(userID, testTokenVersion)
 	blobs := newMemBlobs("resumes/unlucky")
 	blobs.failOn = "resumes/unlucky"
 	app := newDeleteAccountApp(pool, iss, blobs)

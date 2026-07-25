@@ -104,29 +104,29 @@ Gmail off there is nothing to revoke. The service treats a nil dependency as
 "nothing to do", never as an error — otherwise local and self-hosted deployments
 could not delete accounts at all.
 
-### D4: Session termination by existence check in middleware
+### D4: Session termination rides on the existing token-version check
 
-**Decision.** `RequireAuth` and `RequireAuthOrKey` resolve the token, then
-confirm the subject exists via a new narrow interface
-(`UserExists(ctx, id) (bool, error)`, satisfied by `*db.Queries`). A missing user
-is `401`. The API-key path needs no change — `api_keys` cascades, so
-`AuthenticateAPIKey` already stops matching.
+**Decision.** Nothing new. `RequireAuth` and the cookie path of
+`RequireAuthOrKey` already resolve a session through `resolveSession`, which
+loads the account's `token_version` and **fails closed on any load error**. For a
+deleted account that read is `ErrNoRows`, so every device's cookie stops
+authenticating the moment the row is gone. This change only makes the guarantee
+explicit in the spec and covers it with a test.
 
-**Why.** It is the only approach that is correct on every device with no new
-state, and it makes the auth layer honest: today "the signature verifies" is
-silently treated as "this account exists". Cost is one primary-key lookup per
-authenticated request, on a pool that already serves several queries per request.
+**History.** This was first built as a separate `UserExists` check in the
+middleware, before session revocation landed on `main`. Rebasing showed the two
+were the same query answering the same question, so the added interface was
+dropped rather than kept alongside — one lookup, one meaning.
 
-**Alternatives.** *`users.token_version` claim in the JWT* — still needs the same
-lookup to read the version, so it buys nothing here (it would matter for
-"sign out everywhere", which is not this change). *A tombstone table plus an
-in-process cache with TTL* — avoids the lookup, but adds cache-invalidation
-semantics and a window where a deleted account still works; not worth it before
-there is a measured problem. *Do nothing and let handlers fail* — leaves 500s and
-was explicitly rejected.
+**Alternatives.** *A second existence lookup next to the version load* — a
+redundant round-trip per authenticated request for information already in hand.
+*A tombstone table plus an in-process cache* — cache-invalidation semantics and a
+window where a deleted account still works; not worth it without a measured
+problem. *Do nothing and let handlers fail* — leaves 500s where 401 is the honest
+answer, and was explicitly rejected.
 
-**Watch.** If the lookup shows up in latency profiles, the cache is the next
-step; the interface seam makes that swap local.
+**Note.** The API-key path needs nothing either: `api_keys` cascades with the
+owner, so a deleted user's key stops resolving on its own.
 
 ### D5: Community — `SET NULL` plus a distinct deleted-author marker
 
