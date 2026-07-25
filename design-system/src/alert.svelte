@@ -25,8 +25,14 @@
     class: className,
     children,
   }: { variant?: AlertVariant; class?: string; children: Snippet } = $props();
+
+  // role="alert" is an assertive live region: it interrupts whatever the screen
+  // reader is saying. Right for a failure the user needs now, wrong for the
+  // informational variants, which are usually static page furniture and would
+  // barge in on every render.
+  let role = $derived(variant === 'destructive' ? 'alert' : undefined);
 </script>
 
-<div role="alert" class={cn(alertVariants({ variant }), className)}>
+<div {role} class={cn(alertVariants({ variant }), className)}>
   {@render children()}
 </div>

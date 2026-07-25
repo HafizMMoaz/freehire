@@ -41,31 +41,34 @@
 
   let triggers: HTMLButtonElement[] = $state([]);
 
+  // A tablist always has exactly one selected tab, so an unset `value` reads as
+  // the first one. Keying the roving tabindex off `value` directly would leave
+  // every trigger at tabindex="-1" until the consumer picked a tab: the tablist
+  // unreachable by keyboard, and the arrow keys with no index to move from.
+  let selected = $derived(value ?? tabs[0]?.value);
+
   function activate(v: string) {
     value = v;
   }
 
   function onKeydown(e: KeyboardEvent) {
-    const idx = tabs.findIndex((t) => t.value === value);
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    const dir = e.key === 'ArrowRight' ? 1 : -1;
+    const idx = tabs.findIndex((t) => t.value === selected);
     if (idx === -1) return;
-    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
-      e.preventDefault();
-      const dir = e.key === 'ArrowRight' ? 1 : -1;
-      const next = (idx + dir + tabs.length) % tabs.length;
-      activate(tabs[next].value);
-      // Roving tabindex: the old trigger just became tabindex="-1", so focus
-      // has to follow the selection or it lands nowhere.
-      triggers[next]?.focus();
-    }
+    const nextIdx = (idx + dir + tabs.length) % tabs.length;
+    const next = tabs[nextIdx];
+    if (!next) return;
+    e.preventDefault();
+    activate(next.value);
+    // Roving tabindex: the old trigger just became tabindex="-1", so focus
+    // has to follow the selection or it lands nowhere.
+    triggers[nextIdx]?.focus();
   }
 </script>
 
 <div class={cn('flex flex-col gap-2', className)}>
-  <div
-    class={tabsListVariants()}
-    role="tablist"
-    onkeydown={onKeydown}
-  >
+  <div class={tabsListVariants()} role="tablist">
     {#each tabs as tab, i (tab.value)}
       <button
         bind:this={triggers[i]}
@@ -73,16 +76,17 @@
         role="tab"
         id={tabId(tab.value)}
         aria-controls={panelId}
-        aria-selected={value === tab.value}
-        tabindex={value === tab.value ? 0 : -1}
-        class={tabsTriggerVariants({ active: value === tab.value })}
+        aria-selected={selected === tab.value}
+        tabindex={selected === tab.value ? 0 : -1}
+        class={tabsTriggerVariants({ active: selected === tab.value })}
         onclick={() => activate(tab.value)}
+        onkeydown={onKeydown}
       >
         {tab.label}
       </button>
     {/each}
   </div>
-  <div role="tabpanel" id={panelId} aria-labelledby={value ? tabId(value) : undefined}>
+  <div role="tabpanel" id={panelId} aria-labelledby={selected ? tabId(selected) : undefined}>
     {@render children()}
   </div>
 </div>
