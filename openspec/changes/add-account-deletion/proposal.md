@@ -23,6 +23,15 @@ A signed-in member can create an account, upload a CV, connect their Gmail, and 
 - `community-threads`: authored content survives its author's deletion; the author identity of an authorless thread or reply is a deleted-member marker, distinct from the AI persona.
 - `gmail-connection`: revocation at Google, today specified only for an explicit disconnect, is also required when the owning account is erased.
 
+## Deploy note
+
+**Apply `migrations/0041_threads_author_set_null.sql` by hand on prod BEFORE deploying
+the binary.** `migrations/` runs through initdb only on a fresh volume. Unlike the usual
+column-addition migrations, deploying first does not error — it silently keeps
+`threads.author_user_id` on `ON DELETE CASCADE`, so the first account deletion destroys
+other members' replies. That loss is unrecoverable, which is what makes the ordering
+matter here more than usual.
+
 ## Impact
 
 - **API**: new `DELETE /api/v1/me` (cookie-only, not reachable via API key). `internal/handler/handler.go` routing, new `internal/handler/me_delete.go`.

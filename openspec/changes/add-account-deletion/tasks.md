@@ -35,6 +35,6 @@
 
 ## 6. Ship
 
-- [ ] 6.1 `go build ./... && go vet ./... && go test ./...`, plus the integration tag suite for the new tests
-- [ ] 6.2 Note in the change that migration 0041 must be applied by hand on prod BEFORE the binary deploys
+- [x] 6.1 `go build ./... && go vet ./... && go test ./...`, plus the integration tag suite for the new tests
+- [x] 6.2 Note in the change that migration 0041 must be applied by hand on prod BEFORE the binary deploys
 - [ ] 6.3 Offer a changelog entry (`write-changelog`) — this is user-facing
