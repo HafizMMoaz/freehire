@@ -8,97 +8,105 @@ func techPtr(b bool) *bool { return &b }
 // which signal wins, which company state each company-scoped rule needs, and — most
 // importantly — everything it must refuse to touch.
 func TestMatchRule(t *testing.T) {
-	crawled := map[string]bool{"greenhouse": true, "workday": true}
-
 	cases := []struct {
-		name string
-		c    candidate
-		ev   evidence
-		want string // "" = keep
+		name    string
+		c       candidate
+		ev      evidence
+		crawled bool
+		want    string // "" = keep
 	}{
 		{
-			name: "blue-collar title is removed regardless of the company",
-			c:    candidate{Source: "greenhouse", CompanySlug: "acme", Title: "Registered Nurse"},
-			ev:   evidence{anyTech: true, anySkills: true},
-			want: ruleTitle,
+			name:    "blue-collar title is removed regardless of the company",
+			c:       candidate{CompanySlug: "acme", Title: "Registered Nurse"},
+			ev:      evidence{anyTech: true, anySkills: true},
+			crawled: true,
+			want:    ruleTitle,
 		},
 		{
-			name: "technical evidence vetoes the title dictionary",
-			c:    candidate{Source: "greenhouse", CompanySlug: "acme", Title: "DevOps Engineer (HVAC IoT Platform)", IsTech: techPtr(true)},
-			ev:   evidence{},
-			want: "",
+			name:    "technical evidence vetoes the title dictionary",
+			c:       candidate{CompanySlug: "acme", Title: "DevOps Engineer (HVAC IoT Platform)", IsTech: techPtr(true)},
+			ev:      evidence{},
+			crawled: true,
+			want:    "",
 		},
 		{
 			name: "business role at a company with no technical evidence is removed",
-			c:    candidate{Source: "greenhouse", CompanySlug: "acme", Title: "Account Manager", Category: "sales", IsTech: techPtr(false)},
+			c:    candidate{CompanySlug: "acme", Title: "Account Manager", Category: "sales", IsTech: techPtr(false)},
 			ev:   evidence{},
 			want: ruleBusiness,
 		},
 		{
-			name: "the same business role is kept where the company has posted technical work",
-			c:    candidate{Source: "greenhouse", CompanySlug: "acme", Title: "Account Manager", Category: "sales", IsTech: techPtr(false)},
-			ev:   evidence{anyTech: true},
-			want: "",
+			name:    "the same business role is kept where the company has posted technical work",
+			c:       candidate{CompanySlug: "acme", Title: "Account Manager", Category: "sales", IsTech: techPtr(false)},
+			ev:      evidence{anyTech: true},
+			crawled: true,
+			want:    "",
 		},
 		{
 			name: "unclassified job at a company showing nothing at all is removed",
-			c:    candidate{Source: "greenhouse", CompanySlug: "acme", Title: "Team Member"},
+			c:    candidate{CompanySlug: "acme", Title: "Team Member"},
 			ev:   evidence{},
 			want: ruleUnknown,
 		},
 		{
-			name: "tagged skills alone keep an unclassified job",
-			c:    candidate{Source: "greenhouse", CompanySlug: "acme", Title: "Team Member"},
-			ev:   evidence{anySkills: true},
-			want: "",
+			name:    "tagged skills alone keep an unclassified job",
+			c:       candidate{CompanySlug: "acme", Title: "Team Member"},
+			ev:      evidence{anySkills: true},
+			crawled: true,
+			want:    "",
 		},
 		{
-			name: "an unclassified job is kept wherever the company has any evidence",
-			c:    candidate{Source: "workday", CompanySlug: "acme", Title: "Team Member"},
-			ev:   evidence{anyTech: true},
-			want: "",
+			name:    "an unclassified job is kept wherever the company has any evidence",
+			c:       candidate{CompanySlug: "acme", Title: "Team Member"},
+			ev:      evidence{anyTech: true},
+			crawled: true,
+			want:    "",
 		},
 		{
-			name: "a technical job is never a target",
-			c:    candidate{Source: "greenhouse", CompanySlug: "acme", Title: "Backend Engineer", Category: "backend", IsTech: techPtr(true)},
+			name:    "a technical job is never a target",
+			c:       candidate{CompanySlug: "acme", Title: "Backend Engineer", Category: "backend", IsTech: techPtr(true)},
+			ev:      evidence{},
+			crawled: true,
+			want:    "",
+		},
+		{
+			name: "a posting from no listed board is never touched, even by the title rule",
+			c:    candidate{CompanySlug: "acme", Title: "Registered Nurse"},
 			ev:   evidence{},
 			want: "",
 		},
 		{
-			name: "a source no crawl re-admits is never touched, even by the title rule",
-			c:    candidate{Source: "telegram", CompanySlug: "acme", Title: "Registered Nurse"},
-			ev:   evidence{},
-			want: "",
-		},
-		{
-			name: "a posting with no company is exempt from the company rules",
-			c:    candidate{Source: "greenhouse", Title: "Team Member"},
-			ev:   evidence{},
-			want: "",
+			name:    "a posting with no company is exempt from the company rules",
+			c:       candidate{Title: "Team Member"},
+			ev:      evidence{},
+			crawled: true,
+			want:    "",
 		},
 		{
 			name: "tagged skills do not save a business role — they veto only the unknown rule",
-			c:    candidate{Source: "greenhouse", CompanySlug: "acme", Title: "Account Manager", Category: "sales", IsTech: techPtr(false)},
+			c:    candidate{CompanySlug: "acme", Title: "Account Manager", Category: "sales", IsTech: techPtr(false)},
 			ev:   evidence{anySkills: true},
 			want: ruleBusiness,
 		},
 		{
-			name: "a job placed as non-technical with no category is kept — no rule covers it",
-			c:    candidate{Source: "greenhouse", CompanySlug: "acme", Title: "Some Role", IsTech: techPtr(false)},
-			ev:   evidence{},
-			want: "",
+			name:    "a job placed as non-technical with no category is kept — no rule covers it",
+			c:       candidate{CompanySlug: "acme", Title: "Some Role", IsTech: techPtr(false)},
+			ev:      evidence{},
+			crawled: true,
+			want:    "",
 		},
 		{
-			name: "a non-crawled source is exempt from the company rules too",
-			c:    candidate{Source: "manual", CompanySlug: "acme", Title: "Account Manager", Category: "sales", IsTech: techPtr(false)},
-			ev:   evidence{},
-			want: "",
+			name:    "a still-crawled board blocks the company rules — what they remove would return",
+			c:       candidate{CompanySlug: "acme", Title: "Account Manager", Category: "sales", IsTech: techPtr(false)},
+			ev:      evidence{},
+			crawled: true,
+			want:    "",
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := matchRule(tc.c, tc.ev, crawled)
+			got, ok := matchRule(tc.c, tc.ev, tc.crawled)
 			if tc.want == "" {
 				if ok {
 					t.Errorf("matched %q, want kept", got)

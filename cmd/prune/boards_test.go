@@ -3,10 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-
-	"github.com/strelov1/freehire/internal/db"
 )
 
 func writeBoardFile(t *testing.T, dir, name, body string) {
@@ -42,7 +39,7 @@ func TestListedCompaniesMatchesIngestSlugging(t *testing.T) {
 	}
 
 	for _, want := range []boardKey{
-		{"greenhouse", "acme-corp"}, {"greenhouse", "beta-co"}, {"lever", "gamma"},
+		{"greenhouse", "acme"}, {"greenhouse", "beta"}, {"lever", "gamma"},
 	} {
 		if !b.listed[want] {
 			t.Errorf("%+v not listed; got %v", want, b.listed)
@@ -51,9 +48,13 @@ func TestListedCompaniesMatchesIngestSlugging(t *testing.T) {
 	if len(b.listed) != 3 {
 		t.Errorf("listed %d entries, want 3 — README.md is not a board file", len(b.listed))
 	}
-	// The same slug under another provider is a different board and stays prunable.
-	if !b.retired("workday", "acme-corp") {
-		t.Error("a slug listed under greenhouse must not shield the same slug under workday")
+	// A posting is matched to its board through the namespaced external_id.
+	if !b.crawls("greenhouse", "acme:12345") {
+		t.Error("a posting of a listed board must read as crawled")
+	}
+	// The same board id under another provider is a different board.
+	if b.crawls("workday", "acme:12345") {
+		t.Error("a board listed under greenhouse must not shield the same id under workday")
 	}
 }
 
@@ -67,8 +68,13 @@ func TestListedCompaniesOmitsUnlisted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadBoards: %v", err)
 	}
-	if !b.retired("greenhouse", "retired-co") {
-		t.Error("a company absent from every board file must read as retired")
+	if b.crawls("greenhouse", "retired-co:1") {
+		t.Error("a board absent from every file must not read as crawled")
+	}
+	// A link-source import or a moderator row carries a real provider but no listed
+	// board, and nothing re-crawls it — so it must never read as crawled.
+	if b.crawls("greenhouse", "some-unlisted-board:99") {
+		t.Error("an unlisted board must not read as crawled, whatever its provider")
 	}
 }
 
@@ -93,55 +99,12 @@ func TestLoadBoardsReadsTheRealSourcesDirectory(t *testing.T) {
 	if len(b.listed) < 100 {
 		t.Errorf("listed %d entries, want the real catalogue's boards", len(b.listed))
 	}
-	if !b.crawled["greenhouse"] {
-		t.Error("greenhouse must be in the crawled allow-list")
+	if b.byProvider["greenhouse"] == nil {
+		t.Error("greenhouse must have boards")
 	}
 	for _, notCrawled := range []string{"telegram", "manual", ""} {
-		if b.crawled[notCrawled] {
-			t.Errorf("%q is not a board provider and must not be in the crawled allow-list", notCrawled)
+		if b.byProvider[notCrawled] != nil {
+			t.Errorf("%q is not a board provider and must have no boards", notCrawled)
 		}
-	}
-}
-
-// The report is what a retirement PR is written from, so it must name only companies
-// that are both still listed and genuinely without technical evidence. A false entry
-// costs a live board; a missing one leaves jobs the company rules cannot touch.
-func TestReportBoardsListsOnlyRetirableCompanies(t *testing.T) {
-	brd := boards{listed: map[boardKey]bool{
-		{"ukg", "nurse-co"}: true, {"greenhouse", "tech-co"}: true, {"greenhouse", "skills-co"}: true,
-	}}
-	rows := []db.CompanyTechEvidenceRow{
-		{Source: "ukg", CompanySlug: "nurse-co"},
-		{Source: "greenhouse", CompanySlug: "tech-co", AnyTech: true},
-		{Source: "greenhouse", CompanySlug: "skills-co", AnySkills: true},
-		{Source: "workday", CompanySlug: "already-retired"}, // no evidence, but not listed
-	}
-
-	var b strings.Builder
-	if err := reportBoards(&b, rows, brd); err != nil {
-		t.Fatalf("reportBoards: %v", err)
-	}
-	out := b.String()
-
-	if !strings.Contains(out, "nurse-co") {
-		t.Errorf("a listed company with no evidence must be reported:\n%s", out)
-	}
-	for _, absent := range []string{"tech-co", "skills-co", "already-retired"} {
-		if strings.Contains(out, absent) {
-			t.Errorf("%q must not be reported:\n%s", absent, out)
-		}
-	}
-}
-
-// An empty report is the state the campaign is working towards, so it has to say so
-// rather than print nothing and read as a broken worker.
-func TestReportBoardsSaysSoWhenNothingToRetire(t *testing.T) {
-	var b strings.Builder
-	if err := reportBoards(&b, []db.CompanyTechEvidenceRow{{Source: "greenhouse", CompanySlug: "tech-co", AnyTech: true}},
-		boards{listed: map[boardKey]bool{{"greenhouse", "tech-co"}: true}}); err != nil {
-		t.Fatalf("reportBoards: %v", err)
-	}
-	if strings.TrimSpace(b.String()) == "" {
-		t.Error("an empty result must print an explicit message")
 	}
 }

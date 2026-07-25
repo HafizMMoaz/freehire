@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/strelov1/freehire/internal/normalize"
 	"github.com/strelov1/freehire/internal/sources"
 )
 
@@ -17,39 +16,43 @@ import (
 // retired boards.
 var notBoardFiles = map[string]bool{"telegram.yml": true}
 
-// boardKey identifies a board entry the way the catalogue does. Slug alone is not
-// enough in either direction: the same company slug can be listed under one provider
-// while its jobs under another are prunable, and jobs.source is what the write path
-// records alongside company_slug.
-type boardKey struct{ Provider, CompanySlug string }
+// boardKey is the identity the source files and the catalogue agree on exactly.
+//
+// The company slug is NOT that identity, though it looks like it. Many adapters take
+// the company name from the posting payload rather than from the board entry —
+// icims, jazzhr, careerplug, careerspage, jibe, geekjob and others all prefer
+// HiringOrganization.Name — so jobs.company_slug and normalize.Slug(yaml.company)
+// diverge wherever the payload spells the company differently. Measured on prod: of
+// jazzhr's 3940 companies only 2453 match the board file, and of careerplug's 8014
+// only 71. A guard keyed on the slug reads all the rest as "retired" while their
+// boards are crawled hourly.
+//
+// The board does not have that problem. The write path namespaces every crawled
+// posting's external_id as "<board>:<native id>", and the board files are keyed on
+// (provider, board), so the join is exact.
+type boardKey struct{ Provider, Board string }
 
-// boards is what the board files say: which (provider, company) pairs are still
-// crawled, and which providers appear at all.
+// boards is the set of boards a crawl still visits.
 type boards struct {
-	// listed gates the company-scoped rules. Those have no ingest counterpart —
-	// nothing at crawl time knows a company's bucket — so a deletion under one is
-	// undone by the next hourly crawl unless the board is struck from the files in the
-	// same step. A pair still listed here cannot be pruned that way.
 	listed map[boardKey]bool
-	// crawled is the allow-list of providers a crawl re-admits. Deliberately an
-	// allow-list rather than a deny-list of {telegram, manual, …}: a deny-list would
-	// silently arm any non-crawled source added later, and that deletion is
-	// unrecoverable by construction.
-	crawled map[string]bool
+	// byProvider indexes the boards of one provider, so resolving a job's board from
+	// its external_id does not scan the whole set.
+	byProvider map[string]map[string]bool
 }
 
 // loadBoards reads every board file under dir.
 //
 // It fails closed. An unreadable directory, a file that will not parse, or a directory
 // holding no board entries at all is an error rather than a short listing — a missing
-// entry reads as "this board is retired", so an empty listing would read as "every
-// board is retired" and clear the guard on the entire catalogue.
+// entry reads as "this board is retired", and an empty listing would read as "every
+// board is retired", which arms the irreversible company-scoped rules on the entire
+// catalogue at once.
 func loadBoards(dir string) (boards, error) {
 	paths, err := filepath.Glob(filepath.Join(dir, "*.y*ml"))
 	if err != nil {
 		return boards{}, fmt.Errorf("prune: scan %s: %w", dir, err)
 	}
-	b := boards{listed: map[boardKey]bool{}, crawled: map[string]bool{}}
+	b := boards{listed: map[boardKey]bool{}, byProvider: map[string]map[string]bool{}}
 	for _, path := range paths {
 		if notBoardFiles[filepath.Base(path)] {
 			continue
@@ -59,8 +62,11 @@ func loadBoards(dir string) (boards, error) {
 			return boards{}, err
 		}
 		for _, e := range cfg.Sources {
-			b.crawled[e.Provider] = true
-			b.listed[boardKey{Provider: e.Provider, CompanySlug: normalize.Slug(e.Company)}] = true
+			b.listed[boardKey{Provider: e.Provider, Board: e.Board}] = true
+			if b.byProvider[e.Provider] == nil {
+				b.byProvider[e.Provider] = map[string]bool{}
+			}
+			b.byProvider[e.Provider][e.Board] = true
 		}
 	}
 	if len(b.listed) == 0 {
@@ -72,14 +78,41 @@ func loadBoards(dir string) (boards, error) {
 	return b, nil
 }
 
-// retired reports whether a company's board is gone from the files, which is the
-// precondition for pruning its jobs under a company-scoped rule.
+// crawls reports whether a posting came from a board the crawl still visits, resolved
+// from the "<board>:<native id>" external_id the write path writes.
 //
-// Known hole: on multi-employer sources the board entry's company is not the employer —
-// trudvsem lists regions and the adapter takes each posting's own company — so a real
-// employer there is never "listed" and reads as retired while its region board is still
-// crawled. Retiring aggregator sources is out of scope for this change, so those
-// providers must be kept out of the company-scoped rules by other means; see the design.
-func (b boards) retired(provider, companySlug string) bool {
-	return !b.listed[boardKey{Provider: provider, CompanySlug: companySlug}]
+// One boolean answers both questions the rules ask, in opposite directions. The title
+// rule needs it TRUE: a listed board is by definition re-crawlable, which is the whole
+// reason a title deletion is recoverable — remove an over-broad dictionary term and the
+// postings come back. The company-scoped rules need it FALSE: they have no counterpart
+// at crawl time, so what they remove returns within the hour unless the board is gone.
+//
+// It also settles the cases a provider allow-list got wrong. A link-source import or a
+// moderator row is stored under a real ATS provider but has no listed board, so it is
+// never re-crawled and never deletable — which is what the spec requires and a
+// provider-level check could not express. An aggregator's postings all carry its listed
+// region board, so the company rules refuse them without needing to know it is an
+// aggregator.
+//
+// A board id may itself contain a colon, so every colon-prefix is tried rather than
+// splitting on the first one.
+func (b boards) crawls(provider, externalID string) bool {
+	_, ok := b.boardOf(provider, externalID)
+	return ok
+}
+
+// boardOf resolves the listed board a posting came from. A board id may itself contain
+// a colon, so every colon-prefix is tried against the provider's board set rather than
+// splitting on the first one.
+func (b boards) boardOf(provider, externalID string) (string, bool) {
+	byBoard := b.byProvider[provider]
+	if byBoard == nil {
+		return "", false
+	}
+	for i, r := range externalID {
+		if r == ':' && byBoard[externalID[:i]] {
+			return externalID[:i], true
+		}
+	}
+	return "", false
 }

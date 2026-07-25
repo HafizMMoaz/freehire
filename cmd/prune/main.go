@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand/v2"
 	"os"
 	"sort"
 	"text/tabwriter"
@@ -57,8 +58,23 @@ func run() int {
 	boardReport := flag.Bool("boards", false, "report board entries whose company has never posted anything technical")
 	sourcesDir := flag.String("sources", "sources", "directory holding the board files")
 	apply := flag.Bool("apply", false, "actually delete; without it the run only reports")
-	limit := flag.Int("limit", 0, "stop after this many deletions (0 = no cap)")
+	flag.Bool("dry-run", false, "no-op: reporting is the default, --apply is what deletes")
+	limit := flag.Int("limit", 0, "stop after this many target rows; required with --apply, -1 to run uncapped")
+	sampleSize := flag.Int("sample", 200, "how many random matched titles the report prints")
+	seed := flag.Uint64("seed", 1, "sampling seed, so a dry run can be reproduced")
 	flag.Parse()
+
+	// An uncapped run has to be asked for in as many words. The first live run should
+	// be a small fraction of what matches, and a bare --apply (or a typo'd --limit=0)
+	// would otherwise remove everything in one unattended pass.
+	if *apply && *limit == 0 {
+		log.Print("prune: --apply requires --limit (use --limit=-1 to run uncapped, deliberately)")
+		return 1
+	}
+	if *sampleSize < 0 {
+		log.Print("prune: --sample must not be negative")
+		return 1
+	}
 
 	// Read the board files before touching the database. They gate the irreversible
 	// rules, and an unreadable directory must stop the run before anything is removed
@@ -86,14 +102,14 @@ func run() int {
 	}
 
 	if *boardReport {
-		if err := reportBoards(os.Stdout, ev, brd); err != nil {
+		if err := reportBoards(ctx, os.Stdout, q, brd); err != nil {
 			log.Printf("prune: write report: %v", err)
 			return 1
 		}
 		return 0
 	}
 
-	var index *search.Client
+	var index docDeleter
 	if *apply {
 		if cfg.MeiliURL == "" || cfg.MeiliKey == "" {
 			log.Print("prune: --apply needs MEILI_URL and MEILI_MASTER_KEY — deleting rows while the index keeps serving them would 404 every result")
@@ -102,38 +118,53 @@ func run() int {
 		index = search.NewClient(cfg.MeiliURL, cfg.MeiliKey)
 	}
 
-	p, err := scan(ctx, q, ev, brd, *limit)
+	p, err := scan(ctx, q, ev, brd, *limit, *sampleSize, rand.New(rand.NewPCG(*seed, 0)))
 	if err != nil {
 		log.Printf("prune: scan: %v", err)
 		return 1
 	}
 
-	if *apply {
-		if err := deleteTargets(ctx, q, index, p.targets); err != nil {
-			log.Printf("prune: delete: %v", err)
+	if !*apply {
+		if err := p.report(os.Stdout, false); err != nil {
+			log.Printf("prune: write report: %v", err)
 			return 1
 		}
+		log.Print("dry run — pass --apply to delete")
+		return 0
 	}
-	if err := p.report(os.Stdout, *apply); err != nil {
+
+	// Print the plan before removing anything, so the run's own log records what it
+	// was about to do even if it dies partway.
+	if err := p.report(os.Stdout, false); err != nil {
 		log.Printf("prune: write report: %v", err)
 		return 1
 	}
-	if !*apply {
-		log.Print("dry run — pass --apply to delete")
+
+	code := 0
+	if err := deleteTargets(ctx, q, index, p); err != nil {
+		// Batches already committed stay committed, so the outcome has to be printed
+		// on this path too — otherwise a failure leaves one error line and no record
+		// of what went. pruned_jobs holds the durable version.
+		log.Printf("prune: delete: %v (rows already removed are recorded in pruned_jobs)", err)
+		code = 1
 	}
-	return 0
+	if err := p.report(os.Stdout, true); err != nil {
+		log.Printf("prune: write report: %v", err)
+		return 1
+	}
+	return code
 }
 
 // scan walks the catalogue by keyset and collects what the rule matches, stopping the
 // collection (but not the count) at the cap.
-func scan(ctx context.Context, q *db.Queries, ev []db.CompanyTechEvidenceRow, brd boards, limit int) (*plan, error) {
-	byCompany := make(map[boardKey]evidence, len(ev))
+func scan(ctx context.Context, q candidateSource, ev []db.CompanyTechEvidenceRow, brd boards, limit, sampleSize int, rnd *rand.Rand) (*plan, error) {
+	type companyKey struct{ source, slug string }
+	byCompany := make(map[companyKey]evidence, len(ev))
 	for _, r := range ev {
-		byCompany[boardKey{Provider: r.Source, CompanySlug: r.CompanySlug}] = evidence{anyTech: r.AnyTech, anySkills: r.AnySkills}
+		byCompany[companyKey{r.Source, r.CompanySlug}] = evidence{anyTech: r.AnyTech, anySkills: r.AnySkills}
 	}
-	perCompany := perCompanyProviders(ev, brd)
 
-	p := newPlan()
+	p := newPlan(sampleSize, rnd)
 	var after int64
 	for {
 		rows, err := q.PruneCandidates(ctx, db.PruneCandidatesParams{AfterID: after, PageSize: scanPage})
@@ -145,32 +176,19 @@ func scan(ctx context.Context, q *db.Queries, ev []db.CompanyTechEvidenceRow, br
 		}
 		for _, row := range rows {
 			after = row.ID
-			key := boardKey{Provider: row.Source, CompanySlug: row.CompanySlug}
-			c := candidate{Source: row.Source, CompanySlug: row.CompanySlug, Title: row.Title, Category: row.Category}
+			c := candidate{CompanySlug: row.CompanySlug, Title: row.Title, Category: row.Category}
 			if row.IsTech.Valid {
 				v := row.IsTech.Bool
 				c.IsTech = &v
 			}
-			rule, ok := matchRule(c, byCompany[key], brd.crawled)
+			rule, ok := matchRule(c, byCompany[companyKey{row.Source, row.CompanySlug}],
+				brd.crawls(row.Source, row.ExternalID))
 			if !ok {
 				continue
 			}
-			// The company-scoped rules have no ingest counterpart, so what they
-			// remove comes back on the next crawl unless the board is gone from the
-			// files — and on a multi-employer source the guard cannot even tell,
-			// because no employer is ever listed there.
-			if companyScoped(rule) {
-				if !perCompany[row.Source] {
-					p.refuse("multi-employer source: " + row.Source)
-					continue
-				}
-				if !brd.retired(row.Source, row.CompanySlug) {
-					p.refuse("board still listed: " + row.Source + "/" + row.CompanySlug)
-					continue
-				}
-			}
 			if limit > 0 && len(p.targets) >= limit {
 				p.matched++ // counted, not taken: the report must say how much is left
+				p.sample("")
 				continue
 			}
 			p.add(row, rule)
@@ -181,10 +199,10 @@ func scan(ctx context.Context, q *db.Queries, ev []db.CompanyTechEvidenceRow, br
 // deleteTargets removes the planned rows in batches, mirroring each batch into the
 // search index by the ids the statement reports actually deleted — the archive and the
 // index therefore only ever record real removals.
-func deleteTargets(ctx context.Context, q *db.Queries, index *search.Client, targets []target) error {
-	for start := 0; start < len(targets); start += deleteBatch {
-		end := min(start+deleteBatch, len(targets))
-		batch := targets[start:end]
+func deleteTargets(ctx context.Context, q batchDeleter, index docDeleter, p *plan) error {
+	for start := 0; start < len(p.targets); start += deleteBatch {
+		end := min(start+deleteBatch, len(p.targets))
+		batch := p.targets[start:end]
 
 		ids := make([]int64, len(batch))
 		rules := make([]string, len(batch))
@@ -201,46 +219,88 @@ func deleteTargets(ctx context.Context, q *db.Queries, index *search.Client, tar
 		if err != nil {
 			return err
 		}
+		p.deleted += len(deleted)
+		// The facet index and the semantic index are separate. Search is served
+		// straight from Meilisearch with no Postgres hydration, so a document left in
+		// either one keeps appearing in results whose row is gone.
 		if err := index.DeleteJobs(ctx, deleted); err != nil {
+			return err
+		}
+		if err := index.DeleteSemanticJobs(ctx, deleted); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// reportBoards lists the companies still present in the board files that have never
-// shown technical evidence — no technical title or category, and not even a tagged
-// skill — across their whole history. Each is a candidate for removal from
-// sources/*.yml, which is the precondition for pruning its jobs under a company-scoped
-// rule.
+// The two dependencies the destructive path needs, named so it can be tested without a
+// database or a search engine.
+type (
+	candidateSource interface {
+		PruneCandidates(context.Context, db.PruneCandidatesParams) ([]db.PruneCandidatesRow, error)
+	}
+	batchDeleter interface {
+		PruneJobs(context.Context, db.PruneJobsParams) ([]int64, error)
+	}
+	docDeleter interface {
+		DeleteJobs(context.Context, []int64) error
+		DeleteSemanticJobs(context.Context, []int64) error
+	}
+)
+
+// reportBoards lists the boards still in the source files whose postings have never
+// shown anything technical — no technical title or category, and not one tagged skill.
+// Each is a candidate for the retirement PR, which is the precondition for pruning its
+// jobs under a company-scoped rule.
 //
-// Companies with any evidence are omitted, and so are slugs the board files no longer
-// mention: those are already retired and need no PR.
-func reportBoards(w io.Writer, rows []db.CompanyTechEvidenceRow, brd boards) error {
-	var retire []db.CompanyTechEvidenceRow
-	for _, r := range rows {
-		if r.AnyTech || r.AnySkills || brd.retired(r.Source, r.CompanySlug) {
-			continue
+// It groups by BOARD rather than by company because that is the identity the source
+// files and the catalogue share exactly; the company slug diverges wherever an adapter
+// takes the name from the posting payload, which on some providers is most of them.
+func reportBoards(ctx context.Context, w io.Writer, q candidateSource, brd boards) error {
+	evidence := map[boardKey]bool{}
+	var after int64
+	for {
+		rows, err := q.PruneCandidates(ctx, db.PruneCandidatesParams{AfterID: after, PageSize: scanPage})
+		if err != nil {
+			return err
 		}
-		retire = append(retire, r)
+		if len(rows) == 0 {
+			break
+		}
+		for _, row := range rows {
+			after = row.ID
+			board, ok := brd.boardOf(row.Source, row.ExternalID)
+			if !ok {
+				continue // not from a listed board: nothing to retire
+			}
+			key := boardKey{Provider: row.Source, Board: board}
+			evidence[key] = evidence[key] || (row.IsTech.Valid && row.IsTech.Bool) || row.HasSkills
+		}
+	}
+
+	var retire []boardKey
+	for key, hasEvidence := range evidence {
+		if !hasEvidence {
+			retire = append(retire, key)
+		}
 	}
 	if len(retire) == 0 {
-		_, err := fmt.Fprintln(w, "no listed board has a company without technical evidence")
+		_, err := fmt.Fprintln(w, "every listed board has posted something technical")
 		return err
 	}
 	sort.Slice(retire, func(i, j int) bool {
-		if retire[i].Source != retire[j].Source {
-			return retire[i].Source < retire[j].Source
+		if retire[i].Provider != retire[j].Provider {
+			return retire[i].Provider < retire[j].Provider
 		}
-		return retire[i].CompanySlug < retire[j].CompanySlug
+		return retire[i].Board < retire[j].Board
 	})
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "SOURCE\tCOMPANY"); err != nil {
+	if _, err := fmt.Fprintln(tw, "PROVIDER\tBOARD"); err != nil {
 		return err
 	}
-	for _, r := range retire {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\n", r.Source, r.CompanySlug); err != nil {
+	for _, k := range retire {
+		if _, err := fmt.Fprintf(tw, "%s\t%s\n", k.Provider, k.Board); err != nil {
 			return err
 		}
 	}

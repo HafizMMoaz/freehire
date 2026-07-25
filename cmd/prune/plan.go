@@ -3,45 +3,12 @@ package main
 import (
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"sort"
 	"text/tabwriter"
 
 	"github.com/strelov1/freehire/internal/db"
 )
-
-// perCompanyListedShare is the fraction of a provider's companies that must appear in
-// its board entries for the provider to count as per-company. Real per-company
-// providers sit near 1 (every board entry is an employer); multi-employer sources sit
-// near 0 (trudvsem's entries are regions, so no employer is ever listed). Any threshold
-// in between separates them, and half keeps the margin wide.
-const perCompanyListedShare = 0.5
-
-// perCompanyProviders reports which providers name employers in their board entries.
-//
-// It exists because the retirement guard is blind on the others. The guard allows a
-// company-scoped deletion once a company is absent from the board files — but on a
-// multi-employer source no employer is ever present, so every one of them reads as
-// retired while the region board keeps crawling and re-admits everything within the
-// hour. Deleting there is pure loss: the rows go, the archive fills, and the catalogue
-// is unchanged an hour later.
-//
-// Measured rather than curated, so it cannot go stale as sources are added.
-func perCompanyProviders(rows []db.CompanyTechEvidenceRow, brd boards) map[string]bool {
-	total, listed := map[string]int{}, map[string]int{}
-	for _, r := range rows {
-		total[r.Source]++
-		if !brd.retired(r.Source, r.CompanySlug) {
-			listed[r.Source]++
-		}
-	}
-	out := map[string]bool{}
-	for provider, n := range total {
-		if float64(listed[provider])/float64(n) >= perCompanyListedShare {
-			out[provider] = true
-		}
-	}
-	return out
-}
 
 // target is one row the rule matched, and the rule that matched it.
 type target struct {
@@ -62,14 +29,18 @@ type plan struct {
 	// matched is every row the rule matched, including those past the cap, so the
 	// report can say how much of the work this run is doing.
 	matched int
+	// deleted is what the delete statement actually removed, which exceeds the number
+	// of targets: each one drags its duplicate chain along.
+	deleted    int
+	sampleSize int
+	rnd        *rand.Rand
 }
 
-// sampledTitles is how many titles a dry run prints. Enough to recognise a cluster
-// gone wrong, few enough that an operator actually reads them.
-const sampledTitles = 20
-
-func newPlan() *plan {
-	return &plan{byRule: map[string]int{}, bySource: map[string]int{}, refused: map[string]int{}}
+func newPlan(sampleSize int, rnd *rand.Rand) *plan {
+	return &plan{
+		byRule: map[string]int{}, bySource: map[string]int{}, refused: map[string]int{},
+		sampleSize: sampleSize, rnd: rnd,
+	}
 }
 
 func (p *plan) add(row db.PruneCandidatesRow, rule string) {
@@ -77,8 +48,24 @@ func (p *plan) add(row db.PruneCandidatesRow, rule string) {
 	p.targets = append(p.targets, target{id: row.ID, rule: rule})
 	p.byRule[rule]++
 	p.bySource[row.Source]++
-	if len(p.samples) < sampledTitles {
-		p.samples = append(p.samples, fmt.Sprintf("[%s] %s — %s", rule, row.Title, row.Source))
+	p.sample(fmt.Sprintf("[%s] %s — %s", rule, row.Title, row.Source))
+}
+
+// sample keeps a uniformly random selection of the matched titles, by reservoir.
+//
+// Taking the first N instead would be worse than useless here. Ids are chronological
+// and clustered by ingest batch, so the first N matches are the oldest rows of whichever
+// board happened to be ingested first — systematically unrepresentative, and stable
+// across iterations, so it would keep showing the same rows while the dictionary changed
+// underneath. The sample's job is to catch an over-broad term before an irreversible
+// run; a biased window cannot do it.
+func (p *plan) sample(line string) {
+	if len(p.samples) < p.sampleSize {
+		p.samples = append(p.samples, line)
+		return
+	}
+	if k := p.rnd.IntN(p.matched); k < p.sampleSize {
+		p.samples[k] = line
 	}
 }
 
@@ -88,11 +75,14 @@ func (p *plan) refuse(reason string) { p.refused[reason]++ }
 // the design asks for: a batch dominated by one board is the signature of a broken
 // board title, not a real cluster, and it is only visible next to the other sources.
 func (p *plan) report(w io.Writer, applied bool) error {
-	verb := "would delete"
 	if applied {
-		verb = "deleted"
-	}
-	if _, err := fmt.Fprintf(w, "%s %d of %d matching rows\n", verb, len(p.targets), p.matched); err != nil {
+		// Targets and rows differ: PruneJobs extends every batch to its duplicate
+		// chain, so reporting only the target count would understate what was removed.
+		if _, err := fmt.Fprintf(w, "deleted %d rows from %d targets, of %d matching\n",
+			p.deleted, len(p.targets), p.matched); err != nil {
+			return err
+		}
+	} else if _, err := fmt.Fprintf(w, "would delete %d of %d matching rows\n", len(p.targets), p.matched); err != nil {
 		return err
 	}
 	if err := section(w, "BY RULE", p.byRule); err != nil {

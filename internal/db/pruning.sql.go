@@ -68,7 +68,8 @@ func (q *Queries) CompanyTechEvidence(ctx context.Context) ([]CompanyTechEvidenc
 }
 
 const pruneCandidates = `-- name: PruneCandidates :many
-SELECT id, source, company_slug, title, category, is_tech
+SELECT id, source, external_id, company_slug, title, category, is_tech,
+       cardinality(skills) > 0 AS has_skills
 FROM jobs
 WHERE id > $1
 ORDER BY id
@@ -83,10 +84,12 @@ type PruneCandidatesParams struct {
 type PruneCandidatesRow struct {
 	ID          int64       `json:"id"`
 	Source      string      `json:"source"`
+	ExternalID  string      `json:"external_id"`
 	CompanySlug string      `json:"company_slug"`
 	Title       string      `json:"title"`
 	Category    string      `json:"category"`
 	IsTech      pgtype.Bool `json:"is_tech"`
+	HasSkills   bool        `json:"has_skills"`
 }
 
 // One keyset page of rows the prune rule evaluates, ordered by id.
@@ -97,6 +100,11 @@ type PruneCandidatesRow struct {
 // stop replacing, permanently. Duplicates are included too: one may match a rule while
 // its canonical does not, and nothing references a duplicate, so removing it alone is
 // safe.
+//
+// external_id carries the board: the write path namespaces it as "<board>:<native id>",
+// and the board is what the source files are keyed on. Matching on it is exact, where
+// matching on company_slug is not — many adapters take the company name from the
+// posting payload rather than the board entry, so the two spellings diverge.
 func (q *Queries) PruneCandidates(ctx context.Context, arg PruneCandidatesParams) ([]PruneCandidatesRow, error) {
 	rows, err := q.db.Query(ctx, pruneCandidates, arg.AfterID, arg.PageSize)
 	if err != nil {
@@ -109,10 +117,12 @@ func (q *Queries) PruneCandidates(ctx context.Context, arg PruneCandidatesParams
 		if err := rows.Scan(
 			&i.ID,
 			&i.Source,
+			&i.ExternalID,
 			&i.CompanySlug,
 			&i.Title,
 			&i.Category,
 			&i.IsTech,
+			&i.HasSkills,
 		); err != nil {
 			return nil, err
 		}

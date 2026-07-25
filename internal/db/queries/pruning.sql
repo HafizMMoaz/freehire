@@ -179,7 +179,13 @@ GROUP BY source, company_slug;
 -- stop replacing, permanently. Duplicates are included too: one may match a rule while
 -- its canonical does not, and nothing references a duplicate, so removing it alone is
 -- safe.
-SELECT id, source, company_slug, title, category, is_tech
+--
+-- external_id carries the board: the write path namespaces it as "<board>:<native id>",
+-- and the board is what the source files are keyed on. Matching on it is exact, where
+-- matching on company_slug is not — many adapters take the company name from the
+-- posting payload rather than the board entry, so the two spellings diverge.
+SELECT id, source, external_id, company_slug, title, category, is_tech,
+       cardinality(skills) > 0 AS has_skills
 FROM jobs
 WHERE id > sqlc.arg(after_id)
 ORDER BY id

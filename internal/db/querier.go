@@ -1045,6 +1045,11 @@ type Querier interface {
 	// stop replacing, permanently. Duplicates are included too: one may match a rule while
 	// its canonical does not, and nothing references a duplicate, so removing it alone is
 	// safe.
+	//
+	// external_id carries the board: the write path namespaces it as "<board>:<native id>",
+	// and the board is what the source files are keyed on. Matching on it is exact, where
+	// matching on company_slug is not — many adapters take the company name from the
+	// posting payload rather than the board entry, so the two spellings diverge.
 	PruneCandidates(ctx context.Context, arg PruneCandidatesParams) ([]PruneCandidatesRow, error)
 	// Permanently remove a batch of jobs and record what was removed, in ONE statement.
 	// Splitting the two would let the archive drift from the deletion, and the archive is
