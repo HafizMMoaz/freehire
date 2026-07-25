@@ -71,7 +71,7 @@
             <p class="text-muted-foreground">Here are open roles from freehire:</p>
             <p class="mt-2 font-medium text-foreground">Senior Go Backend Engineer — Wolt</p>
             <p class="text-xs text-muted-foreground">Remote · Helsinki / Stockholm · EU</p>
-            <p class="mt-1 font-mono text-xs text-muted-foreground">freehire.dev/jobs/…-wolt</p>
+            <p class="mt-1 font-mono text-xs text-muted-foreground">freehire.me/jobs/…-wolt</p>
           </div>
           <div class="self-end max-w-[85%] rounded-2xl rounded-br-sm bg-foreground px-3.5 py-2 text-background">
             Save it and mark me as applied

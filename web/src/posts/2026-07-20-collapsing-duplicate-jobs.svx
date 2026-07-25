@@ -10,7 +10,7 @@ tags:
 draft: false
 ---
 
-Open [freehire.dev/companies/towa](https://freehire.dev/companies/towa) a week ago and
+Open [freehire.me/companies/towa](https://freehire.me/companies/towa) a week ago and
 you'd have seen the same job five times in a row:
 
 ```

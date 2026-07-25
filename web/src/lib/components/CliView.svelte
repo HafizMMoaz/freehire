@@ -6,7 +6,7 @@
   const MCP_REPO = 'https://github.com/strelov1/freehire-mcp';
   const SKILL_URL =
     'https://github.com/strelov1/freehire-cli/blob/main/skills/using-freehire/SKILL.md';
-  const INSTALL = 'curl -fsSL https://freehire.dev/install.sh | sh';
+  const INSTALL = 'curl -fsSL https://freehire.me/install.sh | sh';
 
   // Command reference, mirroring the freehire-cli README/SKILL.md (the source of
   // truth). Discover the market and its jobs first, then track your interaction.
@@ -97,7 +97,7 @@
           </button>
         </figcaption>
         <pre class="overflow-x-auto p-4 leading-relaxed"><span class="text-muted-foreground"># install — no Go needed</span>
-curl -fsSL <span class="text-foreground">https://freehire.dev/install.sh</span> | sh
+curl -fsSL <span class="text-foreground">https://freehire.me/install.sh</span> | sh
 
 <span class="text-muted-foreground"># authenticate once (key from /my/api-keys)</span>
 freehire auth login --token <span class="text-foreground">fhk_…</span>

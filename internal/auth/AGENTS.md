@@ -57,6 +57,10 @@ individually revocable — it is re-minted by re-running connect (the freehire o
 still has the cookie). Cookie-only endpoints (`RequireAuth`: key management, profile
 edit) stay cookie-only — the extension's JWT does not reach them.
 
+This replaced the flow's original behaviour, which minted an ordinary named API
+key: one credential that both hire and Roy verify is simpler than a key plus a
+token bridge, at the cost of per-token revocation.
+
 ## Limitations
 - No token revocation/refresh (logout clears the cookie but the JWT lives until `exp`; modest TTL instead).
 - No CSRF token — only `SameSite=Lax` + same-origin defense; a CSRF token is needed only if a future need forces `SameSite=None`.

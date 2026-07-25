@@ -1,6 +1,6 @@
 # FreeHire
 
-> FreeHire (freehire.dev) is a free, open-source IT job aggregator. It crawls jobs
+> FreeHire (freehire.me) is a free, open-source IT job aggregator. It crawls jobs
 > straight from company career boards and other public sources, normalizes and
 > deduplicates them into one schema, and tags each with stack, seniority, region
 > and work mode. Everything is searchable over a public HTTP API.
@@ -12,27 +12,27 @@ personal API key (Bearer token) or the web session.
 
 ## API
 
-- [OpenAPI schema](https://freehire.dev/openapi.yaml): full machine-readable API spec (import this into a ChatGPT Action or any client).
-- [API reference](https://freehire.dev/docs/api): human-readable endpoint documentation.
-- Base URL: `https://freehire.dev/api/v1`. Search endpoints (`/jobs/search`, `/jobs/facets`, `/jobs/{slug}`, `/companies`) are public; tracking endpoints require `Authorization: Bearer <freehire API key>`.
+- [OpenAPI schema](https://freehire.me/openapi.yaml): full machine-readable API spec (import this into a ChatGPT Action or any client).
+- [API reference](https://freehire.me/docs/api): human-readable endpoint documentation.
+- Base URL: `https://freehire.me/api/v1`. Search endpoints (`/jobs/search`, `/jobs/facets`, `/jobs/{slug}`, `/companies`) are public; tracking endpoints require `Authorization: Bearer <freehire API key>`.
 - Call `/jobs/facets` before applying uncertain filters to get canonical skill slugs, country codes, and valid enum values with live counts.
 
 ## Use it from an assistant
 
 - [FreeHire GPT](https://chatgpt.com/g/g-6a5281b64948819193bf3a1021e075da-freehire): a custom ChatGPT that searches and tracks jobs via the FreeHire API.
-- [ChatGPT integration guide](https://freehire.dev/chatgpt): how the GPT works and how to connect it.
-- [FreeHire CLI](https://freehire.dev/cli): a small Go CLI over the same API, for terminals, scripts, and agents.
+- [ChatGPT integration guide](https://freehire.me/chatgpt): how the GPT works and how to connect it.
+- [FreeHire CLI](https://freehire.me/cli): a small Go CLI over the same API, for terminals, scripts, and agents.
 
 ## Explore
 
-- [Jobs](https://freehire.dev/): search and filter the live job catalogue.
-- [Companies](https://freehire.dev/companies): companies with open roles and their profiles.
-- [Collections](https://freehire.dev/collections): curated slices (YC, Techstars, big tech, unicorns, and more).
-- [Trends](https://freehire.dev/trends): job-market activity over time.
+- [Jobs](https://freehire.me/): search and filter the live job catalogue.
+- [Companies](https://freehire.me/companies): companies with open roles and their profiles.
+- [Collections](https://freehire.me/collections): curated slices (YC, Techstars, big tech, unicorns, and more).
+- [Trends](https://freehire.me/trends): job-market activity over time.
 
 ## About
 
-- [About FreeHire](https://freehire.dev/about): what the project is and how it works.
-- [For companies](https://freehire.dev/for-companies): how to get your job board indexed.
-- [Privacy policy](https://freehire.dev/privacy): what data is collected and how it is handled.
+- [About FreeHire](https://freehire.me/about): what the project is and how it works.
+- [For companies](https://freehire.me/for-companies): how to get your job board indexed.
+- [Privacy policy](https://freehire.me/privacy): what data is collected and how it is handled.
 - [Source code](https://github.com/strelov1/freehire): FreeHire is open source — the code is the source of truth for its behaviour.
