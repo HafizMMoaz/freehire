@@ -201,6 +201,21 @@ type Querier interface {
 	// (ties broken by value), serving the searchable option list for the subindustry facet.
 	// Counts are unconditional — they do not reflect other active list filters.
 	CompanySubindustries(ctx context.Context) ([]CompanySubindustriesRow, error)
+	// Whether each company has EVER shown technical evidence, over its entire history
+	// including closed and duplicate rows. "This company never posts anything technical"
+	// is the premise of the company-scoped pruning rules, and it has to rest on the
+	// maximum available evidence — restricting it to open jobs would let a company whose
+	// one engineering role closed last month read as having none.
+	//
+	// any_skills is the weaker second signal: the skill dictionary firing on a description
+	// means the posting had technical content even when neither the title nor the category
+	// resolved. A company with neither signal has shown nothing technical at all.
+	// Postings with no company are excluded: they would otherwise pool into one
+	// pseudo-company per source whose combined evidence then decides every one of them.
+	//
+	// This is an uncapped full-table GROUP BY over the whole jobs table, returning a row
+	// per company. It is computed once per prune run, not per batch.
+	CompanyTechEvidence(ctx context.Context) ([]CompanyTechEvidenceRow, error)
 	// Promote a suggested link to a confirmed one: the suggestion becomes job_id with
 	// link_source 'manual'. No-op (0 rows) when there is no pending suggestion.
 	ConfirmEmailLink(ctx context.Context, arg ConfirmEmailLinkParams) (int64, error)
@@ -1053,6 +1068,49 @@ type Querier interface {
 	// coalesced/cast to bigint so it reads as a plain int64 (an all-failing provider
 	// yields 0, not NULL).
 	ProviderHealthRollup(ctx context.Context) ([]ProviderHealthRollupRow, error)
+	// One keyset page of rows the prune rule evaluates, ordered by id.
+	//
+	// Closed rows are included deliberately. Once ingest rejects a board's non-technical
+	// postings, the 48-hour unseen sweep closes the ones already in the catalogue — so a
+	// scan restricted to open jobs would leave exactly the rows the campaign is about to
+	// stop replacing, permanently. Duplicates are included too: one may match a rule while
+	// its canonical does not, and nothing references a duplicate, so removing it alone is
+	// safe.
+	//
+	// external_id carries the board: the write path namespaces it as "<board>:<native id>",
+	// and the board is what the source files are keyed on. Matching on it is exact, where
+	// matching on company_slug is not — many adapters take the company name from the
+	// posting payload rather than the board entry, so the two spellings diverge.
+	PruneCandidates(ctx context.Context, arg PruneCandidatesParams) ([]PruneCandidatesRow, error)
+	// Permanently remove a batch of jobs and record what was removed, in ONE statement.
+	// Splitting the two would let the archive drift from the deletion, and the archive is
+	// the only way to answer, after an irreversible removal, whether something was taken
+	// that should have been kept.
+	//
+	// The batch extends to each target's whole duplicate CHAIN, not just its immediate
+	// duplicates. jobs.duplicate_of is the one foreign key to jobs that restricts, and it
+	// chains: RecomputeRoleDuplicatesForCompany and the aggregator suppression both scope
+	// to open jobs, so a closed row's pointer is never repointed when its parent later
+	// becomes a duplicate itself — and the prune scan reaches closed rows by design. A
+	// one-level extension would leave the tail pointing at a deleted row and the whole
+	// batch would abort on the foreign key. UNION (not UNION ALL) terminates a cycle.
+	//
+	// Semantically the chain belongs together anyway: the duplicates of a cook posting are
+	// cook postings, and they inherit the rule that named their root.
+	//
+	// DISTINCT ON collapses a row reachable more than once, which would otherwise violate
+	// the archive's primary key and take the batch down. It orders direct matches first so
+	// a row named outright keeps its own rule rather than an arbitrary one — the archive's
+	// purpose is auditing a rule in isolation, which a nondeterministic rule defeats.
+	//
+	// Every other reference to jobs cascades or nulls, so a user's saved job goes with it.
+	// That is an accepted cost of the campaign, not an oversight.
+	//
+	// Returns the ids actually deleted, which the caller mirrors into the search index.
+	// The two parameter arrays are positionally paired. They are unnested separately and
+	// rejoined on ordinality because sqlc cannot infer the types of a multi-argument
+	// unnest over query parameters.
+	PruneJobs(ctx context.Context, arg PruneJobsParams) ([]int64, error)
 	// One row per company with its current open-count and the open-count as of @prev_ts,
 	// from a single scan of jobs over canonical rows only (same count(*) FILTER idiom as
 	// insights_role_stats). open_count uses closed_at IS NULL (open now); open_count_prev
@@ -1219,6 +1277,44 @@ type Querier interface {
 	// the address verified — receiving the code IS proof of control, so a reset doubles as
 	// verification and an unverified account stops being a merge target.
 	ResetUserPassword(ctx context.Context, arg ResetUserPasswordParams) (int32, error)
+	// Catalogue pruning: the queries that find, and eventually remove, jobs that do not
+	// belong on an IT job board. See the catalog-pruning capability spec.
+	// The residual unclassified mass grouped into clusters an operator can act on: the
+	// word groups occurring most often in the titles of live jobs that carry no is_tech
+	// signal. Grouping is by word group, not by whole title, because boards append
+	// location, schedule and requisition detail — half the unclassified mass has a title
+	// that occurs exactly once, so whole-title grouping splits one role into singletons.
+	// A word group is also the unit the non-tech dictionary accepts, so a reported
+	// cluster is directly usable as an anchored term.
+	//
+	// A title is first split at punctuation into runs, and groups are formed only WITHIN
+	// a run. Without that, adjacency spans separators and invents phrases that never
+	// occur: "Personal Care Aide - Honolulu" would yield "aide honolulu", and a term
+	// copied from that cluster into the dictionary would match none of the jobs that
+	// produced it, because the dictionary matches contiguous text. It also inflated the
+	// counts of legitimate clusters by every occurrence that straddled punctuation.
+	//
+	// Two-word groups carry the ordinary case. Three-word groups exist only to bridge a
+	// connector: in Portuguese and Spanish the preposition is part of the role name
+	// ("operador de caixa"), while the two-word fragments around it ("analista de") are
+	// noise, so a connector is allowed mid-group and never at an edge. Every other edge
+	// token must be at least three characters and non-numeric, which keeps requisition
+	// numbers and shredded schedule notation ("m w", "req 12345") out of the ranking.
+	// The vocabularies are COALESCEd: a NULL parameter would make every <> ALL(...)
+	// comparison NULL and silently return zero rows — indistinguishable from the
+	// campaign having exhausted the residual mass, which is the one wrong answer this
+	// report must never give.
+	//
+	// Tokenizing on [^[:alnum:]]+ is Unicode-aware, so accented Latin and Cyrillic
+	// survive whole — an ASCII class would split "Técnico" and lose the cluster.
+	// Closed and duplicate rows are excluded: only a live, canonical posting is worth a
+	// dictionary term.
+	// count(*) is the job count, not an approximation of it: the two branches cannot
+	// emit the same group (a group's space count fixes its branch, and tokens hold no
+	// spaces), and each branch already emits DISTINCT (id, source, group) — which is
+	// what stops a group repeated inside one verbose title from outranking a real
+	// cluster. A second count(DISTINCT id) would only add a per-group sort.
+	ResidualTitleGroups(ctx context.Context, arg ResidualTitleGroupsParams) ([]ResidualTitleGroupsRow, error)
 	// Mark a sent request contacted or declined, recording the acting referrer and time. The
 	// status='sent' guard makes it race-safe: whichever referrer acts first wins; a second
 	// attempt matches no row (mapped to "already resolved").
