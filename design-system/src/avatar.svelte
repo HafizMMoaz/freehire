@@ -40,13 +40,14 @@
       : '?',
   );
 
-  // Fill and ink both come from the hue and are both fixed, so the pair carries
-  // its own contrast (>= 6:1 on every hue) in either theme. Borrowing
-  // --foreground for the ink would invert under the dark theme and leave
-  // near-white initials on this near-white fill.
+  // One hue at two lightnesses: both halves fixed, so the pair carries its own
+  // contrast (>= 6:1 on every hue) in either theme. Borrowing --foreground for
+  // the ink would invert under the dark theme and leave near-white initials on
+  // this near-white fill. Nameless falls to grey through the saturation.
   let hue = $derived(name ? hashHue(name) : 0);
-  let bg = $derived(name ? `hsl(${hue} 45% 90%)` : 'hsl(0 0% 90%)');
-  let fg = $derived(name ? `hsl(${hue} 45% 25%)` : 'hsl(0 0% 25%)');
+  let saturation = $derived(name ? 45 : 0);
+  let bg = $derived(`hsl(${hue} ${saturation}% 90%)`);
+  let fg = $derived(`hsl(${hue} ${saturation}% 25%)`);
 </script>
 
 {#if src}

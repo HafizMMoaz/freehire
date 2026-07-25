@@ -16,9 +16,8 @@
     required?: boolean;
     class?: string;
     /**
-     * Receives everything the control has to carry itself — the field only owns
-     * the label and the message, so `required` and the error state are the
-     * control's to announce:
+     * The field owns the label and the message; everything the control has to
+     * announce itself is handed to it:
      * `{@render children({ id, describedBy, required, invalid })}`.
      */
     children: Snippet<

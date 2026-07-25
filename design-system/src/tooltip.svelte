@@ -22,11 +22,10 @@
 
   const FOCUSABLE = 'a[href],button,input,select,textarea,[tabindex]:not([tabindex="-1"])';
 
-  // role="tooltip" associates nothing on its own — the description link has to
-  // be an aria-describedby on the trigger, and the trigger is the consumer's
-  // snippet, so it can only be wired imperatively. Scoped to while the tooltip
-  // is mounted: an aria-describedby pointing at a missing id reads as no
-  // description at all, and axe flags it.
+  // role="tooltip" associates nothing on its own — the link is an
+  // aria-describedby on the trigger, and the trigger is the consumer's snippet,
+  // so it can only be wired imperatively. Only while the tooltip is mounted: an
+  // aria-describedby pointing at a missing id reads as no description at all.
   $effect(() => {
     if (!visible || !triggerEl) return;
     const target = triggerEl.querySelector<HTMLElement>(FOCUSABLE) ?? triggerEl;
@@ -51,12 +50,10 @@
 
 <svelte:window onkeydown={visible ? dismiss : undefined} />
 
-<!-- The wrapper is a positioning box, not a control: it carries the pointer
-     handlers only because the trigger itself is the consumer's snippet, and it
-     has to enclose the tooltip so moving the pointer onto the tooltip keeps it
-     open (WCAG 2.1 SC 1.4.13, hoverable). Keyboard users get the same reveal
-     from focusin/focusout, so there is no keyboard-equivalence gap to fix — the
-     rule's heuristic simply does not apply here. -->
+<!-- The pointer handlers sit on the wrapper, not the trigger: the trigger is the
+     consumer's snippet, and the wrapper has to enclose the tooltip so moving the
+     pointer onto it keeps it open (WCAG 2.1 SC 1.4.13, hoverable). focusin and
+     focusout give keyboard users the same reveal, so nothing is gated on hover. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <span
   class="relative inline-flex"

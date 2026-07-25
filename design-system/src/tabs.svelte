@@ -53,9 +53,9 @@
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    const dir = e.key === 'ArrowRight' ? 1 : -1;
     const idx = tabs.findIndex((t) => t.value === selected);
     if (idx === -1) return;
-    const dir = e.key === 'ArrowRight' ? 1 : -1;
     const nextIdx = (idx + dir + tabs.length) % tabs.length;
     const next = tabs[nextIdx];
     if (!next) return;
