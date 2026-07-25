@@ -13,11 +13,11 @@
 
 ## 3. Erasure orchestration (`internal/accountdelete`)
 
-- [ ] 3.1 Add the SQL the service needs to `internal/db/queries/users.sql`: `DeleteUser`, `ListUserEmailObjectKeys` (non-null `emails.s3_key`), `ListUserReferralProofKeys` (`referral_offers.proof_object_key`); regenerate
-- [ ] 3.2 Create `internal/accountdelete` with `Service.Delete(ctx, userID)` and its narrow dependency interfaces (repository, blob store, Gmail revoker); test-drive the ordering: keys collected → revoke → objects deleted → rows deleted
-- [ ] 3.3 Test: a blob-store failure aborts before any row is deleted and surfaces a retryable error
-- [ ] 3.4 Test: a revoke failure is logged and does not stop the deletion
-- [ ] 3.5 Test: nil blob store (storage unconfigured) and nil revoker (Gmail unconfigured) both delete successfully
+- [x] 3.1 Add the SQL the service needs to `internal/db/queries/users.sql`: `DeleteUser`, `ListUserEmailObjectKeys` (non-null `emails.s3_key`), `ListUserReferralProofKeys` (`referral_offers.proof_object_key`); regenerate
+- [x] 3.2 Create `internal/accountdelete` with `Service.Delete(ctx, userID)` and its narrow dependency interfaces (repository, blob store, Gmail revoker); test-drive the ordering: keys collected → revoke → objects deleted → rows deleted
+- [x] 3.3 Test: a blob-store failure aborts before any row is deleted and surfaces a retryable error
+- [x] 3.4 Test: a revoke failure is logged and does not stop the deletion
+- [x] 3.5 Test: nil blob store (storage unconfigured) and nil revoker (Gmail unconfigured) both delete successfully
 
 ## 4. Endpoint
 

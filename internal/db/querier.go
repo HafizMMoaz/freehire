@@ -404,6 +404,12 @@ type Querier interface {
 	DeleteSubscription(ctx context.Context, arg DeleteSubscriptionParams) (int64, error)
 	// Unlink Telegram. Returns the affected row count: 0 means there was no link.
 	DeleteTelegramLink(ctx context.Context, userID int64) (int64, error)
+	// Erase the account. Every user-owned table declares ON DELETE CASCADE, so this one
+	// statement is the whole database side of account deletion; the trails that outlive
+	// the member (jobs.created_by, *.reviewed_by, referral decisions, thread authorship)
+	// are ON DELETE SET NULL by design. Objects in storage are NOT reachable from here —
+	// the caller deletes them first (see ListUserBlobKeys).
+	DeleteUser(ctx context.Context, id int64) error
 	// Remove the caller's profile. Returns the affected row count (0 when none existed); the
 	// handler treats delete as idempotent (204 either way).
 	DeleteUserProfile(ctx context.Context, userID int64) (int64, error)
@@ -964,6 +970,13 @@ type Querier interface {
 	// The caller's open applications offered to the matcher (applied, saved, or staged),
 	// as (job_id, company). Closed postings are excluded.
 	ListUserApplicationsForMatch(ctx context.Context, userID int64) ([]ListUserApplicationsForMatchRow, error)
+	// Every object-storage key the account owns, in one read: the stored CV, each
+	// referral-proof PDF, and the raw MIME of each hosted email. Account deletion
+	// collects these BEFORE deleting any row — the mail and proof keys live in the rows
+	// themselves, so once those are gone the objects are unreachable and would sit in
+	// the bucket forever. Empty keys are filtered out so a caller never asks storage to
+	// delete "".
+	ListUserBlobKeys(ctx context.Context, id int64) ([]pgtype.Text, error)
 	// Existing thread→application links for the caller, so the matcher can continue a
 	// thread already attached to an application.
 	ListUserEmailThreadLinks(ctx context.Context, userID int64) ([]ListUserEmailThreadLinksRow, error)

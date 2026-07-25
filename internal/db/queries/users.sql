@@ -178,3 +178,27 @@ WHERE id = $1;
 SELECT beta_tester
 FROM users
 WHERE id = $1;
+
+-- name: ListUserBlobKeys :many
+-- Every object-storage key the account owns, in one read: the stored CV, each
+-- referral-proof PDF, and the raw MIME of each hosted email. Account deletion
+-- collects these BEFORE deleting any row — the mail and proof keys live in the rows
+-- themselves, so once those are gone the objects are unreachable and would sit in
+-- the bucket forever. Empty keys are filtered out so a caller never asks storage to
+-- delete "".
+SELECT u.resume_object_key AS key FROM users u
+WHERE u.id = $1 AND u.resume_object_key IS NOT NULL AND u.resume_object_key <> ''
+UNION
+SELECT o.proof_object_key FROM referral_offers o
+WHERE o.user_id = $1 AND o.proof_object_key <> ''
+UNION
+SELECT e.s3_key FROM emails e
+WHERE e.user_id = $1 AND e.s3_key IS NOT NULL AND e.s3_key <> '';
+
+-- name: DeleteUser :exec
+-- Erase the account. Every user-owned table declares ON DELETE CASCADE, so this one
+-- statement is the whole database side of account deletion; the trails that outlive
+-- the member (jobs.created_by, *.reviewed_by, referral decisions, thread authorship)
+-- are ON DELETE SET NULL by design. Objects in storage are NOT reachable from here —
+-- the caller deletes them first (see ListUserBlobKeys).
+DELETE FROM users WHERE id = $1;
