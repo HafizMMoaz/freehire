@@ -525,7 +525,7 @@ func Register(app *fiber.App, cfg Config) {
 	// session JWT (Bearer for a server-side harness, the subprotocol for the
 	// extension, which can set no headers); the relay routes strictly within one
 	// user's channel. See internal/browsertools.
-	api.Get("/tools/ws", auth.RequireAuthWS(a.issuer), a.BrowserToolsWS())
+	api.Get("/tools/ws", auth.RequireAuthWS(a.issuer, a.queries), a.BrowserToolsWS())
 	// Agent-driven autofill: the caller's own browser is driven over that wire.
 	// keyAuth (Bearer) so the extension can trigger it.
 	api.Post("/me/autofill/run", keyAuth, a.RunAgentAutofill)

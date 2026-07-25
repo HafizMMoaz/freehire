@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -10,13 +11,65 @@ import (
 
 // wsApp mounts a route behind RequireAuthWS that reports the resolved user id,
 // standing in for the websocket handler that reads the same local.
-func wsApp(iss *Issuer) *fiber.App {
+func wsApp(iss *Issuer, keys ...APIKeyAuthenticator) *fiber.App {
+	var authenticator APIKeyAuthenticator = fakeKeyAuth{}
+	if len(keys) > 0 {
+		authenticator = keys[0]
+	}
 	app := fiber.New()
-	app.Get("/tools/ws", RequireAuthWS(iss), func(c *fiber.Ctx) error {
+	app.Get("/tools/ws", RequireAuthWS(iss, authenticator), func(c *fiber.Ctx) error {
 		id, _ := UserID(c)
 		return c.JSON(fiber.Map{"id": id})
 	})
 	return app
+}
+
+// A long-running harness is not a browser: it holds an API key (the credential
+// the CLI uses), not a short-lived session JWT it has no way to re-mint.
+func TestRequireAuthWS_AcceptsAnAPIKey(t *testing.T) {
+	const key = "fh_live_abc123"
+	keys := fakeKeyAuth{validHash: HashAPIKey(key), userID: 9}
+
+	for _, carrier := range []struct{ name, header, value string }{
+		{"bearer", fiber.HeaderAuthorization, "Bearer " + key},
+		{"subprotocol", "Sec-WebSocket-Protocol", WSSubprotocolMarker + ", " + key},
+	} {
+		t.Run(carrier.name, func(t *testing.T) {
+			req := httptest.NewRequest(fiber.MethodGet, "/tools/ws", nil)
+			req.Header.Set(carrier.header, carrier.value)
+
+			resp, err := wsApp(NewIssuer("secret", time.Hour), keys).Test(req)
+			if err != nil {
+				t.Fatalf("Test: %v", err)
+			}
+			if resp.StatusCode != fiber.StatusOK {
+				t.Fatalf("status = %d, want 200", resp.StatusCode)
+			}
+			var body struct {
+				ID int64 `json:"id"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if body.ID != 9 {
+				t.Fatalf("handler saw user %d, want the key's owner", body.ID)
+			}
+		})
+	}
+}
+
+func TestRequireAuthWS_RefusesAnUnknownKey(t *testing.T) {
+	keys := fakeKeyAuth{validHash: HashAPIKey("fh_live_good"), userID: 9}
+	req := httptest.NewRequest(fiber.MethodGet, "/tools/ws", nil)
+	req.Header.Set(fiber.HeaderAuthorization, "Bearer fh_live_revoked")
+
+	resp, err := wsApp(NewIssuer("secret", time.Hour), keys).Test(req)
+	if err != nil {
+		t.Fatalf("Test: %v", err)
+	}
+	if resp.StatusCode != fiber.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
 }
 
 func TestSubprotocolToken(t *testing.T) {

@@ -24,10 +24,19 @@ against whatever page the user is on and sends results back.
 ## Transport
 
 `internal/handler/browsertools.go` upgrades `GET /api/v1/tools/ws?role=…` behind
-`auth.RequireAuthWS`. The extension authenticates through the WebSocket
-subprotocol (`freehire-jwt, <token>`) because a browser can set no headers on a
-`new WebSocket`; a server-side harness uses `Authorization: Bearer`. Only the
-marker is echoed back, never the token.
+`auth.RequireAuthWS`. Only the subprotocol marker is echoed back, never the token.
+
+Carrier and credential vary independently:
+
+- **Carrier.** A browser can set no headers on `new WebSocket` and has no
+  cross-origin cookie, so the extension puts its token in the subprotocol
+  (`freehire-jwt, <token>`). Everything else sends `Authorization: Bearer`.
+- **Credential.** Either a session JWT or an API key. The extension holds the JWT
+  the connect flow minted; a long-running harness holds an API key — the same
+  credential `freehire-cli` uses — which it can store and revoke, rather than a
+  short-lived token it has no way to re-mint.
+
+Both resolve to the same thing: the id of the freehire user who owns the channel.
 
 The hub is in-memory and per-instance: both ends of a channel must be connected
 to the same process. Fine while the API is single-node; a multi-node deployment

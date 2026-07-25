@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -13,13 +15,22 @@ import (
 	"github.com/strelov1/freehire/internal/browsertools"
 )
 
+// noKeys stands in for the API-key lookup: these tests authenticate with JWTs,
+// so every key is unknown. It exists so the middleware has something to call
+// rather than a nil interface.
+type noKeys struct{}
+
+func (noKeys) AuthenticateAPIKey(context.Context, string) (int64, error) {
+	return 0, errors.New("no such key")
+}
+
 // wireServer starts the /tools/ws route on a real listener — a WebSocket needs an
 // actual connection, which app.Test cannot provide — and returns its base URL.
 func wireServer(t *testing.T, iss *auth.Issuer) string {
 	t.Helper()
 	a := &API{issuer: iss, browserTools: browsertools.New()}
 	app := fiber.New()
-	app.Get("/api/v1/tools/ws", auth.RequireAuthWS(iss), a.BrowserToolsWS())
+	app.Get("/api/v1/tools/ws", auth.RequireAuthWS(iss, noKeys{}), a.BrowserToolsWS())
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
