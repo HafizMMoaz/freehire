@@ -35,6 +35,7 @@ import (
 	"os"
 	"sort"
 	"text/tabwriter"
+	"time"
 
 	"github.com/strelov1/freehire/internal/db"
 	"github.com/strelov1/freehire/internal/search"
@@ -52,6 +53,11 @@ func main() {
 const (
 	scanPage    = 5000
 	deleteBatch = 500
+	// progressEvery is how often the scan reports. A full pass reads ~4000 rows a
+	// second whatever the page size — the cost is per-row I/O, not per-query — so it
+	// runs for tens of minutes, and the first prod run was impossible to distinguish
+	// from a hang.
+	progressEvery = 200000
 )
 
 func run() int {
@@ -165,14 +171,22 @@ func scan(ctx context.Context, q candidateSource, ev []db.CompanyTechEvidenceRow
 	}
 
 	p := newPlan(sampleSize, rnd)
-	var after int64
+	var after, scanned, reported int64
+	start := time.Now()
 	for {
 		rows, err := q.PruneCandidates(ctx, db.PruneCandidatesParams{AfterID: after, PageSize: scanPage})
 		if err != nil {
 			return nil, err
 		}
 		if len(rows) == 0 {
+			log.Printf("prune: scanned %d rows, %d matched, %s elapsed — done", scanned, p.matched, time.Since(start).Round(time.Second))
 			return p, nil
+		}
+		scanned += int64(len(rows))
+		if scanned-reported >= progressEvery {
+			reported = scanned
+			log.Printf("prune: scanned %d rows, %d matched, %d refused, %s elapsed",
+				scanned, p.matched, refusedTotal(p), time.Since(start).Round(time.Second))
 		}
 		for _, row := range rows {
 			after = row.ID
@@ -238,6 +252,15 @@ func deleteTargets(ctx context.Context, q batchDeleter, index docDeleter, p *pla
 		}
 	}
 	return nil
+}
+
+// refusedTotal sums the guard's refusals for the progress line.
+func refusedTotal(p *plan) int {
+	var n int
+	for _, c := range p.refused {
+		n += c
+	}
+	return n
 }
 
 // wouldMatchButForTheSource reports whether a rule would have fired had the posting come
