@@ -55,8 +55,10 @@ var stopWords = []string{
 // therefore cannot contain one at all, which is why the miner also builds
 // three-word groups: they are the shortest unit that can carry a connector.
 var connectors = []string{
-	// English
-	"of", "in", "at", "to", "for", "and", "or", "the", "with", "per", "from", "a", "an",
+	// English. "at" and "and" are deliberately absent: they occur inside no English role
+	// name we need to reproduce, while a prod run showed them bridging junk trigrams —
+	// "driver at lih", "home and clinic" — out of location suffixes.
+	"of", "in", "to", "for", "or", "the", "with", "per", "from", "a", "an",
 	// Portuguese and Spanish
 	"de", "da", "do", "dos", "das", "em", "para", "com", "del", "la", "el", "los",
 	"las", "por", "que", "y",

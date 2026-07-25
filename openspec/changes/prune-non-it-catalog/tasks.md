@@ -53,14 +53,14 @@ a dictionary term). See the "Measured" section of `design.md`.
 
 ## 7. First dictionary iteration
 
-- [ ] 7.1 Add anchored terms for the behavior-technician cluster to `classify.nonTechTitleTerms`, each with a positive test and a negative test naming a real technical title
-- [ ] 7.2 Add anchored terms for the maintenance/service technician and car-rental-driver clusters, same test discipline
-- [ ] 7.3 Add anchored terms for the medical-speciality cluster, same test discipline
-- [ ] 7.4 Verify no added term matches any title in a fixture of real technical titles sampled from prod
+- [x] 7.1 Add anchored terms for the behavior-technician cluster to `classify.nonTechTitleTerms`, each with a positive test and a negative test naming a real technical title
+- [x] 7.2 Add anchored terms for maintenance technician, machine operator, crew member and car rental. `service technician` and `field service` are deliberately DEFERRED — both are ambiguous for hardware and IT field roles, and the first iteration should not spend its credibility on the two most arguable terms in the batch
+- [x] 7.3 Add anchored terms for the medical-speciality cluster (behavioral health, speech-language pathologist, therapy assistant, care aide/assistant, social worker), same test discipline
+- [x] 7.4 Verify no added term matches any title in a fixture of real technical titles sampled from prod
 
 ## 8. Documentation
 
 - [x] 8.1 Update `docs/agents/job-lifecycle.md` and `CLAUDE.md`: closing remains soft, with the catalogue-pruning hard delete as the stated exception
 - [x] 8.2 Add `internal/pipeline/AGENTS.md` notes for the rejection path and the `Rejected` counter, the hydrating-source asymmetry (a `SeenRefresh` posting is touched and reopened without meeting the filter), and the per-crawl re-hydration cost a pruned posting incurs on hydrating adapters
 - [x] 8.4 Note in `openspec/specs/ingest-status-page` terms that `ingested_total` now counts post-rejection saves, so the published number steps down when the filter deploys
-- [ ] 8.3 Document the iteration loop and the end-of-campaign `backfill-derive` plus `reindex` step
+- [x] 8.3 Document the iteration loop and the end-of-campaign `backfill-derive` plus `reindex` step

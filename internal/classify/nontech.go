@@ -24,6 +24,12 @@ import (
 var nonTechTitleTerms = []string{
 	// Healthcare & care. "…technician" collides with IT/field-service technician, so
 	// only anchored forms ("pharmacy technician", "surgical technician") are listed.
+	// The behavior-technician cluster is the largest single unclassified group in the
+	// catalogue (~26k), all ABA therapy; "rbt" is its universal abbreviation and is not
+	// a word in any technical title.
+	"behavior technician", "registered behavior technician", "rbt",
+	"behavioral health", "speech language pathologist", "language pathologist",
+	"therapy assistant", "care aide", "care assistant", "social worker",
 	"nurse", "nursing", "registered nurse", "nurse practitioner",
 	"certified nursing assistant", "cna", "lpn", "licensed practical nurse",
 	"caregiver", "caretaker", "home health aide", "home health", "hospice",
@@ -50,7 +56,8 @@ var nonTechTitleTerms = []string{
 	"cashier", "stocker", "merchandiser", "retail associate", "retail sales",
 	"sales associate", "sales clerk", "store associate", "store clerk",
 	"warehouse associate", "warehouse worker", "order picker", "picker", "packer",
-	"material handler", "package handler", "cdl driver",
+	"material handler", "package handler", "cdl driver", "machine operator",
+	"crew member", "car rental",
 	// Personal care & fitness
 	"pilates instructor", "yoga instructor", "fitness instructor",
 	"personal trainer", "cosmetologist", "hair stylist", "hairstylist",
@@ -66,7 +73,7 @@ var nonTechTitleTerms = []string{
 	"administrative assistant", "office assistant", "data entry clerk", "file clerk",
 	// Facilities & cleaning
 	"janitor", "janitorial", "cleaner", "custodian", "custodial", "groundskeeper",
-	"maintenance worker", "parking attendant", "flight attendant",
+	"maintenance worker", "maintenance technician", "parking attendant", "flight attendant",
 	// Security & transport
 	"security guard", "truck driver", "delivery driver", "bus driver", "courier",
 	// Front-of-house administration
