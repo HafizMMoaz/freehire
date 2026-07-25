@@ -1,9 +1,10 @@
 //go:build integration
 
-// Integration tests for the catalogue-pruning queries. ResidualUnclassifiedTitles reports
-// the most frequent titles that still carry no is_tech signal, so each pruning iteration can
-// be aimed at the next real cluster and the remaining group measured. SQL behavior,
-// verifiable only against a real Postgres. Run with: go test -tags=integration ./internal/db/
+// Integration tests for the catalogue-pruning queries. ResidualTitleGroups reports the
+// most frequent word groups drawn from the titles of jobs that still carry no is_tech
+// signal, so each pruning iteration can be aimed at the next real cluster and the
+// remaining group measured. SQL behavior, verifiable only against a real Postgres.
+// Run with: go test -tags=integration ./internal/db/
 package db
 
 import (
@@ -13,6 +14,13 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// The miner's vocabularies live in cmd/mine-titles and reach the query as parameters.
+// These are the slices the cases below need, not the production lists.
+var (
+	testStop       = []string{"part", "time", "hiring", "urgent"}
+	testConnectors = []string{"de", "of", "da"}
 )
 
 // residualJob upserts a job with the given external id, title and source, carrying the
@@ -31,96 +39,207 @@ func residualJob(ctx context.Context, t *testing.T, pool *pgxpool.Pool, ext, tit
 	return j
 }
 
-func TestResidualUnclassifiedTitlesGroupsAndFilters(t *testing.T) {
+// groups runs the miner and returns the result keyed by group, so a case can assert on
+// the one group it cares about without depending on the rest of the ranking.
+func groups(ctx context.Context, t *testing.T, q *Queries, limit int32) map[string]ResidualTitleGroupsRow {
+	t.Helper()
+	rows, err := q.ResidualTitleGroups(ctx, ResidualTitleGroupsParams{
+		StopWords:  testStop,
+		Connectors: testConnectors,
+		RowLimit:   limit,
+	})
+	if err != nil {
+		t.Fatalf("ResidualTitleGroups: %v", err)
+	}
+	m := make(map[string]ResidualTitleGroupsRow, len(rows))
+	for _, r := range rows {
+		m[r.Grp] = r
+	}
+	return m
+}
+
+// The reason the miner groups by word group rather than whole title: boards append
+// location and schedule, so one role splits into singleton titles that no whole-title
+// grouping can reunite.
+func TestResidualTitleGroupsClustersAcrossTitleNoise(t *testing.T) {
+	pool := startPostgres(t)
+	q := New(pool)
+	ctx := context.Background()
+	truncate(t, pool)
+
+	residualJob(ctx, t, pool, "a:1", "Personal Care Aide - on-call - Honolulu", "greenhouse", nil)
+	residualJob(ctx, t, pool, "a:2", "personal care aide, Waipahu / Ewa Beach", "ukg", nil)
+	residualJob(ctx, t, pool, "a:3", "Personal Care Aide (MWF 5am-8am)", "greenhouse", nil)
+
+	g := groups(ctx, t, q, 50)
+
+	got, ok := g["personal care"]
+	if !ok {
+		t.Fatalf("no cluster for %q; got %v", "personal care", slices.Sorted(maps(g)))
+	}
+	if got.Jobs != 3 {
+		t.Errorf("jobs = %d, want 3 — the three titles are one role", got.Jobs)
+	}
+	sources := slices.Clone(got.Sources)
+	slices.Sort(sources)
+	if !slices.Equal(sources, []string{"greenhouse", "ukg"}) {
+		t.Errorf("sources = %v, want [greenhouse ukg]", sources)
+	}
+	if _, ok := g["care aide"]; !ok {
+		t.Error("the overlapping pair \"care aide\" must also be reported — both are usable anchors")
+	}
+}
+
+// Romance titles carry the preposition inside the role name, so a three-word group
+// bridging a connector is the only unit that can reproduce them — while the two-word
+// fragments around that same connector are noise and must not be reported.
+func TestResidualTitleGroupsBridgesConnectorsButNotEdges(t *testing.T) {
+	pool := startPostgres(t)
+	q := New(pool)
+	ctx := context.Background()
+	truncate(t, pool)
+
+	residualJob(ctx, t, pool, "b:1", "Operador de Caixa", "gupy", nil)
+	residualJob(ctx, t, pool, "b:2", "operador de caixa - loja centro", "gupy", nil)
+	residualJob(ctx, t, pool, "b:3", "Analista de Suporte", "gupy", nil)
+
+	g := groups(ctx, t, q, 50)
+
+	if got, ok := g["operador de caixa"]; !ok || got.Jobs != 2 {
+		t.Errorf("operador de caixa = %+v (present=%v), want 2 jobs — a connector belongs mid-group", got, ok)
+	}
+	for _, fragment := range []string{"operador de", "de caixa", "analista de", "de suporte"} {
+		if _, ok := g[fragment]; ok {
+			t.Errorf("%q was reported — a connector at a group's edge makes it a fragment", fragment)
+		}
+	}
+}
+
+// Employment type and posting boilerplate dominated the ranking before the stop list;
+// no group may be built from them at all.
+func TestResidualTitleGroupsDropsStopWords(t *testing.T) {
+	pool := startPostgres(t)
+	q := New(pool)
+	ctx := context.Background()
+	truncate(t, pool)
+
+	residualJob(ctx, t, pool, "c:1", "Part Time Line Cook - urgent hiring", "greenhouse", nil)
+	residualJob(ctx, t, pool, "c:2", "part time line cook", "greenhouse", nil)
+
+	g := groups(ctx, t, q, 50)
+
+	if _, ok := g["line cook"]; !ok {
+		t.Error("the role pair \"line cook\" must survive")
+	}
+	for _, noise := range []string{"part time", "time line", "urgent hiring", "cook urgent"} {
+		if _, ok := g[noise]; ok {
+			t.Errorf("%q was reported — no group may contain a stop word", noise)
+		}
+	}
+}
+
+// A large share of the catalogue is Portuguese, Spanish and Russian. An ASCII-only
+// tokenizer would split "Técnico" into "t" and "cnico" and lose the cluster entirely.
+func TestResidualTitleGroupsTokenizesAccentedAndCyrillic(t *testing.T) {
+	pool := startPostgres(t)
+	q := New(pool)
+	ctx := context.Background()
+	truncate(t, pool)
+
+	residualJob(ctx, t, pool, "d:1", "Técnico de Manutenção", "gupy", nil)
+	residualJob(ctx, t, pool, "d:2", "técnico de manutenção — noturno", "gupy", nil)
+	residualJob(ctx, t, pool, "d:3", "Подсобный рабочий", "trudvsem", nil)
+
+	g := groups(ctx, t, q, 50)
+
+	if got, ok := g["técnico de manutenção"]; !ok || got.Jobs != 2 {
+		t.Errorf("técnico de manutenção = %+v (present=%v), want 2 jobs — accents must survive tokenizing", got, ok)
+	}
+	if _, ok := g["подсобный рабочий"]; !ok {
+		t.Error("Cyrillic titles must tokenize whole")
+	}
+}
+
+// A group repeated inside one title is still one job. Counting occurrences instead of
+// jobs would rank a single verbose posting above a real cluster.
+func TestResidualTitleGroupsCountsJobsNotOccurrences(t *testing.T) {
+	pool := startPostgres(t)
+	q := New(pool)
+	ctx := context.Background()
+	truncate(t, pool)
+
+	residualJob(ctx, t, pool, "e:1", "Line Cook / Line Cook Assistant", "greenhouse", nil)
+
+	if got := groups(ctx, t, q, 50)["line cook"]; got.Jobs != 1 {
+		t.Errorf("jobs = %d, want 1 — the pair occurs twice in one title", got.Jobs)
+	}
+}
+
+// Only live, canonical, unclassified rows are worth a dictionary term. Every excluded
+// row here shares the "line cook" title and sits on a second source, so a filter that
+// leaked would inflate the count or add "ukg" to the sources rather than pass unnoticed.
+func TestResidualTitleGroupsExcludesClassifiedClosedAndDuplicates(t *testing.T) {
 	pool := startPostgres(t)
 	q := New(pool)
 	ctx := context.Background()
 	truncate(t, pool)
 
 	yes, no := true, false
-
-	// Three unclassified postings of one role, spelled inconsistently and spread over two
-	// providers — the miner must see one cluster of three, not three clusters of one.
-	residualJob(ctx, t, pool, "acme:1", "Registered Behavior Technician", "greenhouse", nil)
-	residualJob(ctx, t, pool, "acme:2", "registered behavior technician", "greenhouse", nil)
-	residualJob(ctx, t, pool, "acme:3", "  Registered Behavior Technician  ", "ukg", nil)
-
-	// A second, smaller cluster whose live member is the ONLY row that may be reported.
-	// Every excluded row below shares its title and carries source "ukg", so an exclusion
-	// that leaked would inflate this cluster's count or add "ukg" to its sources — a
-	// filter moved into a HAVING, or dropped from the aggregate, fails here rather than
-	// passing because each excluded row happened to have a title of its own.
-	live := residualJob(ctx, t, pool, "acme:4", "Line Cook", "greenhouse", nil)
-	residualJob(ctx, t, pool, "acme:5", "Line Cook", "ukg", &no) // classified non-tech
-	closed := residualJob(ctx, t, pool, "acme:6", "Line Cook", "ukg", nil)
+	live := residualJob(ctx, t, pool, "f:1", "Line Cook", "greenhouse", nil)
+	residualJob(ctx, t, pool, "f:2", "Line Cook", "ukg", &no)
+	residualJob(ctx, t, pool, "f:3", "Line Cook", "ukg", &yes)
+	closed := residualJob(ctx, t, pool, "f:4", "Line Cook", "ukg", nil)
 	if _, err := pool.Exec(ctx, "UPDATE jobs SET closed_at = now() WHERE id = $1", closed.ID); err != nil {
-		t.Fatalf("close acme:6: %v", err)
+		t.Fatalf("close f:4: %v", err)
 	}
-	dup := residualJob(ctx, t, pool, "acme:7", "Line Cook", "ukg", nil)
+	dup := residualJob(ctx, t, pool, "f:5", "Line Cook", "ukg", nil)
 	if _, err := pool.Exec(ctx, "UPDATE jobs SET duplicate_of = $1 WHERE id = $2", live.ID, dup.ID); err != nil {
-		t.Fatalf("mark acme:7 duplicate: %v", err)
+		t.Fatalf("mark f:5 duplicate: %v", err)
 	}
 
-	// Classified technical — the same predicate as acme:5, kept with a realistic title.
-	residualJob(ctx, t, pool, "acme:8", "Senior Software Engineer", "ukg", &yes)
-
-	rows, err := q.ResidualUnclassifiedTitles(ctx, 10)
-	if err != nil {
-		t.Fatalf("ResidualUnclassifiedTitles: %v", err)
+	got := groups(ctx, t, q, 50)["line cook"]
+	if got.Jobs != 1 {
+		t.Errorf("jobs = %d, want 1 — classified, closed and duplicate rows must not count", got.Jobs)
 	}
-
-	if len(rows) != 2 {
-		t.Fatalf("rows = %d (%+v), want 2 — classified, closed and duplicate rows must be excluded", len(rows), rows)
-	}
-
-	top := rows[0]
-	if top.Title != "registered behavior technician" {
-		t.Errorf("top title = %q, want %q (normalized: lowercased and trimmed)", top.Title, "registered behavior technician")
-	}
-	if top.Jobs != 3 {
-		t.Errorf("top jobs = %d, want 3 — case and surrounding whitespace must collapse into one cluster", top.Jobs)
-	}
-	sources := slices.Clone(top.Sources)
-	slices.Sort(sources)
-	if !slices.Equal(sources, []string{"greenhouse", "ukg"}) {
-		t.Errorf("top sources = %v, want [greenhouse ukg] distinct", sources)
-	}
-
-	cook := rows[1]
-	if cook.Title != "line cook" {
-		t.Fatalf("second title = %q, want %q", cook.Title, "line cook")
-	}
-	if cook.Jobs != 1 {
-		t.Errorf("line cook jobs = %d, want 1 — the classified, closed and duplicate rows must not be counted", cook.Jobs)
-	}
-	if !slices.Equal(cook.Sources, []string{"greenhouse"}) {
-		t.Errorf("line cook sources = %v, want [greenhouse] — every excluded row is on ukg, so its presence means one leaked", cook.Sources)
+	if !slices.Equal(got.Sources, []string{"greenhouse"}) {
+		t.Errorf("sources = %v, want [greenhouse] — every excluded row is on ukg, so its presence means one leaked", got.Sources)
 	}
 }
 
-func TestResidualUnclassifiedTitlesHonoursLimit(t *testing.T) {
+func TestResidualTitleGroupsHonoursLimit(t *testing.T) {
 	pool := startPostgres(t)
 	q := New(pool)
 	ctx := context.Background()
 	truncate(t, pool)
 
-	// Three distinct residual clusters of descending size: 3, 2, 1.
-	for _, ext := range []string{"a:1", "a:2", "a:3"} {
-		residualJob(ctx, t, pool, ext, "Caregiver", "greenhouse", nil)
+	for _, ext := range []string{"g:1", "g:2", "g:3"} {
+		residualJob(ctx, t, pool, ext, "Caregiver Assistant", "greenhouse", nil)
 	}
-	for _, ext := range []string{"b:1", "b:2"} {
-		residualJob(ctx, t, pool, ext, "Housekeeper", "greenhouse", nil)
-	}
-	residualJob(ctx, t, pool, "c:1", "Dishwasher", "greenhouse", nil)
+	residualJob(ctx, t, pool, "h:1", "Dishwasher Helper", "greenhouse", nil)
 
-	rows, err := q.ResidualUnclassifiedTitles(ctx, 2)
+	rows, err := q.ResidualTitleGroups(ctx, ResidualTitleGroupsParams{
+		StopWords:  testStop,
+		Connectors: testConnectors,
+		RowLimit:   1,
+	})
 	if err != nil {
-		t.Fatalf("ResidualUnclassifiedTitles: %v", err)
+		t.Fatalf("ResidualTitleGroups: %v", err)
 	}
-	if len(rows) != 2 {
-		t.Fatalf("rows = %d, want 2 — the limit caps the report", len(rows))
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1 — the limit caps the report", len(rows))
 	}
-	if rows[0].Title != "caregiver" || rows[1].Title != "housekeeper" {
-		t.Errorf("rows = %q, %q; want caregiver then housekeeper (busiest first)", rows[0].Title, rows[1].Title)
+	if rows[0].Grp != "caregiver assistant" {
+		t.Errorf("row = %q, want the busiest group %q", rows[0].Grp, "caregiver assistant")
+	}
+}
+
+// maps yields a map's keys, for a readable failure message when a lookup misses.
+func maps(m map[string]ResidualTitleGroupsRow) func(func(string) bool) {
+	return func(yield func(string) bool) {
+		for k := range m {
+			if !yield(k) {
+				return
+			}
+		}
 	}
 }

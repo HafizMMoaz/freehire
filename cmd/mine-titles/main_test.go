@@ -11,9 +11,9 @@ import (
 // given rather than imposing one of its own.
 func TestReportRendersFieldsInGivenOrder(t *testing.T) {
 	var b strings.Builder
-	rows := []db.ResidualUnclassifiedTitlesRow{
-		{Title: "registered behavior technician", Jobs: 3650, Sources: []string{"ukg", "workday"}},
-		{Title: "line cook", Jobs: 1600, Sources: []string{"greenhouse"}},
+	rows := []db.ResidualTitleGroupsRow{
+		{Grp: "registered behavior technician", Jobs: 3650, Sources: []string{"ukg", "workday"}},
+		{Grp: "line cook", Jobs: 1600, Sources: []string{"greenhouse"}},
 	}
 
 	if err := report(&b, rows); err != nil {
@@ -38,8 +38,8 @@ func TestReportRendersFieldsInGivenOrder(t *testing.T) {
 // testable without a database.
 func TestReportSortsSources(t *testing.T) {
 	var b strings.Builder
-	rows := []db.ResidualUnclassifiedTitlesRow{
-		{Title: "caregiver", Jobs: 10, Sources: []string{"workday", "greenhouse", "ukg"}},
+	rows := []db.ResidualTitleGroupsRow{
+		{Grp: "caregiver", Jobs: 10, Sources: []string{"workday", "greenhouse", "ukg"}},
 	}
 
 	if err := report(&b, rows); err != nil {

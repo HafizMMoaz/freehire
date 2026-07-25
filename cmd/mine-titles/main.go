@@ -1,19 +1,26 @@
-// Command mine-titles reports the job titles that still carry no is_tech signal,
-// grouped into clusters an operator can act on. It is the read-only half of the
+// Command mine-titles reports the word groups occurring most often in the titles of
+// jobs that still carry no is_tech signal. It is the read-only half of the
 // catalogue-pruning loop: it names the next cluster worth a dictionary term, and,
 // run again after a pruning pass, shows whether the unclassified group shrank.
 //
-// It is a run-once-and-exit worker and writes nothing. Titles are normalized
-// (lowercased, trimmed) by the query, so one role spelled inconsistently across
-// boards reads as one cluster; closed and duplicate rows are excluded, since only a
-// live, canonical posting is worth a term.
+// It is a run-once-and-exit worker and writes nothing. Grouping is by word group
+// rather than by whole title because boards append location, schedule and
+// requisition detail: measured on prod, half the unclassified mass has a title
+// occurring exactly once, so whole-title clustering reached 6.6% of it against
+// 15.2% for word groups. A word group is also the unit the non-tech dictionary
+// accepts, so a reported cluster can be copied into it as an anchored term.
 //
-// Cost, measured on prod (1.8M unclassified rows, 1.06M distinct titles): ~67s per
-// run. --limit bounds the output, not the work — the whole group-by runs before the
-// final top-N sort, so a small limit costs the same as a large one. The per-worker
-// sorts spill to temp space (~100MB across three workers); that is released at the
-// end, but it is worth knowing on a disk-constrained box. Acceptable for an operator
-// tool run a few times per pruning iteration; it would not belong on a request path.
+// Two costs to expect. --limit bounds the output, not the work: the whole group-by
+// runs before the final top-N sort, so a small limit costs the same as a large one.
+// And expanding every title into overlapping groups multiplies the rows the
+// aggregate sees, so this is minutes, not seconds, and it spills to temp sort space
+// — fine for an operator tool run a few times per pruning iteration, and firmly off
+// any request path.
+//
+// The report is a shortlist for a human, not a verdict. The same measurement found
+// roughly a fifth of the top 100 to be technical or IT-relevant phrases that must
+// NOT reach the non-tech dictionary ("systems engineer", "team lead"), and another
+// quarter to be fragments of one verbose employer's titles. Read it before acting.
 //
 // Usage: go run ./cmd/mine-titles [--limit=100]   (needs DATABASE_URL)
 package main
@@ -52,7 +59,11 @@ func run() int {
 	}
 	defer cleanup()
 
-	rows, err := db.New(pool).ResidualUnclassifiedTitles(ctx, int32(*limit))
+	rows, err := db.New(pool).ResidualTitleGroups(ctx, db.ResidualTitleGroupsParams{
+		StopWords:  stopWords,
+		Connectors: connectors,
+		RowLimit:   int32(*limit),
+	})
 	if err != nil {
 		log.Printf("mine-titles: %v", err)
 		return 1
@@ -68,9 +79,9 @@ func run() int {
 // them busiest-first). Sources are sorted here rather than trusted from the aggregate,
 // so an unchanged catalogue renders byte-identically between runs — an operator
 // diffing two iterations should see only real movement.
-func report(w io.Writer, rows []db.ResidualUnclassifiedTitlesRow) error {
+func report(w io.Writer, rows []db.ResidualTitleGroupsRow) error {
 	if len(rows) == 0 {
-		_, err := fmt.Fprintln(w, "no unclassified titles left")
+		_, err := fmt.Fprintln(w, "no unclassified title groups left")
 		return err
 	}
 
@@ -78,7 +89,7 @@ func report(w io.Writer, rows []db.ResidualUnclassifiedTitlesRow) error {
 	for _, r := range rows {
 		sources := slices.Clone(r.Sources)
 		slices.Sort(sources)
-		if _, err := fmt.Fprintf(tw, "%d\t%s\t%s\n", r.Jobs, r.Title, strings.Join(sources, ", ")); err != nil {
+		if _, err := fmt.Fprintf(tw, "%d\t%s\t%s\n", r.Jobs, r.Grp, strings.Join(sources, ", ")); err != nil {
 			return err
 		}
 	}
