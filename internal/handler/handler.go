@@ -28,6 +28,7 @@ import (
 	"github.com/strelov1/freehire/internal/enrich"
 	"github.com/strelov1/freehire/internal/gmailsync"
 	"github.com/strelov1/freehire/internal/jobtracking"
+	"github.com/strelov1/freehire/internal/linkimport"
 	"github.com/strelov1/freehire/internal/llm"
 	"github.com/strelov1/freehire/internal/matchanalysis"
 	"github.com/strelov1/freehire/internal/moderation"
@@ -39,6 +40,7 @@ import (
 	"github.com/strelov1/freehire/internal/resumeextract"
 	"github.com/strelov1/freehire/internal/savedsearch"
 	"github.com/strelov1/freehire/internal/search"
+	"github.com/strelov1/freehire/internal/sources"
 	"github.com/strelov1/freehire/internal/submission"
 	"github.com/strelov1/freehire/internal/subscription"
 	"github.com/strelov1/freehire/internal/telegramnotify"
@@ -155,6 +157,9 @@ type API struct {
 	// contribution owns the crowdsourced paste-a-link flow (submit a URL → detect ATS,
 	// dedup by derived identity, record + award a point); list the caller's own.
 	contribution *contribution.Service
+	// imports turns one job page URL into a catalog posting (the engine cmd/resolve-url
+	// runs), backing "add this page" from the browser extension.
+	imports *linkimport.Importer
 	// referral owns the employee-referral use cases (offer to refer, request a referral,
 	// moderate offers, notify referrers). blob is the S3 store proof CVs are written to
 	// (nil when S3 is unconfigured — offer submit then reports 503).
@@ -349,6 +354,10 @@ func Register(app *fiber.App, cfg Config) {
 	// network fallback (boardresolve) that fetches a company careers page and detects an
 	// embedded ATS — so vanity-domain links (company.com/careers?gh_jid=…) resolve too.
 	a.contribution = contribution.New(contribution.NewQueriesRepository(queries), boardresolve.New())
+	// Imports fetch a user-supplied page, so they dial through the same SSRF-guarded
+	// client the crawlers use (sources.NewClient). cfg.Search may be nil (no engine
+	// configured), which only skips the index push.
+	a.imports = linkimport.New(cfg.Pool, queries, cfg.Search, sources.NewClient())
 	// The report queue uses one QueriesRepository for both persistence and the
 	// job soft-close (it implements report.Repository and report.JobCloser).
 	reportRepo := report.NewQueriesRepository(queries)
@@ -599,12 +608,21 @@ func Register(app *fiber.App, cfg Config) {
 	api.Post("/submissions/:id/approve", keyAuth, requireModerator, a.ApproveSubmission)
 	api.Post("/submissions/:id/reject", keyAuth, requireModerator, a.RejectSubmission)
 
+	// One limiter for every endpoint that makes the server fetch a caller-supplied URL,
+	// so a user's budget is spent across them rather than granted twice.
+	outboundFetch := contributionLimiter()
+
 	// Link contributions: any authenticated user pastes a job URL (cookie or API key);
 	// a supported, novel link is recorded and earns a point. No moderation queue — the
 	// derived-identity dedup and the supported-ATS gate are the only guards. The caller
 	// reads their own contributions; the points balance rides on /auth/me.
-	api.Post("/me/contributions", keyAuth, contributionLimiter(), a.CreateContribution)
+	api.Post("/me/contributions", keyAuth, outboundFetch, a.CreateContribution)
 	api.Get("/me/contributions", keyAuth, a.ListMyContributions)
+
+	// The extension's "add this page": resolve the page to a catalog posting, importing it
+	// when a link-source adapter can read the page and queueing the link for triage when
+	// none can.
+	api.Post("/jobs/resolve", keyAuth, outboundFetch, a.ResolveJob)
 
 	// Employee referrals: any authenticated user (cookie or API key) offers to refer into a
 	// company (proof CV, moderated) and requests a referral from a company's approved-referrer
