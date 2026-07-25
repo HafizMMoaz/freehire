@@ -1037,6 +1037,15 @@ type Querier interface {
 	// coalesced/cast to bigint so it reads as a plain int64 (an all-failing provider
 	// yields 0, not NULL).
 	ProviderHealthRollup(ctx context.Context) ([]ProviderHealthRollupRow, error)
+	// One keyset page of rows the prune rule evaluates, ordered by id.
+	//
+	// Closed rows are included deliberately. Once ingest rejects a board's non-technical
+	// postings, the 48-hour unseen sweep closes the ones already in the catalogue — so a
+	// scan restricted to open jobs would leave exactly the rows the campaign is about to
+	// stop replacing, permanently. Duplicates are included too: one may match a rule while
+	// its canonical does not, and nothing references a duplicate, so removing it alone is
+	// safe.
+	PruneCandidates(ctx context.Context, arg PruneCandidatesParams) ([]PruneCandidatesRow, error)
 	// Permanently remove a batch of jobs and record what was removed, in ONE statement.
 	// Splitting the two would let the archive drift from the deletion, and the archive is
 	// the only way to answer, after an irreversible removal, whether something was taken

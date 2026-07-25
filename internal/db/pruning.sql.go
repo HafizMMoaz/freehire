@@ -7,6 +7,8 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const companyTechEvidence = `-- name: CompanyTechEvidence :many
@@ -54,6 +56,63 @@ func (q *Queries) CompanyTechEvidence(ctx context.Context) ([]CompanyTechEvidenc
 			&i.CompanySlug,
 			&i.AnyTech,
 			&i.AnySkills,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const pruneCandidates = `-- name: PruneCandidates :many
+SELECT id, source, company_slug, title, category, is_tech
+FROM jobs
+WHERE id > $1
+ORDER BY id
+LIMIT $2
+`
+
+type PruneCandidatesParams struct {
+	AfterID  int64 `json:"after_id"`
+	PageSize int32 `json:"page_size"`
+}
+
+type PruneCandidatesRow struct {
+	ID          int64       `json:"id"`
+	Source      string      `json:"source"`
+	CompanySlug string      `json:"company_slug"`
+	Title       string      `json:"title"`
+	Category    string      `json:"category"`
+	IsTech      pgtype.Bool `json:"is_tech"`
+}
+
+// One keyset page of rows the prune rule evaluates, ordered by id.
+//
+// Closed rows are included deliberately. Once ingest rejects a board's non-technical
+// postings, the 48-hour unseen sweep closes the ones already in the catalogue — so a
+// scan restricted to open jobs would leave exactly the rows the campaign is about to
+// stop replacing, permanently. Duplicates are included too: one may match a rule while
+// its canonical does not, and nothing references a duplicate, so removing it alone is
+// safe.
+func (q *Queries) PruneCandidates(ctx context.Context, arg PruneCandidatesParams) ([]PruneCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, pruneCandidates, arg.AfterID, arg.PageSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PruneCandidatesRow{}
+	for rows.Next() {
+		var i PruneCandidatesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Source,
+			&i.CompanySlug,
+			&i.Title,
+			&i.Category,
+			&i.IsTech,
 		); err != nil {
 			return nil, err
 		}

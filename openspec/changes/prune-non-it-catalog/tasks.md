@@ -33,18 +33,18 @@ a dictionary term). See the "Measured" section of `design.md`.
 - [x] 4.2 Implement the pure rule predicate — title rule, non-tech category at a company without technical evidence, unknown at a company with no evidence at all — table-driven tested across bucket × `is_tech` × category
 - [x] 4.3 Implement the non-crawled source exclusion as an ALLOW-list of providers built from the board files (`boards.crawled`), not a deny-list — a deny-list silently arms any non-crawled source added later, and that deletion is unrecoverable
 - [x] 4.4 Build the guard's ingredients: `boards.retired(provider, slug)` keyed the way the catalogue is, and `companyScoped(rule)`
-- [ ] 4.5 WIRE the guard in the worker (group 5 must not skip this — 4.4 is ingredients only). The refusal is per candidate and runs BEFORE the delete, not as a post-hoc report; `loadBoards` must be called before `worker.Bootstrap` so an unreadable directory kills the run before anything is removed. Aggregator providers whose board entry is a region rather than an employer (`trudvsem` and the other multi-employer sources) must be excluded from the company-scoped rules outright — their employers are never "listed" and would read as retired while the board is still crawled
-- [ ] 4.6 Assert `len(ids) == len(rules)` in the `PruneJobs` wrapper: the query inner-joins on ordinality, so a caller off-by-one silently under-deletes with no error
+- [x] 4.5 WIRE the guard in the worker (group 5 must not skip this — 4.4 is ingredients only). The refusal is per candidate and runs BEFORE the delete, not as a post-hoc report; `loadBoards` must be called before `worker.Bootstrap` so an unreadable directory kills the run before anything is removed. Aggregator providers whose board entry is a region rather than an employer (`trudvsem` and the other multi-employer sources) must be excluded from the company-scoped rules outright — their employers are never "listed" and would read as retired while the board is still crawled
+- [x] 4.6 Assert `len(ids) == len(rules)` in the `PruneJobs` wrapper: the query inner-joins on ordinality, so a caller off-by-one silently under-deletes with no error
 
 ## 5. Prune worker
 
-- [ ] 5.1 Add `cmd/prune` skeleton: keyset scan over candidate rows, `--dry-run` default, `--apply`, `--limit`, `--sample` flags. The scan MUST include closed rows: once ingest rejects a board's non-tech postings, the 48h unseen sweep closes the ones already in the catalogue, and a scan restricted to open jobs would leave them as permanent dead weight
-- [ ] 5.2 Compute company evidence once at start, before any deletion
+- [x] 5.1 Add `cmd/prune` skeleton: keyset scan over candidate rows, `--dry-run` default, `--apply`, `--limit`, `--sample` flags. The scan MUST include closed rows: once ingest rejects a board's non-tech postings, the 48h unseen sweep closes the ones already in the catalogue, and a scan restricted to open jobs would leave them as permanent dead weight
+- [x] 5.2 Compute company evidence once at start, before any deletion
 - [x] ~~5.3 Batched delete extending to the duplicate cluster~~ — done by `PruneJobs` in 3.2
-- [ ] 5.4 Mirror each batch to the facet index via `search.Client.DeleteJobs`
+- [x] 5.4 Mirror each batch to the facet index via `search.Client.DeleteJobs`
 - [x] ~~5.5 Write archive rows for every deleted job~~ — done by `PruneJobs` in 3.2
-- [ ] 5.6 Dry-run output: random sample of pending titles plus counts broken down by rule and by source
-- [ ] 5.7 Honour `--limit` as a hard cap and report how many rows matched versus were deleted
+- [x] 5.6 Dry-run output: random sample of pending titles plus counts broken down by rule and by source
+- [x] 5.7 Honour `--limit` as a hard cap and report how many rows matched versus were deleted
 
 ## 6. Board-retirement report
 
