@@ -85,6 +85,10 @@ check against the account's current token version — on protected requests.
   the validated cookie.
 - A token whose version claim does not equal the account's stored token version
   SHALL be rejected, as SHALL a token carrying no version claim.
+- The revocation check SHALL fail closed: when the account's token version cannot
+  be read at all — including because the account no longer exists — the request
+  SHALL be unauthenticated. A cryptographically valid token is therefore never by
+  itself proof that its subject is still a member.
 
 #### Scenario: Valid cookie grants access
 
@@ -110,6 +114,11 @@ check against the account's current token version — on protected requests.
 
 - **WHEN** a client presents a correctly signed token that carries no version claim
 - **THEN** the system responds `401`
+
+#### Scenario: Token for a deleted account
+
+- **WHEN** a client calls a protected endpoint with an unexpired, correctly signed cookie whose subject is an account that has been deleted
+- **THEN** the system responds `401`, rather than admitting the request and failing later on a missing user
 
 ### Requirement: Session logout
 
