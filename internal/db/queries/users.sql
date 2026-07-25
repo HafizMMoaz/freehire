@@ -202,3 +202,11 @@ WHERE e.user_id = $1 AND e.s3_key IS NOT NULL AND e.s3_key <> '';
 -- are ON DELETE SET NULL by design. Objects in storage are NOT reachable from here —
 -- the caller deletes them first (see ListUserBlobKeys).
 DELETE FROM users WHERE id = $1;
+
+-- name: UserEmail :one
+-- Slim email lookup for the delete-account confirmation, which compares the typed
+-- address against the caller's own. A primitive so the handler needs no full user row
+-- (same shape as GetUserRole).
+SELECT email
+FROM users
+WHERE id = $1;

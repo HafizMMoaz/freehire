@@ -21,11 +21,11 @@
 
 ## 4. Endpoint
 
-- [ ] 4.1 Add `internal/handler/me_delete.go`: `DELETE /api/v1/me`, cookie-only, case-insensitive confirmation of the caller's own email, `204` plus an expired session cookie on success, `400` on mismatch
-- [ ] 4.2 Register the route under `auth.RequireAuth` (never `keyAuth`) in `internal/handler/handler.go`; test that a Bearer API key gets `401`
-- [ ] 4.3 Integration test (`-tags=integration`): seed a user with job tracking, a CV, credits, saved searches, mail, a thread with another member's reply, and a referral offer; delete; assert no user-owned row survives, the other member's reply survives de-authored, the moderator trail is nulled, and the objects are gone from the fake store
-- [ ] 4.4 Integration test: the deleted account's email can register a fresh, empty account
-- [ ] 4.5 Document the endpoint in `internal/handler/AGENTS.md`
+- [x] 4.1 Add `internal/handler/me_delete.go`: `DELETE /api/v1/me`, cookie-only, case-insensitive confirmation of the caller's own email, `204` plus an expired session cookie on success, `400` on mismatch
+- [x] 4.2 Register the route under `auth.RequireAuth` (never `keyAuth`) in `internal/handler/handler.go`; test that a Bearer API key gets `401`
+- [x] 4.3 Integration test (`-tags=integration`): seed a user with job tracking, a CV, credits, saved searches, mail, a thread with another member's reply, and a referral offer; delete; assert no user-owned row survives, the other member's reply survives de-authored, the moderator trail is nulled, and the objects are gone from the fake store
+- [x] 4.4 Integration test: the deleted account's email can register a fresh, empty account
+- [x] 4.5 Document the endpoint in `internal/handler/AGENTS.md`
 
 ## 5. Web surface
 

@@ -516,3 +516,19 @@ func (q *Queries) SetUserResumeStructured(ctx context.Context, arg SetUserResume
 	)
 	return err
 }
+
+const userEmail = `-- name: UserEmail :one
+SELECT email
+FROM users
+WHERE id = $1
+`
+
+// Slim email lookup for the delete-account confirmation, which compares the typed
+// address against the caller's own. A primitive so the handler needs no full user row
+// (same shape as GetUserRole).
+func (q *Queries) UserEmail(ctx context.Context, id int64) (string, error) {
+	row := q.db.QueryRow(ctx, userEmail, id)
+	var email string
+	err := row.Scan(&email)
+	return email, err
+}

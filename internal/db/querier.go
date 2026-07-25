@@ -1671,6 +1671,10 @@ type Querier interface {
 	// facet arrays (regions/remote_regions/countries/domains/company_types/company_sizes)
 	// are left untouched. Idempotent: re-running the same entry rewrites the same values.
 	UpsertYCCompany(ctx context.Context, arg UpsertYCCompanyParams) error
+	// Slim email lookup for the delete-account confirmation, which compares the typed
+	// address against the caller's own. A primitive so the handler needs no full user row
+	// (same shape as GetUserRole).
+	UserEmail(ctx context.Context, id int64) (string, error)
 	// Whether a user has a stored original résumé — the check before attaching an 'original'
 	// CV to a request, so a seeker cannot request with a résumé they never uploaded.
 	UserHasResume(ctx context.Context, id int64) (bool, error)
