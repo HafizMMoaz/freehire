@@ -60,7 +60,7 @@ a dictionary term). See the "Measured" section of `design.md`.
 
 ## 8. Documentation
 
-- [ ] 8.1 Update `docs/agents/job-lifecycle.md` and `CLAUDE.md`: closing remains soft, with the catalogue-pruning hard delete as the stated exception
-- [ ] 8.2 Add `internal/pipeline/AGENTS.md` notes for the rejection path and the `Rejected` counter, the hydrating-source asymmetry (a `SeenRefresh` posting is touched and reopened without meeting the filter), and the per-crawl re-hydration cost a pruned posting incurs on hydrating adapters
-- [ ] 8.4 Note in `openspec/specs/ingest-status-page` terms that `ingested_total` now counts post-rejection saves, so the published number steps down when the filter deploys
+- [x] 8.1 Update `docs/agents/job-lifecycle.md` and `CLAUDE.md`: closing remains soft, with the catalogue-pruning hard delete as the stated exception
+- [x] 8.2 Add `internal/pipeline/AGENTS.md` notes for the rejection path and the `Rejected` counter, the hydrating-source asymmetry (a `SeenRefresh` posting is touched and reopened without meeting the filter), and the per-crawl re-hydration cost a pruned posting incurs on hydrating adapters
+- [x] 8.4 Note in `openspec/specs/ingest-status-page` terms that `ingested_total` now counts post-rejection saves, so the published number steps down when the filter deploys
 - [ ] 8.3 Document the iteration loop and the end-of-campaign `backfill-derive` plus `reindex` step
