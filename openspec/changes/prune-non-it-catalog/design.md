@@ -33,6 +33,43 @@ specialities such as `retina specialist ophthalmologist`.
 
 Full analysis: `docs/superpowers/specs/2026-07-25-catalog-pruning-design.md`.
 
+### Measured: the title axis is weaker than the company axis
+
+A spike against prod measured how far title-based mining can actually reach, and
+the answer resized the plan.
+
+Whole-title clustering is nearly useless on this data. The 1.81M unclassified jobs
+carry **1.06M distinct normalized titles**: 897k jobs (49%) have a title that
+occurs exactly once, and 73% sit in titles with fewer than ten jobs. Boards append
+location, schedule and requisition detail, so one role splits across many
+singletons — `personal care aide - caregiver - on-call - weekdays - honolulu` and
+`personal care aide - on-call - waipahu/ ewa beach` are the same job, counted
+apart. The top 100 whole titles cover **6.6%** of the mass.
+
+Clustering by word pair, with Unicode tokenization and stop words, raises the top
+100's coverage to **15.2%** — 2.3× better, and worth having, but still a minority.
+Of those 100 slots, only **44 yield a usable anchored term**; 21 are technical or
+IT-relevant phrases an operator must reject (`systems engineer`, `development
+engineer`, `principal engineer`, `team lead`, `electrical engineer`), 10 are
+boilerplate, and **25 are fragments of a single healthcare employer's verbose
+titles** — the same ~3 100 jobs shredded into overlapping pairs.
+
+That last figure is the finding. A quarter of the operator's review budget goes to
+one company that a company-scoped rule removes in one mechanical step, with no
+dictionary term at all. Buckets A and B hold 550k unclassified jobs on the same
+footing.
+
+So the title rule is the *safe* lever, not the *main* one, and the plan is ordered
+accordingly: rule (1) iterations prove the machinery and the sampling on
+recoverable deletions, and the company-scoped rules carry the volume. The earlier
+framing — company rules as a late addition after several title passes — had the
+weights backwards.
+
+Cost, for the same reason, is capped rather than optimized: the word-pair report
+is an extrapolated ~15–17 minutes per full run versus 67 seconds for whole titles.
+Acceptable a few times per iteration; it is why the report is an operator tool and
+not a scheduled job.
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -124,7 +161,10 @@ considered:* no archive — rejected, an irreversible deletion with no record ma
   board re-admits its postings once a term leaves the dictionary (with new ids), but
   a retired board plus its deleted rows is gone until the YAML entry returns. →
   Company-scoped rules stay capped at buckets A and B and ship after several
-  title-rule iterations have shown the sampling is trustworthy.
+  title-rule iterations have shown the sampling is trustworthy. This is a
+  sequencing precaution, not a demotion: the measurement above puts the volume on
+  the company axis, so the title iterations exist to earn confidence in the gates
+  before the irreversible rules run — not to do the bulk of the work.
 - **Moderator-created jobs are not excluded and are never re-crawled.** They are the
   one case a crawl cannot restore. → Accepted by explicit decision; the archive
   records them and re-adding the exclusion is a single predicate clause.

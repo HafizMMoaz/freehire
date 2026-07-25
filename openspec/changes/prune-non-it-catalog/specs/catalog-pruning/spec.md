@@ -99,12 +99,29 @@ The system SHALL record every deleted job in an archive holding its identity, ti
 
 ### Requirement: Residual unclassified titles are reportable
 
-The system SHALL provide a read-only report of the most frequent job titles that still carry no `is_tech` signal among open, non-duplicate jobs, grouped by normalized title with counts and originating sources. The report is what aims each iteration at the next real cluster and what measures whether the unclassified group is shrinking.
+The system SHALL provide a read-only report of the most frequent word pairs occurring in the titles of open, non-duplicate jobs that still carry no `is_tech` signal, each with the number of distinct jobs containing it and the sources those jobs came from. Clustering MUST be by word pair rather than by whole title: boards append location, schedule and requisition detail to titles, so half the unclassified mass is titles that occur exactly once, and whole-title grouping splits one role across many singleton clusters. A word pair is also the unit the non-tech dictionary accepts, so a reported cluster is directly usable as an anchored term.
+
+Tokenization MUST be Unicode-aware, so accented Latin and non-Latin scripts survive it — a large share of the catalogue is Portuguese, Spanish and Russian. The report MUST exclude pairs containing a stop word, a token shorter than three characters, or a purely numeric token, since employment type, schedule notation and posting boilerplate otherwise dominate the ranking. Each job MUST be counted at most once per pair, so a pair repeated within one title does not inflate its cluster.
 
 #### Scenario: Operator sees the largest remaining clusters
 
 - **WHEN** the report runs with a requested limit
-- **THEN** it lists that many normalized titles by descending job count, each with its count and sources
+- **THEN** it lists that many word pairs by descending count of distinct jobs, each with its count and sources
+
+#### Scenario: One role spelled inconsistently forms one cluster
+
+- **WHEN** several jobs share a role phrase but differ in the location, schedule or requisition detail appended to their titles
+- **THEN** they are counted in the same word-pair cluster
+
+#### Scenario: Accented and non-Latin titles survive tokenization
+
+- **WHEN** a title contains accented Latin or non-Latin words
+- **THEN** those words are tokenized whole rather than split at the non-ASCII character
+
+#### Scenario: Boilerplate is not reported as a cluster
+
+- **WHEN** a title contains employment type, schedule notation or posting boilerplate
+- **THEN** no word pair built from those tokens appears in the report
 
 #### Scenario: Classified jobs are excluded
 

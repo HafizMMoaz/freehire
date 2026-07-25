@@ -1,8 +1,16 @@
 ## 1. Residual-title miner
 
-- [x] 1.1 Add the SQL query that groups open, non-duplicate jobs with `is_tech IS NULL` by normalized title, returning count and distinct sources, ordered by count descending with a limit
-- [ ] 1.2 Add `cmd/mine-titles`: read-only run-once worker reading `DATABASE_URL`, `--limit` flag (default 100), printing title, count, and sources
-- [ ] 1.3 Run it against prod read-only and record the top clusters in the change notes, confirming the residual set matches the design's expectation
+Whole-title clustering was built first and measured at 6.6% coverage — half the
+unclassified mass has a title occurring exactly once. Tasks 1.1 and 1.2 are
+reopened to cluster by word pair instead (15.2%, and a pair is directly usable as
+a dictionary term). See the "Measured" section of `design.md`.
+
+- [x] ~~1.1 Group by normalized whole title~~ — superseded by 1.4/1.5
+- [x] ~~1.2 `cmd/mine-titles` over whole titles~~ — superseded by 1.6
+- [ ] 1.4 Add the stop-word list and the Unicode-aware title tokenizer as a tested Go dictionary, mirroring the `internal/classify` doctrine (curated, no guessing)
+- [ ] 1.5 Replace the query: expand each title into word pairs, drop pairs containing a stop word, a token under three characters, or a numeric token, and return each pair with its count of DISTINCT jobs and its sources
+- [ ] 1.6 Update `cmd/mine-titles` for the new row shape and re-verify the report renders and sorts
+- [ ] 1.7 Run it against prod read-only and record the top clusters in the change notes, confirming the 44/21/25/10 usable/dangerous/shrapnel/noise split the spike measured still holds
 
 ## 2. Ingest-time rejection
 
