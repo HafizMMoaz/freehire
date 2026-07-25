@@ -78,7 +78,7 @@ func Run(ctx context.Context, tools Tools, planner Planner, profile Profile) (Re
 	if err != nil {
 		return Report{}, err
 	}
-	return report(fields, fills, outcomes), nil
+	return report(fields, outcomes), nil
 }
 
 func readForm(ctx context.Context, tools Tools) ([]Field, error) {
@@ -124,34 +124,42 @@ func fillSimple(ctx context.Context, tools Tools, fills []Fill) ([]outcome, erro
 // grounded when it appears within one of the profile's own values (so "Berlin"
 // from "Berlin, Germany" survives) or contains one.
 func groundedIn(profile Profile, fills []Fill) []Fill {
+	known := make([]string, 0, len(profile))
+	for _, value := range profile {
+		if v := normalize(value); v != "" {
+			known = append(known, v)
+		}
+	}
+
 	kept := make([]Fill, 0, len(fills))
 	for _, fill := range fills {
-		value := strings.ToLower(strings.TrimSpace(fill.Value))
-		if value == "" {
-			continue
-		}
-		for _, known := range profile {
-			known = strings.ToLower(strings.TrimSpace(known))
-			if known == "" {
-				continue
-			}
-			if strings.Contains(known, value) || strings.Contains(value, known) {
-				kept = append(kept, fill)
-				break
-			}
+		if grounded(normalize(fill.Value), known) {
+			kept = append(kept, fill)
 		}
 	}
 	return kept
 }
 
-func report(fields []Field, fills []Fill, outcomes []outcome) Report {
+func grounded(value string, known []string) bool {
+	if value == "" {
+		return false
+	}
+	for _, k := range known {
+		if strings.Contains(k, value) || strings.Contains(value, k) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalize(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+func report(fields []Field, outcomes []outcome) Report {
 	byLabel := make(map[string]string, len(outcomes))
 	for _, o := range outcomes {
 		byLabel[o.Label] = o.Status
-	}
-	planned := make(map[string]bool, len(fills))
-	for _, f := range fills {
-		planned[f.Label] = true
 	}
 
 	rep := Report{Filled: []string{}, Deferred: []string{}, Unmapped: []string{}}
@@ -170,10 +178,10 @@ func report(fields []Field, fills []Fill, outcomes []outcome) Report {
 			rep.Filled = append(rep.Filled, field.Label)
 		case field.Combo || byLabel[field.Label] == "deferred_combobox":
 			rep.Deferred = append(rep.Deferred, field.Label)
-		case !planned[field.Label] || byLabel[field.Label] != "":
-			// Never planned, or planned and the browser could not write it
-			// (no matching option, the control vanished) — either way the user
-			// still has to fill it themselves.
+		default:
+			// Never planned, or planned and the browser could not write it (no
+			// matching option, the control vanished) — either way the user still
+			// has to fill it themselves.
 			if field.Required {
 				rep.Unmapped = append(rep.Unmapped, field.Label)
 			} else {
