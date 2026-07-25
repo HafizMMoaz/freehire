@@ -29,10 +29,10 @@ a dictionary term). See the "Measured" section of `design.md`.
 
 ## 4. Prune rule
 
-- [ ] 4.1 Add the company-evidence query: per `(source, company_slug)` over the entire history including closed jobs, whether any job ever had technical evidence and whether any ever had tagged skills
-- [ ] 4.2 Implement the pure rule predicate — title rule, non-tech category at a company without technical evidence, unknown at a company with no evidence at all — table-driven tested across bucket × `is_tech` × category
-- [ ] 4.3 Implement the non-crawled source exclusion (Telegram, submissions, link-source imports) with tests
-- [ ] 4.4 Implement the guard that refuses company-scoped rules for a company whose board is still listed in `sources/*.yml`, reporting those companies instead of deleting
+- [x] 4.1 Add the company-evidence query: per `(source, company_slug)` over the entire history including closed jobs, whether any job ever had technical evidence and whether any ever had tagged skills
+- [x] 4.2 Implement the pure rule predicate — title rule, non-tech category at a company without technical evidence, unknown at a company with no evidence at all — table-driven tested across bucket × `is_tech` × category
+- [x] 4.3 Implement the non-crawled source exclusion (Telegram, submissions, link-source imports) with tests
+- [x] 4.4 Implement the guard that refuses company-scoped rules for a company whose board is still listed in `sources/*.yml`, reporting those companies instead of deleting
 
 ## 5. Prune worker
 
@@ -46,8 +46,8 @@ a dictionary term). See the "Measured" section of `design.md`.
 
 ## 6. Board-retirement report
 
-- [ ] 6.1 Add `cmd/prune --boards`: read the `sources/*.yml` entries, slugify each `company` with the same normalization ingest uses, and list the entries whose company has no technical evidence
-- [ ] 6.2 Test the slug matching against a board file fixture, including an entry whose company name differs in case and punctuation
+- [x] 6.1 Add `cmd/prune --boards`: read the `sources/*.yml` entries, slugify each `company` with the same normalization ingest uses, and list the entries whose company has no technical evidence
+- [x] 6.2 Test the slug matching against a board file fixture, including an entry whose company name differs in case and punctuation
 
 ## 7. First dictionary iteration
 

@@ -9,6 +9,56 @@ import (
 	"context"
 )
 
+const companyTechEvidence = `-- name: CompanyTechEvidence :many
+SELECT source,
+       company_slug,
+       bool_or(is_tech IS TRUE)              AS any_tech,
+       bool_or(cardinality(skills) > 0)      AS any_skills
+FROM jobs
+GROUP BY source, company_slug
+`
+
+type CompanyTechEvidenceRow struct {
+	Source      string `json:"source"`
+	CompanySlug string `json:"company_slug"`
+	AnyTech     bool   `json:"any_tech"`
+	AnySkills   bool   `json:"any_skills"`
+}
+
+// Whether each company has EVER shown technical evidence, over its entire history
+// including closed and duplicate rows. "This company never posts anything technical"
+// is the premise of the company-scoped pruning rules, and it has to rest on the
+// maximum available evidence — restricting it to open jobs would let a company whose
+// one engineering role closed last month read as having none.
+//
+// any_skills is the weaker second signal: the skill dictionary firing on a description
+// means the posting had technical content even when neither the title nor the category
+// resolved. A company with neither signal has shown nothing technical at all.
+func (q *Queries) CompanyTechEvidence(ctx context.Context) ([]CompanyTechEvidenceRow, error) {
+	rows, err := q.db.Query(ctx, companyTechEvidence)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CompanyTechEvidenceRow{}
+	for rows.Next() {
+		var i CompanyTechEvidenceRow
+		if err := rows.Scan(
+			&i.Source,
+			&i.CompanySlug,
+			&i.AnyTech,
+			&i.AnySkills,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const pruneJobs = `-- name: PruneJobs :many
 WITH target_id AS (
     SELECT id, n FROM unnest($1::bigint[]) WITH ORDINALITY AS t(id, n)

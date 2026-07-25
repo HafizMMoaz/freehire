@@ -193,6 +193,16 @@ type Querier interface {
 	// (ties broken by value), serving the searchable option list for the subindustry facet.
 	// Counts are unconditional — they do not reflect other active list filters.
 	CompanySubindustries(ctx context.Context) ([]CompanySubindustriesRow, error)
+	// Whether each company has EVER shown technical evidence, over its entire history
+	// including closed and duplicate rows. "This company never posts anything technical"
+	// is the premise of the company-scoped pruning rules, and it has to rest on the
+	// maximum available evidence — restricting it to open jobs would let a company whose
+	// one engineering role closed last month read as having none.
+	//
+	// any_skills is the weaker second signal: the skill dictionary firing on a description
+	// means the posting had technical content even when neither the title nor the category
+	// resolved. A company with neither signal has shown nothing technical at all.
+	CompanyTechEvidence(ctx context.Context) ([]CompanyTechEvidenceRow, error)
 	// Promote a suggested link to a confirmed one: the suggestion becomes job_id with
 	// link_source 'manual'. No-op (0 rows) when there is no pending suggestion.
 	ConfirmEmailLink(ctx context.Context, arg ConfirmEmailLinkParams) (int64, error)
