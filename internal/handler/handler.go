@@ -12,6 +12,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/strelov1/freehire/internal/accountdelete"
 	"github.com/strelov1/freehire/internal/accounts"
 	"github.com/strelov1/freehire/internal/atscheck"
 	"github.com/strelov1/freehire/internal/auth"
@@ -28,6 +29,7 @@ import (
 	"github.com/strelov1/freehire/internal/enrich"
 	"github.com/strelov1/freehire/internal/gmailsync"
 	"github.com/strelov1/freehire/internal/jobtracking"
+	"github.com/strelov1/freehire/internal/linkimport"
 	"github.com/strelov1/freehire/internal/llm"
 	"github.com/strelov1/freehire/internal/matchanalysis"
 	"github.com/strelov1/freehire/internal/moderation"
@@ -39,6 +41,7 @@ import (
 	"github.com/strelov1/freehire/internal/resumeextract"
 	"github.com/strelov1/freehire/internal/savedsearch"
 	"github.com/strelov1/freehire/internal/search"
+	"github.com/strelov1/freehire/internal/sources"
 	"github.com/strelov1/freehire/internal/submission"
 	"github.com/strelov1/freehire/internal/subscription"
 	"github.com/strelov1/freehire/internal/telegramnotify"
@@ -155,6 +158,9 @@ type API struct {
 	// contribution owns the crowdsourced paste-a-link flow (submit a URL → detect ATS,
 	// dedup by derived identity, record + award a point); list the caller's own.
 	contribution *contribution.Service
+	// imports turns one job page URL into a catalog posting (the engine cmd/resolve-url
+	// runs), backing "add this page" from the browser extension.
+	imports *linkimport.Importer
 	// referral owns the employee-referral use cases (offer to refer, request a referral,
 	// moderate offers, notify referrers). blob is the S3 store proof CVs are written to
 	// (nil when S3 is unconfigured — offer submit then reports 503).
@@ -185,6 +191,10 @@ type API struct {
 	// text for the verdict). Its blob store is nil when S3 is unconfigured; Enabled()
 	// then reports false and callers degrade to per-request résumé upload.
 	resume *resume.Store
+	// accountDelete erases an account for good — rows, objects, and the Gmail grant.
+	// accountEmails resolves the caller's own email for the typed confirmation.
+	accountDelete accountEraser
+	accountEmails accountEmailLookup
 	// cvStore owns the CV-builder use cases (per-user structured CVs, CRUD + seed).
 	cvStore *cv.Store
 	// cvRenderer renders a CV to PDF. Nil when no typst binary is configured; the PDF
@@ -349,6 +359,10 @@ func Register(app *fiber.App, cfg Config) {
 	// network fallback (boardresolve) that fetches a company careers page and detects an
 	// embedded ATS — so vanity-domain links (company.com/careers?gh_jid=…) resolve too.
 	a.contribution = contribution.New(contribution.NewQueriesRepository(queries), boardresolve.New())
+	// Imports fetch a user-supplied page, so they dial through the same SSRF-guarded
+	// client the crawlers use (sources.NewClient). cfg.Search may be nil (no engine
+	// configured), which only skips the index push.
+	a.imports = linkimport.New(cfg.Pool, queries, cfg.Search, sources.NewClient())
 	// The report queue uses one QueriesRepository for both persistence and the
 	// job soft-close (it implements report.Repository and report.JobCloser).
 	reportRepo := report.NewQueriesRepository(queries)
@@ -360,6 +374,11 @@ func Register(app *fiber.App, cfg Config) {
 	// Résumé storage is nil-safe: a nil Blob (S3 unconfigured) yields a disabled service
 	// whose Enabled() is false, so the upload/verdict paths degrade to in-request parsing.
 	a.resume = resume.New(cfg.Blob, resume.NewQueriesRepository(queries))
+	// Account deletion reaches past the FK cascade: cfg.Blob is nil when storage is
+	// unconfigured and the revoker is nil when Gmail is — either way there is nothing
+	// to erase there, which must not stop a member from leaving.
+	a.accountDelete = accountdelete.New(accountdelete.NewQueriesRepository(queries), cfg.Blob, a.revokeGmailGrant)
+	a.accountEmails = queries
 
 	// CV builder: store is always available; the renderer is enabled only when a typst
 	// binary was resolved (assign only a non-nil renderer so the interface stays nil when
@@ -599,12 +618,21 @@ func Register(app *fiber.App, cfg Config) {
 	api.Post("/submissions/:id/approve", keyAuth, requireModerator, a.ApproveSubmission)
 	api.Post("/submissions/:id/reject", keyAuth, requireModerator, a.RejectSubmission)
 
+	// One limiter for every endpoint that makes the server fetch a caller-supplied URL,
+	// so a user's budget is spent across them rather than granted twice.
+	outboundFetch := contributionLimiter()
+
 	// Link contributions: any authenticated user pastes a job URL (cookie or API key);
 	// a supported, novel link is recorded and earns a point. No moderation queue — the
 	// derived-identity dedup and the supported-ATS gate are the only guards. The caller
 	// reads their own contributions; the points balance rides on /auth/me.
-	api.Post("/me/contributions", keyAuth, contributionLimiter(), a.CreateContribution)
+	api.Post("/me/contributions", keyAuth, outboundFetch, a.CreateContribution)
 	api.Get("/me/contributions", keyAuth, a.ListMyContributions)
+
+	// The extension's "add this page": resolve the page to a catalog posting, importing it
+	// when a link-source adapter can read the page and queueing the link for triage when
+	// none can.
+	api.Post("/jobs/resolve", keyAuth, outboundFetch, a.ResolveJob)
 
 	// Employee referrals: any authenticated user (cookie or API key) offers to refer into a
 	// company (proof CV, moderated) and requests a referral from a company's approved-referrer
@@ -657,6 +685,11 @@ func Register(app *fiber.App, cfg Config) {
 	api.Get("/me/credits", keyAuth, a.GetMyCredits)
 	api.Get("/me/credits/history", keyAuth, a.GetMyCreditsHistory)
 	api.Get("/me/recommendations", keyAuth, a.Recommendations)
+
+	// Account deletion is permanent and cookie-only, for the same reason key
+	// management is: a leaked API key must not be able to destroy the account that
+	// issued it. The body confirms the caller's own email address.
+	api.Delete("/me", auth.RequireAuth(a.issuer, a.queries), a.DeleteAccount)
 
 	// API-key management is cookie-only (RequireAuth): a leaked key must not be
 	// able to create, list, or revoke keys. The create endpoint returns the

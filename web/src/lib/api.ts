@@ -898,6 +898,18 @@ export function createApi(
     await call('/api/v1/me/profile', { method: 'DELETE' });
   }
 
+  /** Permanently erase the signed-in account and everything it owns. Irreversible:
+   *  there is no restore path on either side. `email` is the confirmation — it must be
+   *  the caller's own address, or the server answers 400. A 503 means nothing was
+   *  deleted (stored files were unreachable) and the request can be retried. */
+  async function deleteAccount(email: string): Promise<void> {
+    await call('/api/v1/me', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+  }
+
   /** Build the request init for a résumé payload: pasted text goes as JSON, a `File`
    *  goes as multipart. */
   function resumeInit(method: string, input: File | string): RequestInit {
@@ -1443,6 +1455,7 @@ export function createApi(
     getProfile,
     saveProfile,
     deleteProfile,
+    deleteAccount,
     extractResumeProfile,
     getResume,
     getProfileVerdict,
