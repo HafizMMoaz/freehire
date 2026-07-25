@@ -117,6 +117,30 @@ func TestRunDropsAValueThatIsNotGroundedInTheProfile(t *testing.T) {
 	}
 }
 
+// A yes/no question the profile does not answer is exactly what the agent must
+// not answer on the user's behalf: "willing to relocate" and "authorized to
+// work" are claims, not contact details. Nothing grounds "true" in a profile, so
+// the filter drops it and the field is handed back to the user.
+func TestRunDoesNotAnswerAYesNoQuestionTheProfileSaysNothingAbout(t *testing.T) {
+	tools := &fakeTools{fields: []autofillagent.Field{
+		{Label: "Willing to relocate", Type: "checkbox"},
+	}}
+	planner := plannerFunc(func(_ []autofillagent.Field, _ autofillagent.Profile) ([]autofillagent.Fill, error) {
+		return []autofillagent.Fill{{Label: "Willing to relocate", Value: "true"}}, nil
+	})
+
+	rep, err := autofillagent.Run(context.Background(), tools, planner, profile())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(tools.requested) != 0 {
+		t.Fatalf("fill_simple was asked to write %v; the claim is not the agent's to make", tools.requested)
+	}
+	if !contains(rep.Unmapped, "Willing to relocate") {
+		t.Fatalf("unmapped = %v, want the unanswered question handed back", rep.Unmapped)
+	}
+}
+
 func TestRunAcceptsAValueDerivedFromAProfileValue(t *testing.T) {
 	tools := &fakeTools{fields: []autofillagent.Field{{Label: "City", Type: "text"}}}
 	planner := plannerFunc(func(_ []autofillagent.Field, _ autofillagent.Profile) ([]autofillagent.Fill, error) {
