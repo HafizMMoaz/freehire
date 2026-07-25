@@ -15,7 +15,7 @@ import (
 func TestReportLeadsWithSourceBreadthAndTruncates(t *testing.T) {
 	var b strings.Builder
 	rows := []db.ResidualTitleGroupsRow{
-		{Grp: "behavior technician", Jobs: 25939, Sources: []string{
+		{Grp: "banco de talentos", Jobs: 6347, Sources: []string{
 			"ukg", "workday", "icims", "paycom", "lever", "greenhouse"}},
 		{Grp: "afternoon registered", Jobs: 2957, Sources: []string{"apploi"}},
 	}
@@ -25,18 +25,34 @@ func TestReportLeadsWithSourceBreadthAndTruncates(t *testing.T) {
 	}
 	out := b.String()
 
-	if !strings.Contains(out, "6") || !strings.Contains(out, "greenhouse, icims, lever") {
-		t.Errorf("wide group must show its source count and the first few sources:\n%s", out)
+	wide := line(out, "banco de talentos")
+	if !strings.Contains(wide, "6347") || !strings.Contains(wide, "\t6\t") && !strings.Contains(wide, " 6 ") {
+		t.Errorf("wide group's row must carry its job count and source breadth: %q", wide)
 	}
-	if strings.Contains(out, "workday") {
-		t.Errorf("the source list must be truncated, not printed whole:\n%s", out)
+	if !strings.Contains(wide, "greenhouse, icims, lever") {
+		t.Errorf("wide group must sample its first few sources: %q", wide)
 	}
-	if !strings.Contains(out, "+3") {
-		t.Errorf("truncation must say how many sources were elided:\n%s", out)
+	if strings.Contains(wide, "workday") {
+		t.Errorf("the source list must be truncated, not printed whole: %q", wide)
 	}
-	if !strings.Contains(out, "apploi") || strings.Contains(out, "apploi, ") {
-		t.Errorf("a single-source group must render its one source plainly:\n%s", out)
+	if !strings.Contains(wide, "+3") {
+		t.Errorf("truncation must say how many sources were elided: %q", wide)
 	}
+	narrow := line(out, "afternoon registered")
+	if !strings.Contains(narrow, "apploi") || strings.Contains(narrow, "+") {
+		t.Errorf("a single-source group must render its one source plainly: %q", narrow)
+	}
+}
+
+// line returns the output row containing want, so an assertion binds to one row
+// rather than to the whole table.
+func line(out, want string) string {
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, want) {
+			return l
+		}
+	}
+	return ""
 }
 
 // The query orders busiest-first; report must render the rows in the order it was
@@ -44,7 +60,7 @@ func TestReportLeadsWithSourceBreadthAndTruncates(t *testing.T) {
 func TestReportRendersFieldsInGivenOrder(t *testing.T) {
 	var b strings.Builder
 	rows := []db.ResidualTitleGroupsRow{
-		{Grp: "registered behavior technician", Jobs: 3650, Sources: []string{"ukg", "workday"}},
+		{Grp: "behavior technician", Jobs: 3650, Sources: []string{"ukg", "workday"}},
 		{Grp: "line cook", Jobs: 1600, Sources: []string{"greenhouse"}},
 	}
 
@@ -53,12 +69,12 @@ func TestReportRendersFieldsInGivenOrder(t *testing.T) {
 	}
 	out := b.String()
 
-	for _, want := range []string{"3650", "registered behavior technician", "ukg, workday", "1600", "line cook", "greenhouse"} {
+	for _, want := range []string{"3650", "behavior technician", "ukg, workday", "1600", "line cook", "greenhouse"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
 	}
-	if i, j := strings.Index(out, "registered behavior"), strings.Index(out, "line cook"); i > j {
+	if i, j := strings.Index(out, "behavior technician"), strings.Index(out, "line cook"); i > j {
 		t.Errorf("rows must render in the given order, got:\n%s", out)
 	}
 }

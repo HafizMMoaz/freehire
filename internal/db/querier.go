@@ -1194,18 +1194,33 @@ type Querier interface {
 	// A word group is also the unit the non-tech dictionary accepts, so a reported
 	// cluster is directly usable as an anchored term.
 	//
+	// A title is first split at punctuation into runs, and groups are formed only WITHIN
+	// a run. Without that, adjacency spans separators and invents phrases that never
+	// occur: "Personal Care Aide - Honolulu" would yield "aide honolulu", and a term
+	// copied from that cluster into the dictionary would match none of the jobs that
+	// produced it, because the dictionary matches contiguous text. It also inflated the
+	// counts of legitimate clusters by every occurrence that straddled punctuation.
+	//
 	// Two-word groups carry the ordinary case. Three-word groups exist only to bridge a
 	// connector: in Portuguese and Spanish the preposition is part of the role name
 	// ("operador de caixa"), while the two-word fragments around it ("analista de") are
 	// noise, so a connector is allowed mid-group and never at an edge. Every other edge
-	// token must be at least three characters and non-numeric, which is what keeps
-	// shredded schedule notation ("m w", "2nd shift") out of the ranking.
+	// token must be at least three characters and non-numeric, which keeps requisition
+	// numbers and shredded schedule notation ("m w", "req 12345") out of the ranking.
+	// The vocabularies are COALESCEd: a NULL parameter would make every <> ALL(...)
+	// comparison NULL and silently return zero rows — indistinguishable from the
+	// campaign having exhausted the residual mass, which is the one wrong answer this
+	// report must never give.
 	//
 	// Tokenizing on [^[:alnum:]]+ is Unicode-aware, so accented Latin and Cyrillic
 	// survive whole — an ASCII class would split "Técnico" and lose the cluster.
-	// Counting is DISTINCT over jobs, so a group repeated inside one verbose title does
-	// not outrank a real cluster. Closed and duplicate rows are excluded: only a live,
-	// canonical posting is worth a dictionary term.
+	// Closed and duplicate rows are excluded: only a live, canonical posting is worth a
+	// dictionary term.
+	// count(*) is the job count, not an approximation of it: the two branches cannot
+	// emit the same group (a group's space count fixes its branch, and tokens hold no
+	// spaces), and each branch already emits DISTINCT (id, source, group) — which is
+	// what stops a group repeated inside one verbose title from outranking a real
+	// cluster. A second count(DISTINCT id) would only add a per-group sort.
 	ResidualTitleGroups(ctx context.Context, arg ResidualTitleGroupsParams) ([]ResidualTitleGroupsRow, error)
 	// Mark a sent request contacted or declined, recording the acting referrer and time. The
 	// status='sent' guard makes it race-safe: whichever referrer acts first wins; a second

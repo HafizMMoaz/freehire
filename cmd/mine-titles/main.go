@@ -6,9 +6,9 @@
 // It is a run-once-and-exit worker and writes nothing. Grouping is by word group
 // rather than by whole title because boards append location, schedule and
 // requisition detail: measured on prod, half the unclassified mass has a title
-// occurring exactly once, so whole-title clustering reached 6.6% of it against
-// 15.2% for word groups. A word group is also the unit the non-tech dictionary
-// accepts, so a reported cluster can be copied into it as an anchored term.
+// occurring exactly once, so whole-title clustering reached only 6.6% of it. A word
+// group is also the unit the non-tech dictionary accepts, so a reported cluster can
+// be copied into it as an anchored term.
 //
 // Two costs to expect. --limit bounds the output, not the work: the whole group-by
 // runs before the final top-N sort, so a small limit costs the same as a large one.
@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"slices"
 	"strings"
@@ -47,8 +48,8 @@ func main() {
 func run() int {
 	limit := flag.Int("limit", 100, "how many title clusters to report, busiest first")
 	flag.Parse()
-	if *limit <= 0 {
-		log.Printf("--limit must be positive, got %d", *limit)
+	if *limit <= 0 || *limit > math.MaxInt32 {
+		log.Printf("--limit must be between 1 and %d, got %d", math.MaxInt32, *limit)
 		return 1
 	}
 

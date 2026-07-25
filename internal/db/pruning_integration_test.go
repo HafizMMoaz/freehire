@@ -138,6 +138,73 @@ func TestResidualTitleGroupsDropsStopWords(t *testing.T) {
 	}
 }
 
+// Requisition numbers and shredded schedule notation are the noise class that made
+// the ranking useless before the length and numeric rules. Neither rule is covered by
+// the stop list, so without this case both predicates could be deleted unnoticed.
+func TestResidualTitleGroupsDropsShortAndNumericTokens(t *testing.T) {
+	pool := startPostgres(t)
+	q := New(pool)
+	ctx := context.Background()
+	truncate(t, pool)
+
+	residualJob(ctx, t, pool, "i:1", "Line Helper 2024 req 12345 m w", "greenhouse", nil)
+
+	g := groups(ctx, t, q, 50)
+
+	if _, ok := g["line helper"]; !ok {
+		t.Error("the role pair \"line helper\" must survive")
+	}
+	for _, noise := range []string{"helper 2024", "2024 req", "req 12345", "12345 m", "m w"} {
+		if _, ok := g[noise]; ok {
+			t.Errorf("%q was reported — numeric and under-three-character tokens cannot edge a group", noise)
+		}
+	}
+}
+
+// Adjacency must not span punctuation, or the report invents phrases that never
+// occur: a term copied from "aide honolulu" would match none of the jobs that
+// produced it, because the dictionary matches contiguous text.
+func TestResidualTitleGroupsDoesNotBridgePunctuation(t *testing.T) {
+	pool := startPostgres(t)
+	q := New(pool)
+	ctx := context.Background()
+	truncate(t, pool)
+
+	residualJob(ctx, t, pool, "j:1", "Personal Care Aide - Honolulu", "greenhouse", nil)
+	residualJob(ctx, t, pool, "j:2", "Driver, Nurse Aide", "greenhouse", nil)
+
+	g := groups(ctx, t, q, 50)
+
+	if _, ok := g["care aide"]; !ok {
+		t.Error("a group within one run must still form")
+	}
+	for _, phantom := range []string{"aide honolulu", "driver nurse"} {
+		if _, ok := g[phantom]; ok {
+			t.Errorf("%q was reported — it spans a separator and occurs in no title", phantom)
+		}
+	}
+}
+
+// A missing vocabulary must not read as an exhausted catalogue. Passing NULL for a
+// stop list makes every <> ALL(...) comparison NULL, which would filter every row and
+// print the campaign's success message — the one wrong answer this report can give.
+func TestResidualTitleGroupsSurvivesNilVocabularies(t *testing.T) {
+	pool := startPostgres(t)
+	q := New(pool)
+	ctx := context.Background()
+	truncate(t, pool)
+
+	residualJob(ctx, t, pool, "k:1", "Line Cook", "greenhouse", nil)
+
+	rows, err := q.ResidualTitleGroups(ctx, ResidualTitleGroupsParams{RowLimit: 50})
+	if err != nil {
+		t.Fatalf("ResidualTitleGroups: %v", err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("nil vocabularies returned nothing — an empty report is the campaign's stop signal and must not be produced by a missing parameter")
+	}
+}
+
 // A large share of the catalogue is Portuguese, Spanish and Russian. An ASCII-only
 // tokenizer would split "Técnico" into "t" and "cnico" and lose the cluster entirely.
 func TestResidualTitleGroupsTokenizesAccentedAndCyrillic(t *testing.T) {

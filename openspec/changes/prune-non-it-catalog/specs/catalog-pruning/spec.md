@@ -99,14 +99,36 @@ The system SHALL record every deleted job in an archive holding its identity, ti
 
 ### Requirement: Residual unclassified titles are reportable
 
-The system SHALL provide a read-only report of the most frequent word pairs occurring in the titles of open, non-duplicate jobs that still carry no `is_tech` signal, each with the number of distinct jobs containing it and the sources those jobs came from. Clustering MUST be by word pair rather than by whole title: boards append location, schedule and requisition detail to titles, so half the unclassified mass is titles that occur exactly once, and whole-title grouping splits one role across many singleton clusters. A word pair is also the unit the non-tech dictionary accepts, so a reported cluster is directly usable as an anchored term.
+The system SHALL provide a read-only report of the most frequent word groups occurring in the titles of open, non-duplicate jobs that still carry no `is_tech` signal, each with the number of distinct jobs containing it and the sources those jobs came from. Clustering MUST be by word group rather than by whole title: boards append location, schedule and requisition detail to titles, so half the unclassified mass is titles that occur exactly once, and whole-title grouping splits one role across many singleton clusters. A word group is also the unit the non-tech dictionary accepts, so a reported cluster is directly usable as an anchored term.
 
-Tokenization MUST be Unicode-aware, so accented Latin and non-Latin scripts survive it — a large share of the catalogue is Portuguese, Spanish and Russian. The report MUST exclude pairs containing a stop word, a token shorter than three characters, or a purely numeric token, since employment type, schedule notation and posting boilerplate otherwise dominate the ranking. Each job MUST be counted at most once per pair, so a pair repeated within one title does not inflate its cluster.
+A group MUST be two adjacent words, or three adjacent words whose middle word is a connector. Connectors are function words that belong inside a role name but not at its boundary — in Portuguese and Spanish the preposition is part of the role ("operador de caixa") while the two-word fragments around it ("analista de") are noise — so a connector MUST be permitted only in a three-word group's middle position and MUST NOT edge any group. Groups MUST form only within a run of the title delimited by punctuation, so adjacency never spans a separator and the report cannot invent a phrase that occurs in no title.
+
+Tokenization MUST be Unicode-aware, so accented Latin and non-Latin scripts survive it — a large share of the catalogue is Portuguese, Spanish and Russian. A group MUST NOT contain a stop word anywhere, and its edge words MUST be at least three characters and not purely numeric, since employment type, posting boilerplate, requisition numbers and shredded schedule notation otherwise dominate the ranking. Each job MUST be counted at most once per group, so a group repeated within one title does not inflate its cluster. An absent or empty vocabulary MUST NOT be treated as excluding everything: an empty report is the signal that the residual mass is exhausted, and a missing parameter must never produce it.
 
 #### Scenario: Operator sees the largest remaining clusters
 
 - **WHEN** the report runs with a requested limit
-- **THEN** it lists that many word pairs by descending count of distinct jobs, each with its count and sources
+- **THEN** it lists that many word groups by descending count of distinct jobs, each with its count and sources
+
+#### Scenario: A connector is bridged mid-group and rejected at an edge
+
+- **WHEN** a title contains a role name whose middle word is a connector, such as "operador de caixa"
+- **THEN** the three-word group is reported and the two-word fragments ending or beginning with that connector are not
+
+#### Scenario: Adjacency does not span punctuation
+
+- **WHEN** two words are adjacent in a title only across a separator, as "aide" and "honolulu" are in "Personal Care Aide - Honolulu"
+- **THEN** no group pairs them
+
+#### Scenario: Requisition numbers and shredded notation are not reported
+
+- **WHEN** a title contains a purely numeric token or a token shorter than three characters
+- **THEN** no group is edged by it
+
+#### Scenario: A missing vocabulary does not empty the report
+
+- **WHEN** the report runs with no stop words and no connectors supplied
+- **THEN** it still reports the clusters present, rather than reporting none
 
 #### Scenario: One role spelled inconsistently forms one cluster
 

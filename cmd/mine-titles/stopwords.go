@@ -12,17 +12,28 @@ package main
 // conservative. A word here silently removes every group containing it, so a term
 // that is part of a real role phrase would hide that whole family from mining
 // rather than merely filter it — "home" would cost "home health aide", "call" would
-// cost "call center". A test asserts no entry is a token of any classify non-tech
-// term; keep it that way when adding.
+// cost "call center".
+//
+// A test asserts no entry is a token of any classify non-tech term, but note what
+// that guard can and cannot do: every family already in that dictionary is by
+// construction already classified, so it is absent from the unclassified population
+// this miner reads. The guard protects the families that need it least; the ones at
+// risk are the unknown families the miner exists to discover, which no test can see.
+// That is why words like "shift", "night", "day" and "travel" are deliberately NOT
+// listed despite being schedule words — they anchor real roles ("shift supervisor",
+// "night auditor", "day porter", "travel nurse"), and noise in the report is cheap
+// for an operator to skip while a hidden cluster is invisible. The asymmetry decides
+// every borderline case: when unsure, leave the word out. Re-running the miner with
+// an emptied stop list once per campaign is the only way to see what the list hides.
 var stopWords = []string{
 	// Pronouns — never part of a role
 	"you", "our", "your", "we",
 
-	// Employment type, schedule and work arrangement — a job attribute, not a role
-	"full", "part", "time", "shift", "hour", "hours", "day", "days", "week",
-	"weekly", "weekday", "weekdays", "weekend", "weekends", "night", "nights",
-	"evening", "morning", "prn", "temp", "temporary", "permanent", "contract",
-	"casual", "seasonal", "remote", "onsite", "hybrid", "travel",
+	// Employment type and work arrangement — a job attribute, not a role. Schedule
+	// words that also anchor roles are deliberately absent; see the note above.
+	"full", "part", "time", "hour", "hours", "week", "weekly", "weekday",
+	"weekdays", "weekend", "weekends", "prn", "temp", "temporary", "permanent",
+	"contract", "casual", "seasonal", "remote", "onsite", "hybrid",
 
 	// Posting boilerplate — the words a board wraps around the role
 	"new", "needed", "hiring", "urgent", "immediate", "immediately", "now", "join",
@@ -49,12 +60,20 @@ var connectors = []string{
 	// Portuguese and Spanish
 	"de", "da", "do", "dos", "das", "em", "para", "com", "del", "la", "el", "los",
 	"las", "por", "que", "y",
-	// German
-	"der", "die", "und", "fur",
+	// German. "für" carries its umlaut through the Unicode tokenizer, so the ASCII
+	// spelling would never match.
+	"der", "die", "und", "für",
 	// Russian
-	"по", "на", "для", "или", "под", "и", "с",
+	"по", "на", "для", "или", "под", "и", "с", "в", "от", "к",
 	// Danish and Norwegian — a prod run surfaced "søges til" ("wanted for") in the
 	// top 100, which is a posting phrase, not a role. Danish "for" is spelled like
 	// the English one and is already listed above.
 	"til", "med", "hos",
 }
+
+// A language whose function words are absent here fails in a particular way worth
+// knowing: its short prepositions are dropped by the query's three-character rule
+// AND cannot be bridged, so "X di Y" (Italian) or "X w Y" (Polish) yields only the
+// pair "X Y"... which never forms, because the words are not adjacent. Those roles
+// vanish from the report entirely rather than appearing as noise. Add a language's
+// connectors before mining a market that uses it.
