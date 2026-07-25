@@ -40,10 +40,7 @@ import (
 // the postings on the next pass.
 func outOfCatalogue(j job.Job) bool {
 	f := j.Fields()
-	if f.IsTech != nil && *f.IsTech {
-		return false
-	}
-	return classify.IsNonTech(f.Title)
+	return classify.ConfirmedNonTech(f.Title, f.IsTech != nil && *f.IsTech)
 }
 
 // loggedRejectionSamples is how many rejected titles a board's log line carries. A

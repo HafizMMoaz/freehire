@@ -5,6 +5,7 @@ import (
 
 	"github.com/strelov1/freehire/internal/classify"
 	"github.com/strelov1/freehire/internal/enrich"
+	"github.com/strelov1/freehire/internal/jobderive"
 )
 
 // The three rules that make a job a deletion target. The name is recorded on every
@@ -24,12 +25,18 @@ const (
 	ruleUnknown = "unknown_at_empty_company"
 )
 
-// candidate is the part of a job the rule reads.
+// candidate is the part of a job the rule reads. Everything here is a stored column;
+// the rule derives its own signals from them rather than trusting a stored is_tech,
+// because the campaign edits the dictionaries between runs and a stale label would
+// decide a permanent deletion.
 type candidate struct {
-	Source   string
-	Title    string
-	Category string
-	// IsTech is the tri-state signal: nil means no dictionary could place the job.
+	Source      string
+	CompanySlug string
+	Title       string
+	Category    string
+	// IsTech is the stored tri-state, used only to tell "no dictionary placed this"
+	// (nil) from "a dictionary placed it as non-technical" (false). The positive case
+	// is re-derived, never read from here.
 	IsTech *bool
 }
 
@@ -55,11 +62,17 @@ func matchRule(c candidate, ev evidence, crawledSources map[string]bool) (string
 	if !crawledSources[c.Source] {
 		return "", false
 	}
-	if c.IsTech != nil && *c.IsTech {
+	if classify.ConfirmedNonTech(c.Title, jobderive.TechEvidence(c.Category, c.Title)) {
+		return ruleTitle, true
+	}
+	// The company-scoped rules rest on a company's history, so a posting with no
+	// company has none to rest on. Without this they would all pool under the empty
+	// slug and be decided together.
+	if c.CompanySlug == "" {
 		return "", false
 	}
-	if classify.IsNonTech(c.Title) {
-		return ruleTitle, true
+	if jobderive.TechEvidence(c.Category, c.Title) {
+		return "", false
 	}
 	if !ev.anyTech && slices.Contains(enrich.NonTechCategories, c.Category) {
 		return ruleBusiness, true

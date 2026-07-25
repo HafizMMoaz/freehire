@@ -11,6 +11,7 @@ import (
 	"context"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -354,13 +355,20 @@ func TestPruneJobsArchivesWhatItDeletes(t *testing.T) {
 		t.Error("the untargeted job must survive")
 	}
 
-	var title, rule string
+	var (
+		archID                             int64
+		src, ext, title, companySlug, rule string
+		prunedAt                           time.Time
+	)
 	if err := pool.QueryRow(ctx,
-		"SELECT title, rule FROM pruned_jobs WHERE id = $1", nurse.ID).Scan(&title, &rule); err != nil {
+		"SELECT id, source, external_id, title, company_slug, rule, pruned_at FROM pruned_jobs WHERE id = $1",
+		nurse.ID).Scan(&archID, &src, &ext, &title, &companySlug, &rule, &prunedAt); err != nil {
 		t.Fatalf("read archive: %v", err)
 	}
-	if title != "Registered Nurse" || rule != "company" {
-		t.Errorf("archive row = %q/%q, want \"Registered Nurse\"/\"company\" — the rule is recorded per row", title, rule)
+	if archID != nurse.ID || src != "ukg" || ext != "p:2" || title != "Registered Nurse" ||
+		companySlug != "acme" || rule != "company" || prunedAt.IsZero() {
+		t.Errorf("archive row = %d/%q/%q/%q/%q/%q/%v — every identifying field must be recorded",
+			archID, src, ext, title, companySlug, rule, prunedAt)
 	}
 }
 
@@ -451,5 +459,36 @@ func TestPruneJobsCascadesUserInteractions(t *testing.T) {
 	}
 	if left != 0 {
 		t.Errorf("user_jobs rows = %d, want 0 (cascaded)", left)
+	}
+}
+
+// duplicate_of can chain: RecomputeRoleDuplicatesForCompany and the aggregator
+// suppression both scope to open jobs, so a closed row's pointer is never repointed
+// when its parent later becomes a duplicate itself. The prune scan reaches closed rows
+// by design, so it meets those chains — and a one-level extension leaves the tail
+// pointing at a deleted row, which the restricting foreign key rejects, taking the
+// whole batch down.
+func TestPruneJobsFollowsDuplicateChains(t *testing.T) {
+	pool := startPostgres(t)
+	q := New(pool)
+	ctx := context.Background()
+	truncate(t, pool)
+
+	a := residualJob(ctx, t, pool, "c:1", "Line Cook", "greenhouse", nil)
+	b := residualJob(ctx, t, pool, "c:2", "Line Cook", "ukg", nil)
+	c := residualJob(ctx, t, pool, "c:3", "Line Cook", "workday", nil)
+	if _, err := pool.Exec(ctx, "UPDATE jobs SET duplicate_of = $1 WHERE id = $2", c.ID, b.ID); err != nil {
+		t.Fatalf("link b -> c: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE jobs SET duplicate_of = $1 WHERE id = $2", b.ID, a.ID); err != nil {
+		t.Fatalf("link a -> b: %v", err)
+	}
+
+	got, err := q.PruneJobs(ctx, PruneJobsParams{Ids: []int64{c.ID}, Rules: []string{"title"}})
+	if err != nil {
+		t.Fatalf("PruneJobs on a chain: %v", err)
+	}
+	if len(got) != 3 {
+		t.Errorf("deleted %d rows, want 3 — the whole chain goes with its root", len(got))
 	}
 }

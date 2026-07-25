@@ -15,6 +15,7 @@ SELECT source,
        bool_or(is_tech IS TRUE)              AS any_tech,
        bool_or(cardinality(skills) > 0)      AS any_skills
 FROM jobs
+WHERE company_slug <> ''
 GROUP BY source, company_slug
 `
 
@@ -34,6 +35,11 @@ type CompanyTechEvidenceRow struct {
 // any_skills is the weaker second signal: the skill dictionary firing on a description
 // means the posting had technical content even when neither the title nor the category
 // resolved. A company with neither signal has shown nothing technical at all.
+// Postings with no company are excluded: they would otherwise pool into one
+// pseudo-company per source whose combined evidence then decides every one of them.
+//
+// This is an uncapped full-table GROUP BY over the whole jobs table, returning a row
+// per company. It is computed once per prune run, not per batch.
 func (q *Queries) CompanyTechEvidence(ctx context.Context) ([]CompanyTechEvidenceRow, error) {
 	rows, err := q.db.Query(ctx, companyTechEvidence)
 	if err != nil {
@@ -60,7 +66,7 @@ func (q *Queries) CompanyTechEvidence(ctx context.Context) ([]CompanyTechEvidenc
 }
 
 const pruneJobs = `-- name: PruneJobs :many
-WITH target_id AS (
+WITH RECURSIVE target_id AS (
     SELECT id, n FROM unnest($1::bigint[]) WITH ORDINALITY AS t(id, n)
 ),
 target_rule AS (
@@ -69,14 +75,17 @@ target_rule AS (
 target AS (
     SELECT i.id, r.rule FROM target_id i JOIN target_rule r USING (n)
 ),
+walk AS (
+    SELECT j.id, t.rule, 1 AS direct
+    FROM jobs j JOIN target t ON j.id = t.id
+    UNION
+    SELECT j.id, w.rule, 0
+    FROM jobs j JOIN walk w ON j.duplicate_of = w.id
+),
 cluster AS (
     SELECT DISTINCT ON (id) id, rule
-    FROM (
-        SELECT j.id, t.rule FROM jobs j JOIN target t ON j.id = t.id
-        UNION ALL
-        SELECT j.id, t.rule FROM jobs j JOIN target t ON j.duplicate_of = t.id
-    ) x
-    ORDER BY id
+    FROM walk
+    ORDER BY id, direct DESC, rule
 ),
 deleted AS (
     DELETE FROM jobs
@@ -99,12 +108,21 @@ type PruneJobsParams struct {
 // the only way to answer, after an irreversible removal, whether something was taken
 // that should have been kept.
 //
-// The batch extends to each target's duplicate cluster: jobs.duplicate_of is the one
-// foreign key to jobs that restricts, so deleting a canonical row with a live duplicate
-// would fail — and semantically the duplicates of a cook posting are cook postings.
-// DISTINCT ON collapses a row that is both named directly and reachable as another
-// target's duplicate, which would otherwise violate the archive's primary key and take
-// the whole batch down.
+// The batch extends to each target's whole duplicate CHAIN, not just its immediate
+// duplicates. jobs.duplicate_of is the one foreign key to jobs that restricts, and it
+// chains: RecomputeRoleDuplicatesForCompany and the aggregator suppression both scope
+// to open jobs, so a closed row's pointer is never repointed when its parent later
+// becomes a duplicate itself — and the prune scan reaches closed rows by design. A
+// one-level extension would leave the tail pointing at a deleted row and the whole
+// batch would abort on the foreign key. UNION (not UNION ALL) terminates a cycle.
+//
+// Semantically the chain belongs together anyway: the duplicates of a cook posting are
+// cook postings, and they inherit the rule that named their root.
+//
+// DISTINCT ON collapses a row reachable more than once, which would otherwise violate
+// the archive's primary key and take the batch down. It orders direct matches first so
+// a row named outright keeps its own rule rather than an arbitrary one — the archive's
+// purpose is auditing a rule in isolation, which a nondeterministic rule defeats.
 //
 // Every other reference to jobs cascades or nulls, so a user's saved job goes with it.
 // That is an accepted cost of the campaign, not an oversight.

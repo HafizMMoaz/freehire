@@ -47,7 +47,7 @@ func run() int {
 	// Read the board files before touching the database: an unreadable source
 	// directory must stop the run, not yield an empty listing that reads as "every
 	// board is retired".
-	listed, err := listedCompanies(*sourcesDir)
+	brd, err := loadBoards(*sourcesDir)
 	if err != nil {
 		log.Printf("prune: %v", err)
 		return 1
@@ -66,7 +66,7 @@ func run() int {
 		return 1
 	}
 
-	if err := reportBoards(os.Stdout, rows, listed); err != nil {
+	if err := reportBoards(os.Stdout, rows, brd); err != nil {
 		log.Printf("prune: write report: %v", err)
 		return 1
 	}
@@ -81,10 +81,10 @@ func run() int {
 //
 // Companies with any evidence are omitted, and so are slugs the board files no longer
 // mention: those are already retired and need no PR.
-func reportBoards(w io.Writer, rows []db.CompanyTechEvidenceRow, listed map[string]bool) error {
+func reportBoards(w io.Writer, rows []db.CompanyTechEvidenceRow, brd boards) error {
 	var retire []db.CompanyTechEvidenceRow
 	for _, r := range rows {
-		if r.AnyTech || r.AnySkills || !listed[r.CompanySlug] {
+		if r.AnyTech || r.AnySkills || brd.retired(r.Source, r.CompanySlug) {
 			continue
 		}
 		retire = append(retire, r)

@@ -120,6 +120,16 @@ var nonTechTitleTerms = []string{
 	"recepcionista",
 }
 
+// ConfirmedNonTech reports whether a title states a non-technical role AND nothing
+// technical overrides it. It exists because IsNonTech alone is not a safe basis for
+// removing a posting: the dictionary matches its terms anywhere in a title, and it was
+// written on the contract stated above — consulted only after the tech check. Callers
+// that DELETE on this signal (the ingest filter, the prune rule) must go through here,
+// so the precedence cannot be forgotten in one of them and not the other.
+func ConfirmedNonTech(title string, hasTechEvidence bool) bool {
+	return !hasTechEvidence && IsNonTech(title)
+}
+
 // NonTechTerms returns the curated non-tech title terms. Exposed so the catalogue
 // miner can check its stop-word list against them: a stop word that is also a token
 // of a known non-tech role would drop every word pair built from that phrase, hiding

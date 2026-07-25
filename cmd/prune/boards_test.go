@@ -36,18 +36,24 @@ func TestListedCompaniesMatchesIngestSlugging(t *testing.T) {
 	// Not a board file: must not be read as one.
 	writeBoardFile(t, dir, "README.md", "not yaml")
 
-	listed, err := listedCompanies(dir)
+	b, err := loadBoards(dir)
 	if err != nil {
-		t.Fatalf("listedCompanies: %v", err)
+		t.Fatalf("loadBoards: %v", err)
 	}
 
-	for _, want := range []string{"acme-corp", "beta-co", "gamma"} {
-		if !listed[want] {
-			t.Errorf("company slug %q not listed; got %v", want, keys(listed))
+	for _, want := range []boardKey{
+		{"greenhouse", "acme-corp"}, {"greenhouse", "beta-co"}, {"lever", "gamma"},
+	} {
+		if !b.listed[want] {
+			t.Errorf("%+v not listed; got %v", want, b.listed)
 		}
 	}
-	if len(listed) != 3 {
-		t.Errorf("listed %d companies, want 3 — README.md is not a board file", len(listed))
+	if len(b.listed) != 3 {
+		t.Errorf("listed %d entries, want 3 — README.md is not a board file", len(b.listed))
+	}
+	// The same slug under another provider is a different board and stays prunable.
+	if !b.retired("workday", "acme-corp") {
+		t.Error("a slug listed under greenhouse must not shield the same slug under workday")
 	}
 }
 
@@ -57,12 +63,12 @@ func TestListedCompaniesOmitsUnlisted(t *testing.T) {
 	dir := t.TempDir()
 	writeBoardFile(t, dir, "greenhouse.yml", "- company: Acme\n  board: acme\n")
 
-	listed, err := listedCompanies(dir)
+	b, err := loadBoards(dir)
 	if err != nil {
-		t.Fatalf("listedCompanies: %v", err)
+		t.Fatalf("loadBoards: %v", err)
 	}
-	if listed["retired-co"] {
-		t.Error("a company absent from every board file must not read as listed")
+	if !b.retired("greenhouse", "retired-co") {
+		t.Error("a company absent from every board file must read as retired")
 	}
 }
 
@@ -70,24 +76,40 @@ func TestListedCompaniesOmitsUnlisted(t *testing.T) {
 // set: an empty set reads as "every board is retired", which would let the company
 // rules delete the whole catalogue.
 func TestListedCompaniesFailsClosed(t *testing.T) {
-	if _, err := listedCompanies(filepath.Join(t.TempDir(), "missing")); err == nil {
+	if _, err := loadBoards(filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Fatal("an unreadable source directory must be an error, not an empty listing — empty means every board is retired")
 	}
 }
 
-func keys(m map[string]bool) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
+// The guard runs against the real sources/ directory on every invocation, and that
+// directory holds files that are not board lists — telegram.yml is the channel list for
+// cmd/tg-ingest and does not parse as one. A fixture-only test cannot see that, and did
+// not: --boards errored on every real run until this case existed.
+func TestLoadBoardsReadsTheRealSourcesDirectory(t *testing.T) {
+	b, err := loadBoards("../../sources")
+	if err != nil {
+		t.Fatalf("loadBoards on the real directory: %v", err)
 	}
-	return out
+	if len(b.listed) < 100 {
+		t.Errorf("listed %d entries, want the real catalogue's boards", len(b.listed))
+	}
+	if !b.crawled["greenhouse"] {
+		t.Error("greenhouse must be in the crawled allow-list")
+	}
+	for _, notCrawled := range []string{"telegram", "manual", ""} {
+		if b.crawled[notCrawled] {
+			t.Errorf("%q is not a board provider and must not be in the crawled allow-list", notCrawled)
+		}
+	}
 }
 
 // The report is what a retirement PR is written from, so it must name only companies
 // that are both still listed and genuinely without technical evidence. A false entry
 // costs a live board; a missing one leaves jobs the company rules cannot touch.
 func TestReportBoardsListsOnlyRetirableCompanies(t *testing.T) {
-	listed := map[string]bool{"nurse-co": true, "tech-co": true, "skills-co": true}
+	brd := boards{listed: map[boardKey]bool{
+		{"ukg", "nurse-co"}: true, {"greenhouse", "tech-co"}: true, {"greenhouse", "skills-co"}: true,
+	}}
 	rows := []db.CompanyTechEvidenceRow{
 		{Source: "ukg", CompanySlug: "nurse-co"},
 		{Source: "greenhouse", CompanySlug: "tech-co", AnyTech: true},
@@ -96,7 +118,7 @@ func TestReportBoardsListsOnlyRetirableCompanies(t *testing.T) {
 	}
 
 	var b strings.Builder
-	if err := reportBoards(&b, rows, listed); err != nil {
+	if err := reportBoards(&b, rows, brd); err != nil {
 		t.Fatalf("reportBoards: %v", err)
 	}
 	out := b.String()
@@ -116,7 +138,7 @@ func TestReportBoardsListsOnlyRetirableCompanies(t *testing.T) {
 func TestReportBoardsSaysSoWhenNothingToRetire(t *testing.T) {
 	var b strings.Builder
 	if err := reportBoards(&b, []db.CompanyTechEvidenceRow{{Source: "greenhouse", CompanySlug: "tech-co", AnyTech: true}},
-		map[string]bool{"tech-co": true}); err != nil {
+		boards{listed: map[boardKey]bool{{"greenhouse", "tech-co"}: true}}); err != nil {
 		t.Fatalf("reportBoards: %v", err)
 	}
 	if strings.TrimSpace(b.String()) == "" {

@@ -31,8 +31,10 @@ a dictionary term). See the "Measured" section of `design.md`.
 
 - [x] 4.1 Add the company-evidence query: per `(source, company_slug)` over the entire history including closed jobs, whether any job ever had technical evidence and whether any ever had tagged skills
 - [x] 4.2 Implement the pure rule predicate — title rule, non-tech category at a company without technical evidence, unknown at a company with no evidence at all — table-driven tested across bucket × `is_tech` × category
-- [x] 4.3 Implement the non-crawled source exclusion (Telegram, submissions, link-source imports) with tests
-- [x] 4.4 Implement the guard that refuses company-scoped rules for a company whose board is still listed in `sources/*.yml`, reporting those companies instead of deleting
+- [x] 4.3 Implement the non-crawled source exclusion as an ALLOW-list of providers built from the board files (`boards.crawled`), not a deny-list — a deny-list silently arms any non-crawled source added later, and that deletion is unrecoverable
+- [x] 4.4 Build the guard's ingredients: `boards.retired(provider, slug)` keyed the way the catalogue is, and `companyScoped(rule)`
+- [ ] 4.5 WIRE the guard in the worker (group 5 must not skip this — 4.4 is ingredients only). The refusal is per candidate and runs BEFORE the delete, not as a post-hoc report; `loadBoards` must be called before `worker.Bootstrap` so an unreadable directory kills the run before anything is removed. Aggregator providers whose board entry is a region rather than an employer (`trudvsem` and the other multi-employer sources) must be excluded from the company-scoped rules outright — their employers are never "listed" and would read as retired while the board is still crawled
+- [ ] 4.6 Assert `len(ids) == len(rules)` in the `PruneJobs` wrapper: the query inner-joins on ordinality, so a caller off-by-one silently under-deletes with no error
 
 ## 5. Prune worker
 
