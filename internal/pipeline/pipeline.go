@@ -307,9 +307,12 @@ func (r Runner) ingestBoard(ctx context.Context, e sources.CompanyEntry) Stats {
 	// until the whole board finishes.
 	if ss, streaming := src.(sources.StreamingSource); streaming {
 		st := r.ingestStream(ctx, e, ss)
-		// A streaming board that saved nothing AND failed is a true outage; partial progress
-		// (some jobs saved before a mid-crawl error) is a success signal, not a board failure.
-		if st.Failed > 0 && st.Ingested == 0 {
+		// A streaming board that made no progress at all AND failed is a true outage;
+		// partial progress is a success signal, not a board failure. A rejected posting
+		// is progress: the crawl reached it and the filter turned it away. Without that,
+		// a mid-crawl error on an all-rejected board — the normal case on the non-tech-heavy
+		// national feeds — would count as a failure and cool a healthy board for hours.
+		if st.Failed > 0 && st.Ingested == 0 && st.Rejected == 0 {
 			r.recordFailure(ctx, e, "streaming board failed with no progress")
 		} else {
 			r.recordSuccess(ctx, e, st.Ingested)
@@ -327,7 +330,8 @@ func (r Runner) ingestBoard(ctx context.Context, e sources.CompanyEntry) Stats {
 	}
 
 	var firstErr error
-	var ingested, skipped, rejected int
+	var ingested, skipped int
+	var rej rejections
 	for _, j := range raw {
 		// A HydratingSource marks an already-ingested posting it re-listed but did not
 		// re-fetch: refresh its liveness by identity instead of re-upserting content-less
@@ -351,8 +355,9 @@ func (r Runner) ingestBoard(ctx context.Context, e sources.CompanyEntry) Stats {
 			}
 			continue
 		}
+		rej.candidate()
 		if outOfCatalogue(dj) {
-			rejected++
+			rej.reject(dj.Fields().Title)
 			continue
 		}
 		if err := r.Store.Save(ctx, dj); err != nil {
@@ -371,11 +376,11 @@ func (r Runner) ingestBoard(ctx context.Context, e sources.CompanyEntry) Stats {
 		log.Printf("ingest: %s board %q (%s): skipped %d/%d jobs on construct or save error (e.g. %v)",
 			e.Provider, e.Board, e.Company, skipped, len(raw), firstErr)
 	}
-	logRejections(e, rejected, len(raw))
+	rej.log(e)
 	// The board was reachable (Fetch succeeded), so it is healthy regardless of per-job
 	// save skips — those are stats.Skipped, not a board outage.
 	r.recordSuccess(ctx, e, ingested)
-	return Stats{Ingested: ingested, Skipped: skipped, Rejected: rejected}
+	return Stats{Ingested: ingested, Skipped: skipped, Rejected: rej.rejected}
 }
 
 // fetchBoard fetches a board's postings, preferring a hydrating adapter's FetchNew — which
@@ -460,7 +465,8 @@ func (r Runner) recordFailure(ctx context.Context, e sources.CompanyEntry, msg s
 // buffered path; a board-level FetchStream error counts the board failed but keeps whatever was
 // already saved (the 48h unseen-sweep guards against a short crawl closing the un-reached tail).
 func (r Runner) ingestStream(ctx context.Context, e sources.CompanyEntry, ss sources.StreamingSource) Stats {
-	var ingested, skipped, rejected int
+	var ingested, skipped int
+	var rej rejections
 	var (
 		mu       sync.Mutex
 		firstErr error
@@ -497,8 +503,9 @@ func (r Runner) ingestStream(ctx context.Context, e sources.CompanyEntry, ss sou
 			}
 			return
 		}
+		rej.candidate()
 		if outOfCatalogue(dj) {
-			rejected++
+			rej.reject(dj.Fields().Title)
 			return
 		}
 		if err := r.Store.Save(ctx, dj); err != nil {
@@ -512,7 +519,7 @@ func (r Runner) ingestStream(ctx context.Context, e sources.CompanyEntry, ss sou
 	}
 
 	err := ss.FetchStream(ctx, e, emit)
-	logRejections(e, rejected, total)
+	rej.log(e)
 	if skipped > 0 {
 		log.Printf("ingest: %s board %q (%s): skipped %d/%d jobs on save error (e.g. %v)",
 			e.Provider, e.Board, e.Company, skipped, total, firstErr)
@@ -520,9 +527,9 @@ func (r Runner) ingestStream(ctx context.Context, e sources.CompanyEntry, ss sou
 	if err != nil {
 		log.Printf("ingest: %s board %q (%s) failed after %d saved: %v",
 			e.Provider, e.Board, e.Company, ingested, err)
-		return Stats{Ingested: ingested, Failed: 1, Skipped: skipped, Rejected: rejected}
+		return Stats{Ingested: ingested, Failed: 1, Skipped: skipped, Rejected: rej.rejected}
 	}
-	return Stats{Ingested: ingested, Skipped: skipped, Rejected: rejected}
+	return Stats{Ingested: ingested, Skipped: skipped, Rejected: rej.rejected}
 }
 
 // jobIdentity is the dedup key a posting persists under: the provider is the source, and the

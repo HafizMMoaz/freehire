@@ -1,11 +1,13 @@
 package pipeline
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
+	"strings"
 	"testing"
 
-	"github.com/strelov1/freehire/internal/job"
 	"github.com/strelov1/freehire/internal/sources"
 )
 
@@ -112,22 +114,123 @@ func TestRunCountsRejectionsSeparatelyFromSkips(t *testing.T) {
 	}
 }
 
-// The filter belongs to the crawled pipeline, not to the shared aggregate factory that
-// Telegram extraction, user submissions and link-source imports also write through.
-// Those paths are never re-crawled, so a filter mistake there could not be undone —
-// job.New must keep constructing a non-technical posting without complaint.
-func TestSharedFactoryDoesNotFilterNonTech(t *testing.T) {
-	j, err := job.New(job.Draft{
-		Source:     "telegram",
-		ExternalID: "chan:1",
-		Title:      "Registered Nurse",
-		Company:    "Acme",
-		URL:        "https://example.test/1",
+// The non-tech dictionary matches anywhere in a title and was written on the contract
+// that tech evidence is checked first. Used as a drop gate without that veto it rejects
+// postings the pipeline itself derived as technical — every title here carries
+// is_tech=true and also matches a dictionary term (hvac, teller, cook, patient care).
+// Labelling them non-tech was harmless because a label is reversible; dropping them is
+// not, and a rejected posting leaves no record anywhere.
+func TestRunKeepsTechnicalTitlesThatMatchANonTechTerm(t *testing.T) {
+	titles := []string{
+		"DevOps Engineer (HVAC IoT Platform)",
+		"Backend Engineer — Teller Systems",
+		"Data Engineer, Patient Care Platform",
+		"Senior Software Engineer - Cook County Health",
+	}
+	var jobs []sources.Job
+	for i, title := range titles {
+		jobs = append(jobs, sources.Job{ExternalID: string(rune('1' + i)), Title: title, Company: "Acme"})
+	}
+	store := &fakeStore{}
+	r := Runner{Registry: registry(fakeSource{provider: "greenhouse", jobs: jobs}), Store: store}
+
+	stats, err := r.Run(context.Background(), []sources.CompanyEntry{
+		{Company: "Acme", Provider: "greenhouse", Board: "acme"},
 	})
 	if err != nil {
-		t.Fatalf("job.New must not reject a non-technical posting: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
-	if j.Fields().Title != "Registered Nurse" {
-		t.Errorf("title = %q, want it preserved", j.Fields().Title)
+	if got := stats.Total(); got.Rejected != 0 || got.Ingested != len(titles) {
+		t.Errorf("stats = %+v, want Ingested=%d Rejected=0 — technical evidence vetoes the dictionary", got, len(titles))
+	}
+}
+
+// A streaming board that emitted postings before failing made progress even if the
+// filter turned every one of them away. Counting that as a board failure would cool a
+// healthy board for hours after three occurrences — and an all-rejected partial crawl
+// is the normal case on the non-tech-heavy national feeds, not the edge case.
+func TestRunTreatsAllRejectedStreamProgressAsSuccess(t *testing.T) {
+	src := fakeStreamingSource{provider: "jobtech", failAfter: 2, jobs: []sources.Job{
+		{ExternalID: "1", Title: "Line Cook", Company: "Acme"},
+		{ExternalID: "2", Title: "Registered Nurse", Company: "Acme"},
+		{ExternalID: "3", Title: "Backend Engineer", Company: "Acme"},
+	}}
+	health := &fakeHealth{}
+	r := Runner{Registry: registry(src), Store: &fakeStore{}, BoardHealth: health}
+
+	stats, err := r.Run(context.Background(), []sources.CompanyEntry{
+		{Company: "Acme", Provider: "jobtech", Board: "acme"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := stats.Total(); got.Rejected != 2 {
+		t.Fatalf("stats = %+v, want Rejected=2", got)
+	}
+	if len(health.failures) != 0 {
+		t.Errorf("board recorded as failed (%v) — rejected postings are progress, not an outage", health.failures)
+	}
+}
+
+// The per-board line is the only operator-facing signal that a dictionary term is too
+// broad, and it has to arrive within the crawl hour. Counts alone say how much was
+// dropped but not what, so it carries sample titles too.
+func TestRejectionLogCarriesShareAndSamples(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	src := fakeSource{provider: "greenhouse", jobs: []sources.Job{
+		{ExternalID: "1", Title: "Registered Nurse", Company: "Acme"},
+		{ExternalID: "2", Title: "Line Cook", Company: "Acme"},
+		{ExternalID: "3", Title: "Backend Engineer", Company: "Acme"},
+	}}
+	r := Runner{Registry: registry(src), Store: &fakeStore{}}
+	if _, err := r.Run(context.Background(), []sources.CompanyEntry{
+		{Company: "Acme", Provider: "greenhouse", Board: "acme"},
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	out := buf.String()
+	var line string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "rejected") {
+			if line != "" {
+				t.Fatalf("more than one rejection line — it must be once per board, not per posting:\n%s", out)
+			}
+			line = l
+		}
+	}
+	if line == "" {
+		t.Fatalf("no rejection line logged:\n%s", out)
+	}
+	for _, want := range []string{"2/3", "67%", "Registered Nurse", "Line Cook"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("log line missing %q: %s", want, line)
+		}
+	}
+}
+
+// A board with nothing to reject must stay silent, or the signal drowns in noise across
+// twelve hundred boards.
+func TestRejectionLogSilentWhenNothingRejected(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	src := fakeSource{provider: "greenhouse", jobs: []sources.Job{
+		{ExternalID: "1", Title: "Backend Engineer", Company: "Acme"},
+	}}
+	r := Runner{Registry: registry(src), Store: &fakeStore{}}
+	if _, err := r.Run(context.Background(), []sources.CompanyEntry{
+		{Company: "Acme", Provider: "greenhouse", Board: "acme"},
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if strings.Contains(buf.String(), "rejected") {
+		t.Errorf("logged a rejection line with nothing rejected: %s", buf.String())
 	}
 }

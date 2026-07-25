@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"log"
+	"strings"
 
 	"github.com/strelov1/freehire/internal/classify"
 	"github.com/strelov1/freehire/internal/job"
@@ -12,12 +13,24 @@ import (
 // and must not be persisted. A generic ATS board carries a company's whole hiring, not
 // its engineering org, so most of what a crawl returns is nurses, cooks and cashiers.
 //
-// The rule is the non-tech TITLE dictionary, deliberately not the tri-state is_tech. A
-// business role — sales, recruiting, finance — resolves is_tech=false through its
-// category, but whether it belongs in the catalogue depends on whether the company is
-// an IT company, which the crawl cannot know and the prune worker decides later.
-// Rejecting on is_tech would quietly drop every sales and recruiting job at every
-// employer on the board.
+// Technical evidence vetoes the rejection, and that ordering is not optional. The
+// non-tech dictionary matches its terms anywhere in a title, and it was written on the
+// explicit contract that it "is consulted only after the tech category dictionary is
+// silent, so tech evidence always wins" (internal/classify/nontech.go) — which is how
+// jobderive.deriveIsTech uses it. Dropping that precedence turns the same dictionary
+// into a far stronger claim than it was built to support: "DevOps Engineer (HVAC IoT
+// Platform)", "Backend Engineer — Teller Systems" and "Senior Software Engineer - Cook
+// County Health" all carry is_tech=true and all match a term (hvac, teller, cook).
+// Labelling those non-tech was harmless because a label is reversible; deleting them
+// is not, and a rejected posting never reaches Postgres, so nothing records that it
+// happened.
+//
+// Below that veto the rule is the non-tech TITLE dictionary, deliberately not the
+// tri-state is_tech. A business role — sales, recruiting, finance — resolves
+// is_tech=false through its category, but whether it belongs in the catalogue depends
+// on whether the company is an IT company, which the crawl cannot know and the prune
+// worker decides later. Rejecting on is_tech==false would quietly drop every sales and
+// recruiting job at every employer on the board.
 //
 // This is catalogue policy, not derivation, which is why it lives here rather than in
 // jobderive: the aggregate still constructs a non-technical posting without complaint,
@@ -26,20 +39,49 @@ import (
 // only safe on a crawled board, where removing an over-broad dictionary term re-admits
 // the postings on the next pass.
 func outOfCatalogue(j job.Job) bool {
-	return classify.IsNonTech(j.Fields().Title)
+	f := j.Fields()
+	if f.IsTech != nil && *f.IsTech {
+		return false
+	}
+	return classify.IsNonTech(f.Title)
 }
 
-// logRejections reports a board's catalogue-filter rejections, once per board rather
-// than once per posting. The share matters more than the count: a board rejecting
-// everything is the signature of a dictionary term that is too broad, and since boards
-// are crawled hourly that has to be visible within the hour — long before the next
-// pruning pass acts on the same dictionary.
-func logRejections(e sources.CompanyEntry, rejected, total int) {
-	// A rejection is counted only for a posting the board yielded, so total is at
-	// least rejected and the division is safe.
-	if rejected == 0 {
+// loggedRejectionSamples is how many rejected titles a board's log line carries. A
+// count alone says how much was dropped but not what — and "what" is the only way to
+// tell an over-broad dictionary term from a board that is genuinely all nurses.
+const loggedRejectionSamples = 2
+
+// rejections accumulates a board's catalogue-filter outcome for its one log line.
+// Candidates counts only postings that actually reached the filter, so liveness
+// refreshes and stream removals — neither of which can be rejected — stay out of the
+// denominator: without that, a feed emitting a thousand removals and five rejected
+// postings would report 0% and hide the very signature the line exists to surface.
+type rejections struct {
+	rejected   int
+	candidates int
+	samples    []string
+}
+
+func (r *rejections) candidate() { r.candidates++ }
+
+func (r *rejections) reject(title string) {
+	r.rejected++
+	if len(r.samples) < loggedRejectionSamples {
+		r.samples = append(r.samples, title)
+	}
+}
+
+// log reports the board's rejections once, with the share and a sample of the titles.
+// A board rejecting nearly everything is the signature of a dictionary term that is
+// too broad, and since boards are crawled hourly that has to be visible within the
+// hour — long before the next pruning pass acts on the same dictionary.
+func (r *rejections) log(e sources.CompanyEntry) {
+	if r.rejected == 0 {
 		return
 	}
-	log.Printf("ingest: %s board %q (%s): rejected %d/%d postings as non-technical (%.0f%%)",
-		e.Provider, e.Board, e.Company, rejected, total, 100*float64(rejected)/float64(total))
+	// A rejection is only counted for a posting that reached the filter, so
+	// candidates is at least rejected and the division is safe.
+	log.Printf("ingest: %s board %q (%s): rejected %d/%d postings as non-technical (%.0f%%), e.g. %s",
+		e.Provider, e.Board, e.Company, r.rejected, r.candidates,
+		100*float64(r.rejected)/float64(r.candidates), strings.Join(r.samples, "; "))
 }
