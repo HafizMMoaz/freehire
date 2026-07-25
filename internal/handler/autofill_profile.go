@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -67,21 +68,16 @@ func splitName(full string) (first, last string) {
 	}
 }
 
-// AutofillProfile returns the caller's canonical autofill fields, from their most
-// recent CV's contact header plus their account email. keyAuth so the browser
-// extension (Bearer) can read it. All-empty (bar email) when the user has no CV.
-func (a *API) AutofillProfile(c *fiber.Ctx) error {
-	userID, err := requireUserID(c)
-	if err != nil {
-		return err
-	}
-
+// autofillProfile assembles a user's canonical autofill fields from their most
+// recent CV's contact header plus their account email. Shared by the endpoint the
+// extension reads and the agent that fills forms with it.
+func (a *API) autofillProfile(ctx context.Context, userID int64) (autofillProfile, error) {
 	var accountEmail string
-	_ = a.pool.QueryRow(c.Context(), `SELECT email FROM users WHERE id = $1`, userID).Scan(&accountEmail)
+	_ = a.pool.QueryRow(ctx, `SELECT email FROM users WHERE id = $1`, userID).Scan(&accountEmail)
 
 	var header cv.Header
 	var raw []byte
-	err = a.pool.QueryRow(c.Context(),
+	err := a.pool.QueryRow(ctx,
 		`SELECT data FROM cvs WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 1`, userID).Scan(&raw)
 	if err == nil {
 		var doc cv.Document
@@ -89,8 +85,22 @@ func (a *API) AutofillProfile(c *fiber.Ctx) error {
 			header = doc.Header
 		}
 	} else if !errors.Is(err, pgx.ErrNoRows) {
-		return err
+		return autofillProfile{}, err
 	}
 
-	return c.JSON(fiber.Map{"data": buildAutofillProfile(header, accountEmail)})
+	return buildAutofillProfile(header, accountEmail), nil
+}
+
+// AutofillProfile returns the caller's canonical autofill fields. keyAuth so the
+// browser extension (Bearer) can read it. All-empty (bar email) with no CV.
+func (a *API) AutofillProfile(c *fiber.Ctx) error {
+	userID, err := requireUserID(c)
+	if err != nil {
+		return err
+	}
+	profile, err := a.autofillProfile(c.Context(), userID)
+	if err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"data": profile})
 }

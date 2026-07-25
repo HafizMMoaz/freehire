@@ -7,9 +7,11 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-// localsUserID is the c.Locals key under which RequireAuth and RequireAuthOrKey
-// store the authenticated user id. Handlers read it via UserID.
-const localsUserID = "auth.userID"
+// LocalsUserID is the c.Locals key under which RequireAuth and RequireAuthOrKey
+// store the authenticated user id. Handlers read it via UserID; it is exported
+// because a websocket handler is handed a Conn rather than a Ctx and has to read
+// the inherited local by key.
+const LocalsUserID = "auth.userID"
 
 // localsViaAPIKey is set true by RequireAuthOrKey when the request authenticated with an
 // API key rather than the session cookie. Handlers read it via ViaAPIKey to give
@@ -38,7 +40,7 @@ func RequireAuth(iss *Issuer) fiber.Handler {
 		if err != nil {
 			return fiber.NewError(fiber.StatusUnauthorized, "invalid or expired session")
 		}
-		c.Locals(localsUserID, id)
+		c.Locals(LocalsUserID, id)
 		return c.Next()
 	}
 }
@@ -47,7 +49,7 @@ func RequireAuth(iss *Issuer) fiber.Handler {
 // RequireAuthOrKey. The second result is false when the request did not pass
 // through either middleware.
 func UserID(c *fiber.Ctx) (int64, bool) {
-	id, ok := c.Locals(localsUserID).(int64)
+	id, ok := c.Locals(LocalsUserID).(int64)
 	return id, ok
 }
 
@@ -68,12 +70,12 @@ func RequireAuthOrKey(iss *Issuer, keys APIKeyAuthenticator) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		if token := c.Cookies(CookieName); token != "" {
 			if id, err := iss.Parse(token); err == nil {
-				c.Locals(localsUserID, id)
+				c.Locals(LocalsUserID, id)
 				return c.Next()
 			}
 		}
 		if id, viaKey, ok := resolveBearer(c, iss, keys); ok {
-			c.Locals(localsUserID, id)
+			c.Locals(LocalsUserID, id)
 			if viaKey {
 				c.Locals(localsViaAPIKey, true)
 			}
@@ -92,12 +94,12 @@ func OptionalAuth(iss *Issuer, keys APIKeyAuthenticator) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		if token := c.Cookies(CookieName); token != "" {
 			if id, err := iss.Parse(token); err == nil {
-				c.Locals(localsUserID, id)
+				c.Locals(LocalsUserID, id)
 				return c.Next()
 			}
 		}
 		if id, viaKey, ok := resolveBearer(c, iss, keys); ok {
-			c.Locals(localsUserID, id)
+			c.Locals(LocalsUserID, id)
 			if viaKey {
 				c.Locals(localsViaAPIKey, true)
 			}
