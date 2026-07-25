@@ -23,9 +23,9 @@ a dictionary term). See the "Measured" section of `design.md`.
 
 ## 3. Deletion archive
 
-- [ ] 3.1 Add the migration creating `pruned_jobs(id, source, external_id, title, company_slug, rule, pruned_at)` with no description or enrichment column
-- [ ] 3.2 Regenerate sqlc and add the batch archive-insert query
-- [ ] 3.3 Note in the change that the migration must be applied to prod by hand before the worker first runs
+- [x] 3.1 Add the migration creating `pruned_jobs(id, source, external_id, title, company_slug, rule, pruned_at)` with no description or enrichment column
+- [x] 3.2 Add `PruneJobs`: archive and delete in ONE statement rather than an archive insert the delete could drift from. Absorbs 5.3 (duplicate-cluster extension) and 5.5 (archive rows), since separating them is what would let them diverge
+- [x] 3.3 Note in the change that the migration must be applied to prod by hand before the worker first runs
 
 ## 4. Prune rule
 
@@ -36,11 +36,11 @@ a dictionary term). See the "Measured" section of `design.md`.
 
 ## 5. Prune worker
 
-- [ ] 5.1 Add `cmd/prune` skeleton: keyset scan over candidate rows, `--dry-run` default, `--apply`, `--limit`, `--sample` flags
+- [ ] 5.1 Add `cmd/prune` skeleton: keyset scan over candidate rows, `--dry-run` default, `--apply`, `--limit`, `--sample` flags. The scan MUST include closed rows: once ingest rejects a board's non-tech postings, the 48h unseen sweep closes the ones already in the catalogue, and a scan restricted to open jobs would leave them as permanent dead weight
 - [ ] 5.2 Compute company evidence once at start, before any deletion
-- [ ] 5.3 Implement the batched delete extending each batch to its duplicate cluster (`id = ANY(batch) OR duplicate_of = ANY(batch)`)
+- [x] ~~5.3 Batched delete extending to the duplicate cluster~~ — done by `PruneJobs` in 3.2
 - [ ] 5.4 Mirror each batch to the facet index via `search.Client.DeleteJobs`
-- [ ] 5.5 Write archive rows for every deleted job with the rule that matched
+- [x] ~~5.5 Write archive rows for every deleted job~~ — done by `PruneJobs` in 3.2
 - [ ] 5.6 Dry-run output: random sample of pending titles plus counts broken down by rule and by source
 - [ ] 5.7 Honour `--limit` as a hard cap and report how many rows matched versus were deleted
 
@@ -59,5 +59,6 @@ a dictionary term). See the "Measured" section of `design.md`.
 ## 8. Documentation
 
 - [ ] 8.1 Update `docs/agents/job-lifecycle.md` and `CLAUDE.md`: closing remains soft, with the catalogue-pruning hard delete as the stated exception
-- [ ] 8.2 Add `internal/pipeline/AGENTS.md` notes for the rejection path and the `Rejected` counter
+- [ ] 8.2 Add `internal/pipeline/AGENTS.md` notes for the rejection path and the `Rejected` counter, the hydrating-source asymmetry (a `SeenRefresh` posting is touched and reopened without meeting the filter), and the per-crawl re-hydration cost a pruned posting incurs on hydrating adapters
+- [ ] 8.4 Note in `openspec/specs/ingest-status-page` terms that `ingested_total` now counts post-rejection saves, so the published number steps down when the filter deploys
 - [ ] 8.3 Document the iteration loop and the end-of-campaign `backfill-derive` plus `reindex` step

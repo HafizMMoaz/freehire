@@ -310,3 +310,146 @@ func maps(m map[string]ResidualTitleGroupsRow) func(func(string) bool) {
 		}
 	}
 }
+
+// Archiving and deleting are one statement, so a deletion cannot happen without its
+// audit row. These cases pin the parts that would otherwise drift: the duplicate
+// cluster the restricting foreign key forces us to take along, the per-row rule, and
+// the returned ids the caller needs to mirror the removal into the search index.
+func TestPruneJobsArchivesWhatItDeletes(t *testing.T) {
+	pool := startPostgres(t)
+	q := New(pool)
+	ctx := context.Background()
+	truncate(t, pool)
+
+	cook := residualJob(ctx, t, pool, "p:1", "Line Cook", "greenhouse", nil)
+	nurse := residualJob(ctx, t, pool, "p:2", "Registered Nurse", "ukg", nil)
+	keep := residualJob(ctx, t, pool, "p:3", "Backend Engineer", "greenhouse", nil)
+
+	got, err := q.PruneJobs(ctx, PruneJobsParams{
+		Ids:   []int64{cook.ID, nurse.ID},
+		Rules: []string{"title", "company"},
+	})
+	if err != nil {
+		t.Fatalf("PruneJobs: %v", err)
+	}
+
+	slices.Sort(got)
+	want := []int64{cook.ID, nurse.ID}
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("returned ids = %v, want %v — the caller mirrors exactly these into the search index", got, want)
+	}
+
+	var live int64
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM jobs").Scan(&live); err != nil {
+		t.Fatalf("count jobs: %v", err)
+	}
+	if live != 1 {
+		t.Errorf("jobs remaining = %d, want 1 (the engineer)", live)
+	}
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM jobs WHERE id = $1", keep.ID).Scan(&live); err != nil {
+		t.Fatalf("count kept: %v", err)
+	}
+	if live != 1 {
+		t.Error("the untargeted job must survive")
+	}
+
+	var title, rule string
+	if err := pool.QueryRow(ctx,
+		"SELECT title, rule FROM pruned_jobs WHERE id = $1", nurse.ID).Scan(&title, &rule); err != nil {
+		t.Fatalf("read archive: %v", err)
+	}
+	if title != "Registered Nurse" || rule != "company" {
+		t.Errorf("archive row = %q/%q, want \"Registered Nurse\"/\"company\" — the rule is recorded per row", title, rule)
+	}
+}
+
+// jobs.duplicate_of is the one foreign key to jobs that restricts, so deleting a
+// canonical row with a live duplicate would fail. The cluster goes together — the
+// duplicates of a cook posting are cook postings — and the duplicate is archived too.
+func TestPruneJobsTakesTheDuplicateCluster(t *testing.T) {
+	pool := startPostgres(t)
+	q := New(pool)
+	ctx := context.Background()
+	truncate(t, pool)
+
+	canon := residualJob(ctx, t, pool, "d:1", "Line Cook", "greenhouse", nil)
+	dup := residualJob(ctx, t, pool, "d:2", "Line Cook", "ukg", nil)
+	if _, err := pool.Exec(ctx, "UPDATE jobs SET duplicate_of = $1 WHERE id = $2", canon.ID, dup.ID); err != nil {
+		t.Fatalf("mark duplicate: %v", err)
+	}
+
+	got, err := q.PruneJobs(ctx, PruneJobsParams{Ids: []int64{canon.ID}, Rules: []string{"title"}})
+	if err != nil {
+		t.Fatalf("PruneJobs: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("deleted %d rows, want 2 — the duplicate must go with its canonical", len(got))
+	}
+
+	var archived int64
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM pruned_jobs").Scan(&archived); err != nil {
+		t.Fatalf("count archive: %v", err)
+	}
+	if archived != 2 {
+		t.Errorf("archived = %d, want 2 — the duplicate is deleted, so it is audited too", archived)
+	}
+}
+
+// A row named directly AND reachable as another target's duplicate must archive once,
+// or the insert violates the archive's primary key and takes the whole batch down.
+func TestPruneJobsArchivesAnOverlappingRowOnce(t *testing.T) {
+	pool := startPostgres(t)
+	q := New(pool)
+	ctx := context.Background()
+	truncate(t, pool)
+
+	canon := residualJob(ctx, t, pool, "o:1", "Line Cook", "greenhouse", nil)
+	dup := residualJob(ctx, t, pool, "o:2", "Line Cook", "ukg", nil)
+	if _, err := pool.Exec(ctx, "UPDATE jobs SET duplicate_of = $1 WHERE id = $2", canon.ID, dup.ID); err != nil {
+		t.Fatalf("mark duplicate: %v", err)
+	}
+
+	got, err := q.PruneJobs(ctx, PruneJobsParams{
+		Ids:   []int64{canon.ID, dup.ID},
+		Rules: []string{"title", "title"},
+	})
+	if err != nil {
+		t.Fatalf("PruneJobs: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("deleted %d rows, want 2 with no duplicate archive row", len(got))
+	}
+}
+
+// Every other foreign key to jobs cascades or nulls, which is what lets the delete run
+// at all. A user's saved job going with it is an accepted cost, but it must be the
+// cascade doing it rather than the statement failing.
+func TestPruneJobsCascadesUserInteractions(t *testing.T) {
+	pool := startPostgres(t)
+	q := New(pool)
+	ctx := context.Background()
+	truncate(t, pool)
+
+	j := residualJob(ctx, t, pool, "u:1", "Line Cook", "greenhouse", nil)
+	var userID int64
+	if err := pool.QueryRow(ctx,
+		"INSERT INTO users (email, password_hash) VALUES ('a@b.test', 'x') RETURNING id").Scan(&userID); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		"INSERT INTO user_jobs (user_id, job_id, saved_at) VALUES ($1, $2, now())", userID, j.ID); err != nil {
+		t.Fatalf("save job: %v", err)
+	}
+
+	if _, err := q.PruneJobs(ctx, PruneJobsParams{Ids: []int64{j.ID}, Rules: []string{"title"}}); err != nil {
+		t.Fatalf("PruneJobs must not be blocked by a user interaction: %v", err)
+	}
+	var left int64
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM user_jobs").Scan(&left); err != nil {
+		t.Fatalf("count user_jobs: %v", err)
+	}
+	if left != 0 {
+		t.Errorf("user_jobs rows = %d, want 0 (cascaded)", left)
+	}
+}

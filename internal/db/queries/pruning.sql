@@ -86,3 +86,51 @@ FROM grp
 GROUP BY grp
 ORDER BY 2 DESC, 1
 LIMIT sqlc.arg(row_limit);
+
+-- name: PruneJobs :many
+-- Permanently remove a batch of jobs and record what was removed, in ONE statement.
+-- Splitting the two would let the archive drift from the deletion, and the archive is
+-- the only way to answer, after an irreversible removal, whether something was taken
+-- that should have been kept.
+--
+-- The batch extends to each target's duplicate cluster: jobs.duplicate_of is the one
+-- foreign key to jobs that restricts, so deleting a canonical row with a live duplicate
+-- would fail — and semantically the duplicates of a cook posting are cook postings.
+-- DISTINCT ON collapses a row that is both named directly and reachable as another
+-- target's duplicate, which would otherwise violate the archive's primary key and take
+-- the whole batch down.
+--
+-- Every other reference to jobs cascades or nulls, so a user's saved job goes with it.
+-- That is an accepted cost of the campaign, not an oversight.
+--
+-- Returns the ids actually deleted, which the caller mirrors into the search index.
+-- The two parameter arrays are positionally paired. They are unnested separately and
+-- rejoined on ordinality because sqlc cannot infer the types of a multi-argument
+-- unnest over query parameters.
+WITH target_id AS (
+    SELECT * FROM unnest(sqlc.arg(ids)::bigint[]) WITH ORDINALITY AS t(id, n)
+),
+target_rule AS (
+    SELECT * FROM unnest(sqlc.arg(rules)::text[]) WITH ORDINALITY AS t(rule, n)
+),
+target AS (
+    SELECT i.id, r.rule FROM target_id i JOIN target_rule r USING (n)
+),
+cluster AS (
+    SELECT DISTINCT ON (id) id, rule
+    FROM (
+        SELECT j.id, t.rule FROM jobs j JOIN target t ON j.id = t.id
+        UNION ALL
+        SELECT j.id, t.rule FROM jobs j JOIN target t ON j.duplicate_of = t.id
+    ) x
+    ORDER BY id
+),
+deleted AS (
+    DELETE FROM jobs
+    WHERE id IN (SELECT id FROM cluster)
+    RETURNING id, source, external_id, title, company_slug
+)
+INSERT INTO pruned_jobs (id, source, external_id, title, company_slug, rule)
+SELECT d.id, d.source, d.external_id, d.title, d.company_slug, c.rule
+FROM deleted d JOIN cluster c ON c.id = d.id
+RETURNING id;

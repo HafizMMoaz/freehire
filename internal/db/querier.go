@@ -1022,6 +1022,26 @@ type Querier interface {
 	// coalesced/cast to bigint so it reads as a plain int64 (an all-failing provider
 	// yields 0, not NULL).
 	ProviderHealthRollup(ctx context.Context) ([]ProviderHealthRollupRow, error)
+	// Permanently remove a batch of jobs and record what was removed, in ONE statement.
+	// Splitting the two would let the archive drift from the deletion, and the archive is
+	// the only way to answer, after an irreversible removal, whether something was taken
+	// that should have been kept.
+	//
+	// The batch extends to each target's duplicate cluster: jobs.duplicate_of is the one
+	// foreign key to jobs that restricts, so deleting a canonical row with a live duplicate
+	// would fail — and semantically the duplicates of a cook posting are cook postings.
+	// DISTINCT ON collapses a row that is both named directly and reachable as another
+	// target's duplicate, which would otherwise violate the archive's primary key and take
+	// the whole batch down.
+	//
+	// Every other reference to jobs cascades or nulls, so a user's saved job goes with it.
+	// That is an accepted cost of the campaign, not an oversight.
+	//
+	// Returns the ids actually deleted, which the caller mirrors into the search index.
+	// The two parameter arrays are positionally paired. They are unnested separately and
+	// rejoined on ordinality because sqlc cannot infer the types of a multi-argument
+	// unnest over query parameters.
+	PruneJobs(ctx context.Context, arg PruneJobsParams) ([]int64, error)
 	// One row per company with its current open-count and the open-count as of @prev_ts,
 	// from a single scan of jobs over canonical rows only (same count(*) FILTER idiom as
 	// insights_role_stats). open_count uses closed_at IS NULL (open now); open_count_prev

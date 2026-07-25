@@ -9,6 +9,80 @@ import (
 	"context"
 )
 
+const pruneJobs = `-- name: PruneJobs :many
+WITH target_id AS (
+    SELECT id, n FROM unnest($1::bigint[]) WITH ORDINALITY AS t(id, n)
+),
+target_rule AS (
+    SELECT rule, n FROM unnest($2::text[]) WITH ORDINALITY AS t(rule, n)
+),
+target AS (
+    SELECT i.id, r.rule FROM target_id i JOIN target_rule r USING (n)
+),
+cluster AS (
+    SELECT DISTINCT ON (id) id, rule
+    FROM (
+        SELECT j.id, t.rule FROM jobs j JOIN target t ON j.id = t.id
+        UNION ALL
+        SELECT j.id, t.rule FROM jobs j JOIN target t ON j.duplicate_of = t.id
+    ) x
+    ORDER BY id
+),
+deleted AS (
+    DELETE FROM jobs
+    WHERE id IN (SELECT id FROM cluster)
+    RETURNING id, source, external_id, title, company_slug
+)
+INSERT INTO pruned_jobs (id, source, external_id, title, company_slug, rule)
+SELECT d.id, d.source, d.external_id, d.title, d.company_slug, c.rule
+FROM deleted d JOIN cluster c ON c.id = d.id
+RETURNING id
+`
+
+type PruneJobsParams struct {
+	Ids   []int64  `json:"ids"`
+	Rules []string `json:"rules"`
+}
+
+// Permanently remove a batch of jobs and record what was removed, in ONE statement.
+// Splitting the two would let the archive drift from the deletion, and the archive is
+// the only way to answer, after an irreversible removal, whether something was taken
+// that should have been kept.
+//
+// The batch extends to each target's duplicate cluster: jobs.duplicate_of is the one
+// foreign key to jobs that restricts, so deleting a canonical row with a live duplicate
+// would fail — and semantically the duplicates of a cook posting are cook postings.
+// DISTINCT ON collapses a row that is both named directly and reachable as another
+// target's duplicate, which would otherwise violate the archive's primary key and take
+// the whole batch down.
+//
+// Every other reference to jobs cascades or nulls, so a user's saved job goes with it.
+// That is an accepted cost of the campaign, not an oversight.
+//
+// Returns the ids actually deleted, which the caller mirrors into the search index.
+// The two parameter arrays are positionally paired. They are unnested separately and
+// rejoined on ordinality because sqlc cannot infer the types of a multi-argument
+// unnest over query parameters.
+func (q *Queries) PruneJobs(ctx context.Context, arg PruneJobsParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, pruneJobs, arg.Ids, arg.Rules)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const residualTitleGroups = `-- name: ResidualTitleGroups :many
 
 WITH runs AS (
