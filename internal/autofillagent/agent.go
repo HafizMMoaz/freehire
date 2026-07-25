@@ -155,7 +155,16 @@ func report(fields []Field, fills []Fill, outcomes []outcome) Report {
 	}
 
 	rep := Report{Filled: []string{}, Deferred: []string{}, Unmapped: []string{}}
+	// The unfilled fields are split so the required ones lead: a real ATS form
+	// contributes dozens of optional controls (Greenhouse adds a checkbox per
+	// country), and the reader sees the head of the list, not all of it.
+	var optional []string
 	for _, field := range fields {
+		// Everything here is addressed by label, so a control without one is not
+		// something the report can meaningfully name to the user.
+		if strings.TrimSpace(field.Label) == "" {
+			continue
+		}
 		switch {
 		case byLabel[field.Label] == "filled":
 			rep.Filled = append(rep.Filled, field.Label)
@@ -165,8 +174,13 @@ func report(fields []Field, fills []Fill, outcomes []outcome) Report {
 			// Never planned, or planned and the browser could not write it
 			// (no matching option, the control vanished) — either way the user
 			// still has to fill it themselves.
-			rep.Unmapped = append(rep.Unmapped, field.Label)
+			if field.Required {
+				rep.Unmapped = append(rep.Unmapped, field.Label)
+			} else {
+				optional = append(optional, field.Label)
+			}
 		}
 	}
+	rep.Unmapped = append(rep.Unmapped, optional...)
 	return rep
 }

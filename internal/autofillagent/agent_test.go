@@ -196,6 +196,56 @@ func TestRunSkipsTheBrowserEntirelyWhenNothingIsPlanned(t *testing.T) {
 	}
 }
 
+// A real ATS form carries controls with no label of their own — a widget's inner
+// input, a stray hidden field. They cannot be addressed by label, so telling the
+// user they were "left for you" is noise about something they cannot act on.
+func TestRunLeavesUnlabelledControlsOutOfTheReport(t *testing.T) {
+	tools := &fakeTools{fields: []autofillagent.Field{
+		{Label: "Email", Type: "email"},
+		{Label: "", Type: "text"},
+		{Label: "   ", Type: "text"},
+	}}
+	planner := plannerFunc(func(_ []autofillagent.Field, p autofillagent.Profile) ([]autofillagent.Fill, error) {
+		return []autofillagent.Fill{{Label: "Email", Value: p["email"]}}, nil
+	})
+
+	rep, err := autofillagent.Run(context.Background(), tools, planner, profile())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(rep.Unmapped) != 0 {
+		t.Fatalf("unmapped = %#v, want nothing the user cannot address", rep.Unmapped)
+	}
+}
+
+// A Greenhouse form contributes a checkbox per country, which swamps the two or
+// three required questions the user actually has to answer. The report is read
+// top-down and truncated, so what must be answered comes first.
+func TestRunReportsRequiredFieldsBeforeOptionalOnes(t *testing.T) {
+	tools := &fakeTools{fields: []autofillagent.Field{
+		{Label: "Australia", Type: "checkbox"},
+		{Label: "Belgium", Type: "checkbox"},
+		{Label: "Who is your current employer?", Type: "text", Required: true},
+		{Label: "Canada", Type: "checkbox"},
+		{Label: "What is your job title?", Type: "text", Required: true},
+	}}
+	planner := plannerFunc(func([]autofillagent.Field, autofillagent.Profile) ([]autofillagent.Fill, error) {
+		return nil, nil
+	})
+
+	rep, err := autofillagent.Run(context.Background(), tools, planner, profile())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := []string{"Who is your current employer?", "What is your job title?"}
+	if len(rep.Unmapped) < 2 || rep.Unmapped[0] != want[0] || rep.Unmapped[1] != want[1] {
+		t.Fatalf("unmapped = %v, want the required questions first", rep.Unmapped)
+	}
+	if len(rep.Unmapped) != 5 {
+		t.Fatalf("unmapped = %v, want every unfilled field still reported", rep.Unmapped)
+	}
+}
+
 func TestRunFailsWhenThePageHasNoForm(t *testing.T) {
 	tools := &fakeTools{fields: nil}
 	planner := plannerFunc(func([]autofillagent.Field, autofillagent.Profile) ([]autofillagent.Fill, error) {
