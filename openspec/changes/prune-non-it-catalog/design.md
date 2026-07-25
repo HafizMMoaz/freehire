@@ -65,10 +65,29 @@ recoverable deletions, and the company-scoped rules carry the volume. The earlie
 framing — company rules as a late addition after several title passes — had the
 weights backwards.
 
-Cost, for the same reason, is capped rather than optimized: the word-pair report
-is an extrapolated ~15–17 minutes per full run versus 67 seconds for whole titles.
-Acceptable a few times per iteration; it is why the report is an operator tool and
-not a scheduled job.
+Cost is capped rather than optimized: **3 minutes 21 seconds** for a full run
+against prod, versus 67 seconds for whole titles. Acceptable a few times per
+iteration; it is why the report is an operator tool and not a scheduled job.
+
+### Verified on prod
+
+The shipped query was run read-only against prod and the spike's proportions held.
+Real anchors led the ranking — `behavior technician` 25 939, `maintenance
+technician` 12 111, `service technician` 11 224, `care aide` 3 653, `social
+worker` 4 636 — and the connector bridge did its job, surfacing `banco de
+talentos` 6 347, a Portuguese talent-pool cluster no two-word group could express.
+
+Two things the run taught that the sample could not:
+
+**Source breadth separates a role from shrapnel.** Every genuine role spans dozens
+of sources (`team lead` ~90, `behavior technician` 24) while every fragment of the
+one verbose healthcare employer sits on one or two (`afternoon registered`
+{apploi}, `lih airport` {apploi,ukg}). The report leads with that count, which
+turns an eyeball judgement into a sortable column. It also forced truncating the
+source list — ninety names in a cell made the table unreadable.
+
+**One dictionary gap:** `søges til` 3 325 — Danish "wanted for". `til` belongs in
+the connector list; the Danish and Nordic function words are not yet covered.
 
 ## Goals / Non-Goals
 

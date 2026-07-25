@@ -10,7 +10,7 @@ a dictionary term). See the "Measured" section of `design.md`.
 - [x] 1.4 Add the stop-word list as a curated Go dictionary passed to the query as a parameter, guarded by a test that no stop word is a token of any `classify` non-tech term (a collision would silently hide that whole role family from mining). Tokenization stays in SQL — `[^[:alnum:]]+` is already Unicode-aware — and is covered by an integration case with accented Latin and Cyrillic titles
 - [x] 1.5 Replace the query: expand each title into word pairs, drop pairs containing a stop word, a token under three characters, or a numeric token, and return each pair with its count of DISTINCT jobs and its sources
 - [x] 1.6 Update `cmd/mine-titles` for the new row shape and re-verify the report renders and sorts
-- [ ] 1.7 Run it against prod read-only and record the top clusters in the change notes, confirming the 44/21/25/10 usable/dangerous/shrapnel/noise split the spike measured still holds
+- [x] 1.7 Run it against prod read-only and record the top clusters in the change notes, confirming the 44/21/25/10 usable/dangerous/shrapnel/noise split the spike measured still holds
 
 ## 2. Ingest-time rejection
 

@@ -53,4 +53,8 @@ var connectors = []string{
 	"der", "die", "und", "fur",
 	// Russian
 	"по", "на", "для", "или", "под", "и", "с",
+	// Danish and Norwegian — a prod run surfaced "søges til" ("wanted for") in the
+	// top 100, which is a posting phrase, not a role. Danish "for" is spelled like
+	// the English one and is already listed above.
+	"til", "med", "hos",
 }

@@ -75,10 +75,18 @@ func run() int {
 	return 0
 }
 
+// shownSources is how many source names a row prints before the rest are counted
+// off. Groups on prod span up to ninety sources; the names past the first few carry
+// no information the breadth count does not already give.
+const shownSources = 3
+
 // report writes the clusters as an aligned table in the order given (the query orders
-// them busiest-first). Sources are sorted here rather than trusted from the aggregate,
-// so an unchanged catalogue renders byte-identically between runs — an operator
-// diffing two iterations should see only real movement.
+// them busiest-first): job count, source breadth, the group, then a sample of the
+// sources. Breadth leads because it is the fastest way to tell a real catalogue-wide
+// role from one employer's shredded titles — measured on prod, every genuine role
+// spanned dozens of sources and every fragment one or two. Sources are sorted here
+// rather than trusted from the aggregate, so an unchanged catalogue renders
+// byte-identically between runs and a diff between iterations shows only real movement.
 func report(w io.Writer, rows []db.ResidualTitleGroupsRow) error {
 	if len(rows) == 0 {
 		_, err := fmt.Fprintln(w, "no unclassified title groups left")
@@ -86,10 +94,17 @@ func report(w io.Writer, rows []db.ResidualTitleGroupsRow) error {
 	}
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "JOBS\tSRCS\tGROUP\tSOURCES"); err != nil {
+		return err
+	}
 	for _, r := range rows {
 		sources := slices.Clone(r.Sources)
 		slices.Sort(sources)
-		if _, err := fmt.Fprintf(tw, "%d\t%s\t%s\n", r.Jobs, r.Grp, strings.Join(sources, ", ")); err != nil {
+		sample := strings.Join(sources[:min(len(sources), shownSources)], ", ")
+		if n := len(sources) - shownSources; n > 0 {
+			sample += fmt.Sprintf(" +%d", n)
+		}
+		if _, err := fmt.Fprintf(tw, "%d\t%d\t%s\t%s\n", r.Jobs, len(sources), r.Grp, sample); err != nil {
 			return err
 		}
 	}
