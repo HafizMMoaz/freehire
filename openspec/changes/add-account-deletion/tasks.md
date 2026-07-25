@@ -29,9 +29,9 @@
 
 ## 5. Web surface
 
-- [ ] 5.1 Add the delete-account danger zone to `web/src/routes/my/profile`: states that deletion is permanent and unrecoverable, lists what is erased (CV, mail, analyses, credits, community handle), and notes what survives de-authored
-- [ ] 5.2 Gate the action on the typed email matching the signed-in address; keep it disabled until it does
-- [ ] 5.3 On success clear client session state and redirect to the public site; verify visually per `web/AGENTS.md`
+- [x] 5.1 Add the delete-account danger zone to `web/src/routes/my/profile`: states that deletion is permanent and unrecoverable, lists what is erased (CV, mail, analyses, credits, community handle), and notes what survives de-authored
+- [x] 5.2 Gate the action on the typed email matching the signed-in address; keep it disabled until it does
+- [x] 5.3 On success clear client session state and redirect to the public site; verify visually per `web/AGENTS.md`
 
 ## 6. Ship
 

@@ -6,6 +6,7 @@
   import { isAuthenticated } from '$lib/auth.svelte';
   import { FilterStore, filtersToParams } from '$lib/filters';
   import ATSReportView from '$lib/components/ATSReportView.svelte';
+  import DeleteAccountCard from '$lib/components/DeleteAccountCard.svelte';
   import FilterSummary from '$lib/components/filters/FilterSummary.svelte';
   import FilterModal from '$lib/components/filters/FilterModal.svelte';
   import FilterEdgeTab from '$lib/components/FilterEdgeTab.svelte';
@@ -368,4 +369,9 @@
       />
     {/if}
   {/if}
+
+  <!-- Leaving is not a profile setting: the card sits outside the has-a-profile
+       branch so someone who signed up, filled in nothing and wants out can still
+       find it. -->
+  <DeleteAccountCard />
 {/if}
