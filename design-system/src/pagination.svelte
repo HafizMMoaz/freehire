@@ -20,6 +20,14 @@
   let canPrev = $derived(page > 1);
   let canNext = $derived(page < totalPages);
 
+  // `total` shrinks whenever a filter narrows the result set, which can strand
+  // `page` past the end — "Page 7 of 3", with Next disabled and nothing to show.
+  // Clamping here keeps the bound value honest for the consumer's query too.
+  $effect(() => {
+    const clamped = Math.min(Math.max(page, 1), totalPages);
+    if (clamped !== page) page = clamped;
+  });
+
   function prev() {
     if (canPrev) page--;
   }

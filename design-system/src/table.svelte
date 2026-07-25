@@ -1,6 +1,12 @@
 <script lang="ts" module>
-  import { tv, type VariantProps } from 'tailwind-variants';
+  import { tv } from 'tailwind-variants';
 
+  /**
+   * The component renders `table`/`thead`/`tbody`; rows and cells stay with the
+   * caller, since only the caller knows the columns. Hence `tr`/`th`/`td` are
+   * exported as classes to apply by hand:
+   * `<td class={tableVariants().td()}>`.
+   */
   export const tableVariants = tv({
     base: 'w-full caption-bottom text-sm',
     slots: {
@@ -11,8 +17,6 @@
       td: 'p-3 align-middle',
     },
   });
-
-  export type TableSlots = VariantProps<typeof tableVariants>;
 </script>
 
 <script lang="ts">
@@ -25,7 +29,7 @@
     children,
   }: { class?: string; header?: Snippet; children: Snippet } = $props();
 
-  let slots = tableVariants();
+  const slots = tableVariants();
 </script>
 
 <div class={cn('w-full overflow-x-auto', className)}>
