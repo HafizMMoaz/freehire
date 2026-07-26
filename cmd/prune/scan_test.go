@@ -354,3 +354,30 @@ func (c *countingIndex) DeleteJobs(_ context.Context, ids []int64) error {
 }
 
 func (c *countingIndex) DeleteSemanticJobs(context.Context, []int64) error { return nil }
+
+// The sample must describe what the run will delete. Feeding the reservoir the rows a
+// cap excluded empties it of real titles precisely when a cap is in use — which is
+// every first live run, and the one time the operator most needs to read it.
+func TestScanSamplesOnlyWhatItWillDelete(t *testing.T) {
+	brd := boards{
+		listed:     map[boardKey]bool{{"greenhouse", "acme"}: true},
+		byProvider: map[string]map[string]bool{"greenhouse": {"acme": true}},
+	}
+	var rows []db.PruneCandidatesRow
+	for i := int64(1); i <= 2000; i++ {
+		rows = append(rows, row(i, "greenhouse", "acme:x", "acme", "Line Cook", ""))
+	}
+
+	p, err := scan(context.Background(), &fakeCandidates{rows: rows}, nil, brd, 10, 5, testRand())
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(p.samples) != 5 {
+		t.Fatalf("samples = %d, want 5", len(p.samples))
+	}
+	for _, s := range p.samples {
+		if s == "" {
+			t.Fatalf("the sample carries empty entries: %q — a capped run must still show real titles", p.samples)
+		}
+	}
+}

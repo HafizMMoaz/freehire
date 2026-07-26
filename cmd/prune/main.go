@@ -216,8 +216,12 @@ func scan(ctx context.Context, q candidateSource, ev []db.CompanyTechEvidenceRow
 				continue
 			}
 			if limit > 0 && len(p.targets) >= limit {
-				p.matched++ // counted, not taken: the report must say how much is left
-				p.sample("")
+				// Counted, not taken: the report must say how much work is left. It is
+				// deliberately NOT sampled — the sample exists to show what this run
+				// will delete, and feeding the reservoir rows the cap excluded empties
+				// it of real titles exactly when a cap is in use, which is every first
+				// live run.
+				p.matched++
 				continue
 			}
 			p.add(row, rule)
