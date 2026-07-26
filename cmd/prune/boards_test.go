@@ -108,3 +108,26 @@ func TestLoadBoardsReadsTheRealSourcesDirectory(t *testing.T) {
 		}
 	}
 }
+
+// Retired boards live in sources/retired/, and the guard depends on not seeing them: a
+// glob that descended into subdirectories would read them as live, and the rules that
+// require a retired board would quietly stop firing.
+func TestLoadBoardsIgnoresRetiredSubdirectory(t *testing.T) {
+	dir := t.TempDir()
+	writeBoardFile(t, dir, "greenhouse.yml", "- company: Live Co\n  board: live\n")
+	if err := os.MkdirAll(filepath.Join(dir, "retired"), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeBoardFile(t, filepath.Join(dir, "retired"), "greenhouse.yml", "- company: Gone Co\n  board: gone\n")
+
+	b, err := loadBoards(dir)
+	if err != nil {
+		t.Fatalf("loadBoards: %v", err)
+	}
+	if !b.crawls("greenhouse", "live:1") {
+		t.Error("the live board must still read as crawled")
+	}
+	if b.crawls("greenhouse", "gone:1") {
+		t.Error("a retired board must not read as crawled — moving it out of sources/ is what retires it")
+	}
+}

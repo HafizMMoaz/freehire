@@ -7,9 +7,13 @@
 //
 // --boards is the report the company-scoped rules depend on. Those rules have no
 // counterpart at crawl time, so a deletion under one is undone by the next hourly crawl
-// unless the board is struck from sources/*.yml in the same step. This lists the
-// candidates for that PR: boards still listed whose company shows no technical evidence
-// across its entire history.
+// unless the board leaves sources/ in the same step. This lists the candidates: boards
+// still listed whose company shows no technical evidence across its entire history.
+//
+// Retiring a board means MOVING its entry to sources/retired/<provider>.yml, not
+// deleting it. Ingest takes one file by path and a glob does not descend, so an entry
+// there is neither crawled nor seen by this guard — the retirement is expressed by where
+// the line lives, and a board retired by mistake is restored by moving it back.
 //
 // Without --apply the worker scans, reports what it would remove, and exits. --apply is
 // the only way to delete anything, and --limit caps how much a single run takes: the
@@ -329,8 +333,9 @@ type (
 
 // reportBoards lists the boards still in the source files whose postings have never
 // shown anything technical — no technical title or category, and not one tagged skill.
-// Each is a candidate for the retirement PR, which is the precondition for pruning its
-// jobs under a company-scoped rule.
+// Each is a candidate for the retirement PR — move the entry to
+// sources/retired/<provider>.yml — which is the precondition for pruning its jobs under
+// a company-scoped rule.
 //
 // It groups by BOARD rather than by company because that is the identity the source
 // files and the catalogue share exactly; the company slug diverges wherever an adapter
@@ -375,6 +380,9 @@ func reportBoards(ctx context.Context, w io.Writer, q candidateSource, brd board
 	})
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprint(w, "move these entries to sources/retired/<provider>.yml:\n\n"); err != nil {
+		return err
+	}
 	if _, err := fmt.Fprintln(tw, "PROVIDER\tBOARD"); err != nil {
 		return err
 	}
