@@ -314,3 +314,43 @@ func TestScanNeverTouchesASourceWithNoBoards(t *testing.T) {
 		t.Error("the source gate must be visible in the report, or the operator cannot tell it ran")
 	}
 }
+
+// The database batch and the mirror batch answer different constraints and must not
+// collapse into one number. Meilisearch runs one task per index at a time and the
+// worker waits for each, so a mirror call per transaction serialises the whole run
+// behind the search engine — measured on prod at 505 rows in eight minutes.
+func TestDeleteTargetsMirrorsInLargeBatchesNotPerTransaction(t *testing.T) {
+	p := newPlan(5, testRand())
+	for i := range mirrorBatch + deleteBatch {
+		p.targets = append(p.targets, target{id: int64(i + 1), rule: ruleTitle})
+	}
+	del := &fakeDeleter{}
+	idx := &countingIndex{}
+
+	if err := deleteTargets(context.Background(), del, idx, p); err != nil {
+		t.Fatalf("deleteTargets: %v", err)
+	}
+	if want := len(p.targets) / deleteBatch; len(del.batches) != want {
+		t.Errorf("database batches = %d, want %d — the transaction size is unchanged", len(del.batches), want)
+	}
+	// One flush at the threshold and one for the remainder.
+	if idx.calls != 2 {
+		t.Errorf("mirror calls = %d, want 2 — %d rows must not mean %d search tasks",
+			idx.calls, len(p.targets), len(del.batches))
+	}
+	if idx.ids != len(p.targets) {
+		t.Errorf("mirrored %d ids, want %d — buffering must not drop any", idx.ids, len(p.targets))
+	}
+}
+
+// countingIndex records how many times the search engine was called, which is the
+// quantity the fix is about.
+type countingIndex struct{ calls, ids int }
+
+func (c *countingIndex) DeleteJobs(_ context.Context, ids []int64) error {
+	c.calls++
+	c.ids += len(ids)
+	return nil
+}
+
+func (c *countingIndex) DeleteSemanticJobs(context.Context, []int64) error { return nil }

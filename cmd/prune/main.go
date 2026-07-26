@@ -53,6 +53,14 @@ func main() {
 const (
 	scanPage    = 5000
 	deleteBatch = 500
+	// mirrorBatch is how many ids go to the search engine at once, and it is
+	// deliberately far larger than the delete batch. Meilisearch runs one task per
+	// index at a time and the worker waits for each, so a task per 500-row batch put
+	// two hundred sequential waits in front of a 50k run — measured on prod at 505
+	// rows in eight minutes, about thirteen hours for the whole run, with ingest's own
+	// indexing queued behind it the entire time. The transaction size and the mirror
+	// size answer different constraints and should not be the same number.
+	mirrorBatch = 10000
 	// progressEvery is how often the scan reports. A full pass reads ~4000 rows a
 	// second whatever the page size — the cost is per-row I/O, not per-query — so it
 	// runs for tens of minutes, and the first prod run was impossible to distinguish
@@ -217,23 +225,48 @@ func scan(ctx context.Context, q candidateSource, ev []db.CompanyTechEvidenceRow
 	}
 }
 
-// deleteTargets removes the planned rows in batches, mirroring each batch into the
-// search index by the ids the statement reports actually deleted — the archive and the
-// index therefore only ever record real removals.
+// deleteTargets removes the planned rows and mirrors them out of the search indexes.
+//
+// The two batch sizes are separate on purpose. The database batch is small because each
+// one is a transaction that cascades into user data; the mirror batch is twenty times
+// larger because Meilisearch runs one task per index at a time and the worker waits for
+// each, so a task per transaction serialises the whole run behind the search engine —
+// and puts ingest's own indexing in the queue behind it.
+//
+// Rows are always removed from Postgres first. A document left in the index is served
+// for a row that no longer exists until the next reindex, which is bad; a row deleted
+// from the index but still in Postgres is invisible to search and repaired by the same
+// reindex. The index is rebuildable and Postgres is not, so the ordering follows that.
 func deleteTargets(ctx context.Context, q batchDeleter, index docDeleter, p *plan) error {
-	for start := 0; start < len(p.targets); start += deleteBatch {
-		end := min(start+deleteBatch, len(p.targets))
-		batch := p.targets[start:end]
+	start := time.Now()
+	var pending []int64
+
+	flush := func() error {
+		if len(pending) == 0 {
+			return nil
+		}
+		if err := index.DeleteJobs(ctx, pending); err != nil {
+			return err
+		}
+		// The facet and semantic indexes are separate, and search is served straight
+		// from Meilisearch with no Postgres hydration, so a document left in either
+		// keeps appearing in results whose row is gone.
+		if err := index.DeleteSemanticJobs(ctx, pending); err != nil {
+			return err
+		}
+		log.Printf("prune: deleted %d rows, mirrored %d into the indexes, %s elapsed",
+			p.deleted, len(pending), time.Since(start).Round(time.Second))
+		pending = pending[:0]
+		return nil
+	}
+
+	for from := 0; from < len(p.targets); from += deleteBatch {
+		batch := p.targets[from:min(from+deleteBatch, len(p.targets))]
 
 		ids := make([]int64, len(batch))
 		rules := make([]string, len(batch))
 		for i, t := range batch {
 			ids[i], rules[i] = t.id, t.rule
-		}
-		// PruneJobs pairs the arrays on ordinality, so a length mismatch would
-		// silently under-delete rather than fail.
-		if len(ids) != len(rules) {
-			return fmt.Errorf("prune: %d ids against %d rules", len(ids), len(rules))
 		}
 
 		deleted, err := q.PruneJobs(ctx, db.PruneJobsParams{Ids: ids, Rules: rules})
@@ -241,17 +274,14 @@ func deleteTargets(ctx context.Context, q batchDeleter, index docDeleter, p *pla
 			return err
 		}
 		p.deleted += len(deleted)
-		// The facet index and the semantic index are separate. Search is served
-		// straight from Meilisearch with no Postgres hydration, so a document left in
-		// either one keeps appearing in results whose row is gone.
-		if err := index.DeleteJobs(ctx, deleted); err != nil {
-			return err
-		}
-		if err := index.DeleteSemanticJobs(ctx, deleted); err != nil {
-			return err
+		pending = append(pending, deleted...)
+		if len(pending) >= mirrorBatch {
+			if err := flush(); err != nil {
+				return err
+			}
 		}
 	}
-	return nil
+	return flush()
 }
 
 // refusedTotal sums the guard's refusals for the progress line.
