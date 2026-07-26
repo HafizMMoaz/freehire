@@ -78,6 +78,12 @@
       Keep the last command running while you use the assistant — it is idle until you send a
       message. Stop it with Ctrl-C when you are done. Your chats, CVs and applications stay here;
       only the AI runs on your machine.
+      <a
+        href="https://github.com/strelov1/freehire-cli#bring-your-own-claude-byok"
+        target="_blank"
+        rel="noreferrer"
+        class="underline underline-offset-2 hover:text-foreground">Full documentation</a
+      >.
     </p>
   {/if}
 </div>

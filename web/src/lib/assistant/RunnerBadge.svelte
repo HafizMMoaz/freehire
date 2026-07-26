@@ -38,12 +38,26 @@
       Running on your computer
     </span>
   {:else}
-    <span
-      class="inline-flex items-center gap-1.5 rounded-full border border-amber-600/30 bg-amber-600/10 px-2 py-0.5 text-xs text-amber-700 dark:text-amber-400"
-      title="Start `freehire runner` on your computer to use your own Claude"
-    >
-      <CloudOff class="size-3.5" />
-      Computer not connected
+    <span class="inline-flex items-center gap-2 text-xs">
+      <span
+        class="inline-flex items-center gap-1.5 rounded-full border border-amber-600/30 bg-amber-600/10 px-2 py-0.5 text-amber-700 dark:text-amber-400"
+      >
+        <CloudOff class="size-3.5" />
+        Computer not connected
+      </span>
+      <!-- The badge alone tells the user something is off without telling them
+           what to do about it, so the fix travels with it. -->
+      <code class="hidden rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] sm:inline"
+        >freehire runner</code
+      >
+      <a
+        href="https://github.com/strelov1/freehire-cli#bring-your-own-claude-byok"
+        target="_blank"
+        rel="noreferrer"
+        class="text-muted-foreground underline underline-offset-2 hover:text-foreground"
+      >
+        how to connect
+      </a>
     </span>
   {/if}
 {/if}
