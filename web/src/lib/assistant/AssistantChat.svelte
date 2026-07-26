@@ -71,16 +71,16 @@
   //  - sessionLabel: name the session in the rail (kept separate from the kickoff text).
   //  - onTurnComplete: called when a turn finishes (the tailor host refreshes the CV preview).
   //  - showSessionRail: whether to render the session sidebar (off on the focused /tailor surface).
-  //  - requireBeta: gate the chat behind beta membership (default). The /tailor host sets this
-  //    false — CV tailoring is public, so its embedded chat must connect for non-beta users too,
-  //    while the standalone Agent (/my/assistant) keeps the default beta gate.
+  //  - requireBeta: kept so an embedder can still gate the chat, but the
+  //    standalone Agent no longer does. The assistant runs on the user's own
+  //    machine with their own Claude, so there is nothing to ration.
   let {
     session = undefined,
     kickoff = undefined,
     sessionLabel = undefined,
     onTurnComplete = undefined,
     showSessionRail = true,
-    requireBeta = true,
+    requireBeta = false,
   }: {
     session?: string;
     kickoff?: string;
