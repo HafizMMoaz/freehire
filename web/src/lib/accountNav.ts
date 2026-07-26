@@ -15,9 +15,9 @@ export const accountNav = [
   // Mail inbox: connect Gmail and/or claim a freehire mailbox to track application
   // replies. Open to every signed-in user.
   { href: '/my/inbox', label: 'Inbox' },
-  // The agent is a restricted rollout — beta testers only (a group separate from
-  // the moderator role; see `beta_tester` on the user). `beta` shows a nav badge.
-  { href: '/my/assistant', label: 'Agent', betaOnly: true, beta: true },
+  // Out of restricted rollout: the assistant now runs on the user's own machine
+  // with their own Claude subscription, so it costs us nothing to open up.
+  { href: '/my/assistant', label: 'Agent' },
   // CV builder + AI tailoring: open to every signed-in user (credits meter the AI spend).
   { href: '/my/cvs', label: 'CV builder' },
   // Employee referrals: request a referral, offer to refer (moderated), and — for
