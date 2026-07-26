@@ -57,12 +57,12 @@ func (f *fakeDeleter) PruneJobs(_ context.Context, p db.PruneJobsParams) ([]int6
 
 type fakeIndex struct{ facet, semantic []int64 }
 
-func (f *fakeIndex) DeleteJobs(_ context.Context, ids []int64) error {
+func (f *fakeIndex) SubmitJobDeletion(_ context.Context, ids []int64) error {
 	f.facet = append(f.facet, ids...)
 	return nil
 }
 
-func (f *fakeIndex) DeleteSemanticJobs(_ context.Context, ids []int64) error {
+func (f *fakeIndex) SubmitSemanticJobDeletion(_ context.Context, ids []int64) error {
 	f.semantic = append(f.semantic, ids...)
 	return nil
 }
@@ -347,13 +347,13 @@ func TestDeleteTargetsMirrorsInLargeBatchesNotPerTransaction(t *testing.T) {
 // quantity the fix is about.
 type countingIndex struct{ calls, ids int }
 
-func (c *countingIndex) DeleteJobs(_ context.Context, ids []int64) error {
+func (c *countingIndex) SubmitJobDeletion(_ context.Context, ids []int64) error {
 	c.calls++
 	c.ids += len(ids)
 	return nil
 }
 
-func (c *countingIndex) DeleteSemanticJobs(context.Context, []int64) error { return nil }
+func (c *countingIndex) SubmitSemanticJobDeletion(context.Context, []int64) error { return nil }
 
 // The sample must describe what the run will delete. Feeding the reservoir the rows a
 // cap excluded empties it of real titles precisely when a cap is in use — which is

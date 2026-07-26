@@ -238,9 +238,16 @@ func scan(ctx context.Context, q candidateSource, ev []db.CompanyTechEvidenceRow
 // and puts ingest's own indexing in the queue behind it.
 //
 // Rows are always removed from Postgres first. A document left in the index is served
-// for a row that no longer exists until the next reindex, which is bad; a row deleted
-// from the index but still in Postgres is invisible to search and repaired by the same
-// reindex. The index is rebuildable and Postgres is not, so the ordering follows that.
+// for a row that no longer exists until the next reindex; a row deleted from the index
+// but still in Postgres is invisible to search and repaired by the same reindex. The
+// index is rebuildable and Postgres is not, so the ordering follows that.
+//
+// The index deletions are ENQUEUED, not awaited. Meilisearch runs one task per index at
+// a time and a delete-by-id rebuilds the affected parts of the inverted index, so its
+// cost tracks index size rather than batch size — measured on prod, the database sat
+// idle for minutes per flush while a task ran. Awaiting them spent almost the whole
+// campaign not deleting. The accepted cost is that search serves rows that are gone
+// until the tasks drain, which is why the campaign ends in a full reindex.
 func deleteTargets(ctx context.Context, q batchDeleter, index docDeleter, p *plan) error {
 	start := time.Now()
 	var pending []int64
@@ -249,16 +256,16 @@ func deleteTargets(ctx context.Context, q batchDeleter, index docDeleter, p *pla
 		if len(pending) == 0 {
 			return nil
 		}
-		if err := index.DeleteJobs(ctx, pending); err != nil {
+		if err := index.SubmitJobDeletion(ctx, pending); err != nil {
 			return err
 		}
 		// The facet and semantic indexes are separate, and search is served straight
 		// from Meilisearch with no Postgres hydration, so a document left in either
 		// keeps appearing in results whose row is gone.
-		if err := index.DeleteSemanticJobs(ctx, pending); err != nil {
+		if err := index.SubmitSemanticJobDeletion(ctx, pending); err != nil {
 			return err
 		}
-		log.Printf("prune: deleted %d rows, mirrored %d into the indexes, %s elapsed",
+		log.Printf("prune: deleted %d rows, %d index deletions enqueued, %s elapsed",
 			p.deleted, len(pending), time.Since(start).Round(time.Second))
 		pending = pending[:0]
 		return nil
@@ -315,8 +322,8 @@ type (
 		PruneJobs(context.Context, db.PruneJobsParams) ([]int64, error)
 	}
 	docDeleter interface {
-		DeleteJobs(context.Context, []int64) error
-		DeleteSemanticJobs(context.Context, []int64) error
+		SubmitJobDeletion(context.Context, []int64) error
+		SubmitSemanticJobDeletion(context.Context, []int64) error
 	}
 )
 
