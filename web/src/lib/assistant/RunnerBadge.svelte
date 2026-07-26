@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { Laptop, Server, CloudOff } from '@lucide/svelte';
+  import { Laptop, CloudOff } from '@lucide/svelte';
   import { runnerStatus, type RunnerStatus } from '$lib/assistant/api';
 
   /** Whether this machine is running the assistant's harness.
@@ -32,26 +32,18 @@
   {#if status.connected}
     <span
       class="inline-flex items-center gap-1.5 rounded-full border border-green-600/30 bg-green-600/10 px-2 py-0.5 text-xs text-green-700 dark:text-green-400"
-      title={`Running on your machine (${status.devices.join(', ')})`}
+      title={`Running on this computer (${status.devices.join(', ')})`}
     >
       <Laptop class="size-3.5" />
-      Your machine
-    </span>
-  {:else if status.required}
-    <span
-      class="inline-flex items-center gap-1.5 rounded-full border border-amber-600/30 bg-amber-600/10 px-2 py-0.5 text-xs text-amber-700 dark:text-amber-400"
-      title="Start `freehire runner` to use the assistant"
-    >
-      <CloudOff class="size-3.5" />
-      No machine connected
+      Running on your computer
     </span>
   {:else}
     <span
-      class="inline-flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground"
-      title="Running on freehire's servers. Start `freehire runner` to use your own Claude."
+      class="inline-flex items-center gap-1.5 rounded-full border border-amber-600/30 bg-amber-600/10 px-2 py-0.5 text-xs text-amber-700 dark:text-amber-400"
+      title="Start `freehire runner` on your computer to use your own Claude"
     >
-      <Server class="size-3.5" />
-      Our servers
+      <CloudOff class="size-3.5" />
+      Computer not connected
     </span>
   {/if}
 {/if}
