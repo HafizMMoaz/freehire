@@ -1,6 +1,5 @@
 <script lang="ts">
   import { Copy, Check, Terminal } from '@lucide/svelte';
-  import { BYOK_DOCS } from '$lib/assistant/api';
 
   /** Shown when the assistant has nowhere to run: it executes on the user's own
    *  machine, and no runner is connected. This is a setup step, not a failure,
@@ -80,7 +79,7 @@
       message. Stop it with Ctrl-C when you are done. Your chats, CVs and applications stay here;
       only the AI runs on your machine.
       <a
-        href={BYOK_DOCS}
+        href="https://github.com/strelov1/freehire-cli#bring-your-own-claude-byok"
         target="_blank"
         rel="noreferrer"
         class="underline underline-offset-2 hover:text-foreground">Full documentation</a

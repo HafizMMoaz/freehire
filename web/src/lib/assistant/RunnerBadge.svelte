@@ -2,7 +2,6 @@
   import { onMount, onDestroy } from 'svelte';
   import { Laptop, CloudOff } from '@lucide/svelte';
   import { runnerStatus, type RunnerStatus } from '$lib/assistant/api';
-  import { BYOK_DOCS } from '$lib/assistant/api';
 
   /** Whether this machine is running the assistant's harness.
    *
@@ -52,7 +51,7 @@
         >freehire runner</code
       >
       <a
-        href={BYOK_DOCS}
+        href="https://github.com/strelov1/freehire-cli#bring-your-own-claude-byok"
         target="_blank"
         rel="noreferrer"
         class="text-muted-foreground underline underline-offset-2 hover:text-foreground"
