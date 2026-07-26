@@ -14,7 +14,15 @@
     RefreshCw,
   } from '@lucide/svelte';
   import { currentUser } from '$lib/auth.svelte';
-  import { createSession, listSessions, deleteSession, assistantWsUrl } from '$lib/assistant/api';
+  import {
+    createSession,
+    listSessions,
+    deleteSession,
+    assistantWsUrl,
+    NoDeviceError,
+  } from '$lib/assistant/api';
+  import RunnerSetup from '$lib/assistant/RunnerSetup.svelte';
+  import RunnerBadge from '$lib/assistant/RunnerBadge.svelte';
   import { RoyClient } from '$lib/assistant/client';
   import { initChat, reduceTurnEvent, type ChatState } from '$lib/assistant/chat';
   import { parseJobSegments } from '$lib/assistant/unfurl';
@@ -91,6 +99,9 @@
 
   let phase = $state<Phase>('connecting');
   let error = $state<string | null>(null);
+  // Distinct from `error`: the assistant runs on the user's machine and no
+  // runner is connected. A setup step, not a failure, so it gets instructions.
+  let needsRunner = $state(false);
   // Set when the socket drops after we were live AND auto-reconnect has given up — the composer
   // disables and offers a manual Reconnect button (never a full page reload).
   let connectionLost = $state(false);
@@ -445,6 +456,10 @@
     try {
       await createAndOpen();
     } catch (err) {
+      if (err instanceof NoDeviceError) {
+        needsRunner = true;
+        return;
+      }
       error = err instanceof Error ? err.message : 'Could not start a new chat.';
     }
   }
@@ -645,6 +660,10 @@
   </div>
 {/if}
 
+{#if needsRunner}
+  <RunnerSetup />
+{/if}
+
 {#if !allowed}
   <div class="m-3 rounded-xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">
     The agent is a limited beta and isn't available for your account yet.
@@ -719,6 +738,9 @@
               <Plus class="size-4" />New chat
             </button>
           {/if}
+          <!-- Where the assistant is running. Visible before a message is sent,
+               so "my machine or theirs?" is never a guess. -->
+          <div class="ml-auto"><RunnerBadge /></div>
         </div>
       {/if}
       <!-- Mobile session switcher -->
