@@ -62,6 +62,10 @@ export async function createSession(tailoring?: TailoringSession): Promise<strin
   return body.session_id;
 }
 
+/** Where a user goes to read how to run the assistant on their own machine. */
+export const BYOK_DOCS =
+  'https://github.com/strelov1/freehire-cli#bring-your-own-claude-byok';
+
 export type RunnerStatus = {
   /** Whether the caller has a machine connected right now. */
   connected: boolean;
