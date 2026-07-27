@@ -122,6 +122,10 @@
   // composer and list while a detach→attach is in flight.
   let sessions = $state<SessionItem[]>([]);
   let switching = $state(false);
+  // Creating a chat is a round trip before `switching` is ever set, and each
+  // click that lands in that window creates a real session on the server. Own
+  // flag, set on entry rather than inside openSession.
+  let creating = $state(false);
 
   // Chat (active session).
   let chat = $state<ChatState>(initChat());
@@ -476,7 +480,8 @@
   }
 
   async function newChat() {
-    if (!client || switching || phase !== 'ready') return;
+    if (!client || creating || switching || phase !== 'ready') return;
+    creating = true;
     error = null;
     try {
       await createAndOpen();
@@ -486,6 +491,8 @@
         return;
       }
       error = err instanceof Error ? err.message : 'Could not start a new chat.';
+    } finally {
+      creating = false;
     }
   }
 
@@ -702,7 +709,7 @@
         <button
           type="button"
           onclick={newChat}
-          disabled={switching || phase !== 'ready'}
+          disabled={creating || switching || phase !== 'ready'}
           class="flex w-full items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Plus class="size-4" />
@@ -756,7 +763,7 @@
             <button
               type="button"
               onclick={newChat}
-              disabled={switching || phase !== 'ready'}
+              disabled={creating || switching || phase !== 'ready'}
               class="flex items-center gap-1.5 rounded px-1.5 py-1 text-sm text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
               title="New chat"
             >
@@ -785,7 +792,7 @@
         <button
           type="button"
           onclick={newChat}
-          disabled={switching || phase !== 'ready'}
+          disabled={creating || switching || phase !== 'ready'}
           aria-label="New chat"
           title="New chat"
           class="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground hover:bg-muted disabled:opacity-50"
