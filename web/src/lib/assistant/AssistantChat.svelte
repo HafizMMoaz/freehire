@@ -414,12 +414,37 @@
       chat = initChat();
       pendingEcho = null;
       activeId = id;
+
+      // A session whose harness has exited — the runner was stopped, the
+      // laptop slept — has to be restarted before it can take input. Attaching
+      // alone would replay the transcript read-only, which looks like the chat
+      // is working right up until the first message goes nowhere.
+      if (!sessions.find((s) => s.id === id)?.live) {
+        try {
+          await client.call({ op: 'resume', session: id }, 'resumed');
+          sessions = sessions.map((s) => (s.id === id ? { ...s, live: true } : s));
+        } catch (err) {
+          // Reading it is still useful, so attach anyway and say why it cannot
+          // be continued.
+          error = resumeMessage(err);
+        }
+      }
+
       frameUnsub = client.subscribeFrames(id, (entry) => onFrame(entry.event));
       await client.call({ op: 'attach', session: id, from_seq: 0 }, 'attached');
     } finally {
       switching = false;
     }
     void scrollToBottom();
+  }
+
+  /** Why a session could not be reopened, in the user's terms. */
+  function resumeMessage(err: unknown): string {
+    const text = err instanceof Error ? err.message : String(err);
+    if (text.includes('runner_unavailable') || text.includes('device')) {
+      return 'This chat ran on your computer. Start `freehire runner` to continue it — you can still read it here.';
+    }
+    return 'This chat could not be reopened, so it is read-only.';
   }
 
   // Unwind the current attach: stop its frames, drop any in-flight turn/queue,
