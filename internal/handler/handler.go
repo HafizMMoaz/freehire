@@ -154,6 +154,13 @@ type Config struct {
 	// LLM backs the optional CV ATS qualitative review. Nil disables the AI layer:
 	// the ATS score stays deterministic (the report just omits content-quality).
 	LLM *llm.Client
+	// AssistantLLM backs the in-app agent. It is a separate client because the agent
+	// runs on its own model (ASSISTANT_MODEL) — chosen for tool calling and context
+	// size rather than for cheap JSON extraction. Nil disables new turns.
+	AssistantLLM *llm.Client
+	// AssistantMaxSteps bounds the tool-calling rounds of one turn; zero uses the
+	// assistant package's default.
+	AssistantMaxSteps int
 	// PIIDetector de-identifies CV text before it reaches the LLM (fit analysis and
 	// structured extraction). Nil disables those CV→LLM paths (fail-closed): they degrade
 	// to no analysis rather than send PII to the model.
@@ -268,6 +275,12 @@ func Register(app *fiber.App, cfg Config) {
 	companiesH := newCompaniesHandlers(queries, companySearch)
 	trackingH := newTrackingHandlers(queries, cfg.Pool, jobSearch)
 	resumeH := newResumeHandlers(resumeStore, structuredExtractor, jobSearch, facets, profileSvc, atsAnalyzer, queries)
+	// The in-app agent is a facade over the feature handlers above: its tools call
+	// the same services their endpoints do, so a tool result and the API can never
+	// disagree. The tailoring bootstrap mints its conversations through the same
+	// store, which is why the CV handlers get it back.
+	assistantH := newAssistantHandlers(queries, cfg.AssistantLLM, cfg.AssistantMaxSteps, searchH, resumeH, trackingH, cvH)
+	cvH.withAssistantSessions(assistantH.store)
 
 	// Referral notifications reuse the SES email transport (email is always present) and
 	// the Telegram bot when linked. Each channel is wrapped only when configured so a nil
@@ -404,6 +417,7 @@ func Register(app *fiber.App, cfg Config) {
 	// Résumé/CV surfaces: verdict, ATS report, extraction, storage, recommendations
 	// (see resumeHandlers).
 	resumeH.register(api, mw)
+	assistantH.register(api, mw)
 
 	// Filter subscriptions (see subscriptionHandlers).
 	subscriptionH.register(api, mw)

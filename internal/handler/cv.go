@@ -7,6 +7,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/strelov1/freehire/internal/assistant"
 	"github.com/strelov1/freehire/internal/auth"
 	"github.com/strelov1/freehire/internal/credits"
 	"github.com/strelov1/freehire/internal/cv"
@@ -34,6 +35,9 @@ type cvHandlers struct {
 	credits            *credits.Store
 	matchAnalysisCache matchAnalysisStore
 	match              *matchHandlers
+	// assistantSessions mints the conversation a tailoring workspace runs in.
+	// Assigned after construction (see withAssistantSessions).
+	assistantSessions *assistant.Store
 }
 
 func newCVHandlers(queries *db.Queries, typstBin string, resumeStore *resume.Store, creditsStore *credits.Store, match *matchHandlers) *cvHandlers {
@@ -52,6 +56,13 @@ func newCVHandlers(queries *db.Queries, typstBin string, resumeStore *resume.Sto
 		h.cvRenderer = r
 	}
 	return h
+}
+
+// withAssistantSessions gives the tailoring bootstrap the conversation store it
+// mints a session in. Assigned after construction because the assistant is built
+// from these handlers — the same shape authH.withAccountDeletion uses.
+func (h *cvHandlers) withAssistantSessions(store *assistant.Store) {
+	h.assistantSessions = store
 }
 
 func (h *cvHandlers) register(api fiber.Router, mw middleware) {

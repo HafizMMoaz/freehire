@@ -7,6 +7,7 @@ package db
 import (
 	"encoding/json"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -20,6 +21,25 @@ type ApiKey struct {
 	LastUsedAt  pgtype.Timestamptz `json:"last_used_at"`
 	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
 	Scope       string             `json:"scope"`
+}
+
+type AssistantMessage struct {
+	SessionID uuid.UUID          `json:"session_id"`
+	Seq       int32              `json:"seq"`
+	Role      string             `json:"role"`
+	Content   json.RawMessage    `json:"content"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type AssistantSession struct {
+	ID        uuid.UUID          `json:"id"`
+	UserID    int64              `json:"user_id"`
+	Preset    string             `json:"preset"`
+	Label     pgtype.Text        `json:"label"`
+	CvID      *int64             `json:"cv_id"`
+	JobID     *int64             `json:"job_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
 type BoardHealth struct {
