@@ -47,6 +47,14 @@ Fiber HTTP handlers: feature handler structs, route registration, auth surface, 
 - `view`/`apply`/`save`/`track` interaction endpoints. Addressed by job's public `:slug` (resolved to internal id before write). All writes are idempotent upserts behind `RequireAuthOrKey`.
 - Return `{"data": interaction}` with `user_id` omitted; public job reads stay unauthenticated.
 
+## Mail Inbox + Agent Surface (`gmail.go`, `inbox.go`, `inbox_linking.go`, `inbox_agent.go`)
+
+Pipeline and cross-package invariants live in [docs/agents/mail-stack.md](../../docs/agents/mail-stack.md); this section is the HTTP surface only.
+
+- Mounted on `mw.key`, so a user's own agent harness drives the inbox with the full-scope key it already uses for the tracker. **Exception: the Gmail OAuth connect/callback pair stays `mw.cookie`** — it redirects a browser to Google's consent screen and a keyed client cannot complete it.
+- `TriageEmail` is `SetEmailClassification`'s sibling: status, link, provenance (`link_source = 'agent'`) and the classified stamp in **one** update, then `mailclassify.AdvanceStage`. Splitting it would manufacture states the worker never produces. An omitted slug means "not deciding the link", never "clear it". The stage advance is best-effort — the verdict is already durable.
+- `IngestEmails` validates the whole batch before writing any of it and commits in one transaction, so a bad message at the end cannot leave earlier ones stored under a 400.
+- `renderEmail` is the shared tail of every mutation that returns the message it changed (link, unlink, confirm, reject, triage), so those cannot drift from one another or from `GetEmail`.
 ## Assistant (`assistant.go`, `assistant_*_tools.go`)
 
 Routes (all cookie-only, behind `auth.RequireModeratorOrBeta` — inference is
