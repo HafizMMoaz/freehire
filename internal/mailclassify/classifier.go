@@ -14,7 +14,7 @@ const maxBodyRunes = 4000
 // gen is the minimal slice of *llm.Client this package needs, so Classify is
 // unit-testable with a fake.
 type gen interface {
-	GenerateJSON(ctx context.Context, system, user string) (string, error)
+	GenerateJSON(ctx context.Context, system, user string, opts ...llm.GenOption) (string, error)
 }
 
 // Classifier turns one inbox email into a sanitized Classification via the LLM.
@@ -54,7 +54,11 @@ func (c *Classifier) Classify(ctx context.Context, in Input) (Classification, er
 			return Classification{Signal: sig, Confidence: KeywordConfidence}, nil
 		}
 	}
-	raw, err := c.gen.GenerateJSON(ctx, systemPrompt, userPrompt(in))
+	schema, err := requestSchema()
+	if err != nil {
+		return Classification{}, err
+	}
+	raw, err := c.gen.GenerateJSON(ctx, systemPrompt, userPrompt(in), llm.WithSchema(schemaName, schema))
 	if err != nil {
 		return Classification{}, err
 	}
