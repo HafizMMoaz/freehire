@@ -270,7 +270,7 @@ type Querier interface {
 	// Start a conversation for a user. preset selects the prompt and tool set ('chat' or
 	// 'tailor'); cv_id/job_id bind a tailoring session to its CV and vacancy and are NULL
 	// for a chat. The label is set later, from the first user message.
-	CreateAssistantSession(ctx context.Context, arg CreateAssistantSessionParams) (AssistantSession, error)
+	CreateAssistantSession(ctx context.Context, arg CreateAssistantSessionParams) (CreateAssistantSessionRow, error)
 	// Insert a new CV for a user. data is the sanitized structured document (JSON). job_id
 	// defaults NULL (the tailoring seam is unused in phase 1). Returns the metadata the list
 	// and detail responses need.
@@ -516,7 +516,7 @@ type Querier interface {
 	FindOpenJobByURL(ctx context.Context, url string) (string, error)
 	// One session owned by the caller. Owner-scoped: a foreign or missing id returns no row,
 	// which the handler maps to 404 — so a probe cannot tell the two apart.
-	GetAssistantSession(ctx context.Context, arg GetAssistantSessionParams) (AssistantSession, error)
+	GetAssistantSession(ctx context.Context, arg GetAssistantSessionParams) (GetAssistantSessionRow, error)
 	// Read-only balance for display (no lock, no LLM). Returns no rows for a user who has never
 	// had credit activity; the caller treats that as a full monthly grant remaining.
 	GetBalance(ctx context.Context, userID int64) (GetBalanceRow, error)
@@ -761,7 +761,7 @@ type Querier interface {
 	// deliberately excluded: they belong to the CV that owns them and are reached through the
 	// tailoring workspace, so listing them here would put a chat in the rail that leads nowhere
 	// useful and cannot be continued without its CV.
-	ListAssistantChatSessions(ctx context.Context, userID int64) ([]AssistantSession, error)
+	ListAssistantChatSessions(ctx context.Context, userID int64) ([]ListAssistantChatSessionsRow, error)
 	// A session's whole transcript in order. It is both what the client replays and what the
 	// model's history is rebuilt from, so tool calls and tool results are included.
 	ListAssistantMessages(ctx context.Context, sessionID uuid.UUID) ([]AssistantMessage, error)
@@ -987,7 +987,7 @@ type Querier interface {
 	// Resolve tailored-CV ids to their target job's display labels for the credit-history page
 	// (tailor debits). Only tailored CVs (job_id set) whose job still exists resolve; the handler
 	// falls back to a generic label otherwise.
-	ListTailoredCVLabelsByIDs(ctx context.Context, ids []int64) ([]ListTailoredCVLabelsByIDsRow, error)
+	ListTailoredCVLabelsByIDs(ctx context.Context, ids []pgtype.UUID) ([]ListTailoredCVLabelsByIDsRow, error)
 	// A user's TAILORED CVs (bound to a vacancy), newest edit first — the re-open list. Carries the
 	// vacancy's public slug and the bound agent session so each row links back to its workspace.
 	// Base CVs (job_id NULL) are excluded; the JOIN also drops tailored CVs whose job was deleted.
