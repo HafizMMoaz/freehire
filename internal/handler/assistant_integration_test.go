@@ -54,7 +54,13 @@ func newAssistantApp(pool *pgxpool.Pool, iss *auth.Issuer, model assistant.Model
 	}
 	app := fiber.New(fiber.Config{ErrorHandler: RenderError})
 	api := app.Group("/api/v1")
-	h.register(api, middleware{cookie: auth.RequireAuth(iss, testVersions)})
+	// Both gates are supplied so the test exercises whichever one `register`
+	// mounts: the extension reaches the assistant with a Bearer credential, which
+	// only `key` resolves.
+	h.register(api, middleware{
+		cookie: auth.RequireAuth(iss, testVersions),
+		key:    auth.RequireAuthOrKey(iss, testVersions, apiKeys{queries}),
+	})
 	return app, h
 }
 
@@ -75,6 +81,28 @@ func assistantUser(t *testing.T, pool *pgxpool.Pool, iss *auth.Issuer, email str
 
 func assistantRequest(t *testing.T, app *fiber.App, method, path, cookie string, body any) *http.Response {
 	t.Helper()
+	return assistantDo(t, app, method, path, body, func(r *http.Request) {
+		if cookie != "" {
+			r.AddCookie(&http.Cookie{Name: auth.CookieName, Value: cookie})
+		}
+	})
+}
+
+// assistantBearerRequest issues the same request as assistantRequest, but carries
+// the credential as `Authorization: Bearer` and sends no cookie — what a browser
+// extension does, hire's httpOnly cookie being invisible to it across origins.
+func assistantBearerRequest(t *testing.T, app *fiber.App, method, path, token string, body any) *http.Response {
+	t.Helper()
+	return assistantDo(t, app, method, path, body, func(r *http.Request) {
+		r.Header.Set(fiber.HeaderAuthorization, "Bearer "+token)
+	})
+}
+
+// assistantDo issues one JSON request, letting the caller attach whichever
+// credential it is testing. The two carriers are the only difference between an
+// extension's request and the web app's, so everything else lives here once.
+func assistantDo(t *testing.T, app *fiber.App, method, path string, body any, credential func(*http.Request)) *http.Response {
+	t.Helper()
 	var reader io.Reader
 	if body != nil {
 		blob, _ := json.Marshal(body)
@@ -82,9 +110,7 @@ func assistantRequest(t *testing.T, app *fiber.App, method, path, cookie string,
 	}
 	r := httptest.NewRequest(method, path, reader)
 	r.Header.Set("Content-Type", "application/json")
-	if cookie != "" {
-		r.AddCookie(&http.Cookie{Name: auth.CookieName, Value: cookie})
-	}
+	credential(r)
 	// A streamed turn has no body length; give the test client room to read it all.
 	resp, err := app.Test(r, 10_000)
 	if err != nil {
@@ -188,6 +214,126 @@ func TestAssistantIsGatedToTheRestrictedRollout(t *testing.T) {
 	}
 	if resp := assistantRequest(t, app, fiber.MethodGet, "/api/v1/assistant/sessions", "", nil); resp.StatusCode != fiber.StatusUnauthorized {
 		t.Errorf("unauthenticated list: status %d, want 401", resp.StatusCode)
+	}
+}
+
+// A browser extension cannot send hire's httpOnly cookie across origins, so it
+// presents the session JWT the connect flow minted as a Bearer credential. It must
+// reach the same conversations, under the same gate, as the cookie would.
+func TestAssistantServesABearerSessionJWT(t *testing.T) {
+	pool := startPostgres(t)
+	iss := auth.NewIssuer("test-secret", time.Hour)
+	app, _ := newAssistantApp(pool, iss, nil)
+	_, token := assistantUser(t, pool, iss, "extension@example.test", true)
+
+	id := createSession(t, app, token)
+
+	resp := assistantBearerRequest(t, app, fiber.MethodGet, "/api/v1/assistant/sessions", token, nil)
+	if resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("list with a Bearer session JWT: status %d, want 200", resp.StatusCode)
+	}
+	var list struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(list.Data) != 1 || list.Data[0].ID != id {
+		t.Errorf("Bearer list = %+v, want the caller's one session %s", list.Data, id)
+	}
+}
+
+// The side panel holds browsing conversations, so it has to be able to ask for one.
+// A tailoring session is not on offer here: it is bound to a CV and a vacancy, and
+// one minted without that binding would register no CV tools at all.
+func TestCreateAssistantSessionTakesThePresetTheClientAsksFor(t *testing.T) {
+	pool := startPostgres(t)
+	iss := auth.NewIssuer("test-secret", time.Hour)
+	app, _ := newAssistantApp(pool, iss, nil)
+	_, cookie := assistantUser(t, pool, iss, "presets@example.test", true)
+
+	// The preset rides the query string, as `?preset=profile` already does.
+	preset := func(t *testing.T, query string) (int, string) {
+		t.Helper()
+		resp := assistantRequest(t, app, fiber.MethodPost, "/api/v1/assistant/sessions"+query, cookie, map[string]any{})
+		var out struct {
+			Data struct {
+				Preset string `json:"preset"`
+			} `json:"data"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out.Data.Preset
+	}
+
+	if status, got := preset(t, "?preset=browse"); status != fiber.StatusCreated || got != assistant.PresetBrowse {
+		t.Errorf("asking for browse: status %d preset %q, want 201 and %q", status, got, assistant.PresetBrowse)
+	}
+	if status, got := preset(t, ""); status != fiber.StatusCreated || got != assistant.PresetChat {
+		t.Errorf("asking for nothing: status %d preset %q, want 201 and a chat", status, got)
+	}
+	if status, _ := preset(t, "?preset=tailor"); status != fiber.StatusBadRequest {
+		t.Errorf("asking for tailor: status %d, want 400 — a tailoring session needs its CV binding", status)
+	}
+}
+
+// A conversation begun on a vacancy in the side panel is one the candidate can
+// pick up at their desk, so it belongs in the same rail as their chats.
+func TestSessionListSpansBrowsingConversations(t *testing.T) {
+	pool := startPostgres(t)
+	iss := auth.NewIssuer("test-secret", time.Hour)
+	app, h := newAssistantApp(pool, iss, nil)
+	userID, cookie := assistantUser(t, pool, iss, "rail@example.test", true)
+
+	browsing, err := h.store.CreateSession(context.Background(), userID, assistant.PresetBrowse, nil, nil)
+	if err != nil {
+		t.Fatalf("create browsing session: %v", err)
+	}
+	// The other half of the same predicate: widening it must not have swept tailoring
+	// conversations in. Only a real query can prove that — the store's own unit tests
+	// run against a fake that never sees the WHERE clause. The binding is left unset
+	// because what is on trial here is the preset filter, not the CV it points at.
+	tailoring, err := h.store.CreateSession(context.Background(), userID, assistant.PresetTailor, nil, nil)
+	if err != nil {
+		t.Fatalf("create tailoring session: %v", err)
+	}
+
+	resp := assistantRequest(t, app, fiber.MethodGet, "/api/v1/assistant/sessions", cookie, nil)
+	var list struct {
+		Data []struct {
+			ID     string `json:"id"`
+			Preset string `json:"preset"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var sawBrowsing bool
+	for _, s := range list.Data {
+		if s.ID == browsing.ID.String() {
+			sawBrowsing = true
+		}
+		if s.ID == tailoring.ID.String() {
+			t.Errorf("the rail contains the tailoring session %s; it is reached through its CV, not here", tailoring.ID)
+		}
+	}
+	if !sawBrowsing {
+		t.Errorf("the rail = %+v, want it to contain the browsing session %s", list.Data, browsing.ID)
+	}
+}
+
+// Widening the carrier must not widen the rollout: the gate reads group membership
+// per request, whichever credential resolved the caller.
+func TestAssistantRefusesABearerCallerOutsideTheRollout(t *testing.T) {
+	pool := startPostgres(t)
+	iss := auth.NewIssuer("test-secret", time.Hour)
+	app, _ := newAssistantApp(pool, iss, nil)
+	_, token := assistantUser(t, pool, iss, "plain-extension@example.test", false)
+
+	resp := assistantBearerRequest(t, app, fiber.MethodPost, "/api/v1/assistant/sessions", token, map[string]any{})
+	if resp.StatusCode != fiber.StatusForbidden {
+		t.Errorf("non-beta create over Bearer: status %d, want 403", resp.StatusCode)
 	}
 }
 

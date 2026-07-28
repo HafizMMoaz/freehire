@@ -157,7 +157,7 @@ func (q *Queries) GetAssistantSession(ctx context.Context, arg GetAssistantSessi
 const listAssistantChatSessions = `-- name: ListAssistantChatSessions :many
 SELECT id, user_id, preset, label, cv_id, job_id, created_at, updated_at
 FROM assistant_sessions
-WHERE user_id = $1 AND preset IN ('chat', 'profile')
+WHERE user_id = $1 AND preset IN ('chat', 'profile', 'browse')
 ORDER BY updated_at DESC, id DESC
 `
 
@@ -175,12 +175,14 @@ type ListAssistantChatSessionsRow struct {
 // The caller's session rail: their unbound conversations, most recently active first.
 // Owner-scoped by construction — another user's sessions can never appear.
 //
-// The rail carries every preset that binds to NOTHING, which is chat and profile alike: an
+// The rail carries every preset that binds to NOTHING: chat, profile and browse alike. An
 // experience interview is resumable and would otherwise be lost the moment its author
-// navigated away. Tailoring conversations are deliberately excluded for the opposite
-// reason — they belong to the CV that owns them and are reached through the tailoring
-// workspace, so listing one here would put a conversation in the rail that leads nowhere
-// useful and cannot be continued without its CV.
+// navigated away; a browsing conversation begun in the extension's side panel is one the
+// candidate can pick up at their desk, where it simply cannot see a page any more.
+// Tailoring conversations are deliberately excluded for the opposite reason — they belong
+// to the CV that owns them and are reached through the tailoring workspace, so listing one
+// here would put a conversation in the rail that leads nowhere useful and cannot be
+// continued without its CV.
 func (q *Queries) ListAssistantChatSessions(ctx context.Context, userID int64) ([]ListAssistantChatSessionsRow, error) {
 	rows, err := q.db.Query(ctx, listAssistantChatSessions, userID)
 	if err != nil {

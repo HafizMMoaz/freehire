@@ -16,6 +16,7 @@ import (
 	"github.com/valyala/fasthttp"
 
 	"github.com/strelov1/freehire/internal/assistant"
+	"github.com/strelov1/freehire/internal/browsertools"
 	"github.com/strelov1/freehire/internal/db"
 	"github.com/strelov1/freehire/internal/experience"
 	"github.com/strelov1/freehire/internal/llm"
@@ -40,6 +41,10 @@ type assistantHandlers struct {
 	profile *profileHandlers
 	// experience backs the bank tools, which every preset offers.
 	experience experienceBankTools
+	// browserTools backs read_current_page in a browsing session. It is the same hub
+	// the agentic autofill drives, so the assistant is a second in-process harness on
+	// the user's channel rather than a second wire to their browser.
+	browserTools *browsertools.Hub
 }
 
 // newAssistantHandlers wires the agent. A nil LLM client leaves the runner nil:
@@ -47,16 +52,17 @@ type assistantHandlers struct {
 // unavailable, rather than the whole surface disappearing.
 func newAssistantHandlers(queries *db.Queries, model *llm.Client, maxSteps int,
 	search *searchHandlers, resumeH *resumeHandlers, tracking *trackingHandlers, cvH *cvHandlers,
-	profileH *profileHandlers) *assistantHandlers {
+	profileH *profileHandlers, browserTools *browsertools.Hub) *assistantHandlers {
 	h := &assistantHandlers{
-		experience: experience.NewStore(experience.NewQueriesRepository(queries)),
-		store:      assistant.NewStore(queries),
-		queries:    queries,
-		search:     search,
-		resume:     resumeH,
-		tracking:   tracking,
-		cv:         cvH,
-		profile:    profileH,
+		experience:   experience.NewStore(experience.NewQueriesRepository(queries)),
+		store:        assistant.NewStore(queries),
+		queries:      queries,
+		search:       search,
+		resume:       resumeH,
+		tracking:     tracking,
+		cv:           cvH,
+		profile:      profileH,
+		browserTools: browserTools,
 	}
 	if model != nil {
 		h.runner = assistant.NewRunner(model, h.store, assistant.RunnerConfig{MaxSteps: maxSteps})
@@ -64,16 +70,19 @@ func newAssistantHandlers(queries *db.Queries, model *llm.Client, maxSteps int,
 	return h
 }
 
-// register mounts the assistant. Cookie-only (the browser drives it) and gated to
-// the restricted rollout: inference is billed to us, so it is not open to everyone
-// while it is free.
+// register mounts the assistant. A browser drives it, but not always the web app:
+// the extension's side panel holds conversations too, and it cannot send hire's
+// httpOnly cookie across origins — so the gate is `key`, which resolves the cookie,
+// the session JWT the connect flow minted, or a full-scope API key to one user.
+// Every route stays behind the restricted rollout: inference is billed to us, so it
+// is not open to everyone while it is free.
 func (h *assistantHandlers) register(api fiber.Router, mw middleware) {
 	gate := h.requireRollout
-	api.Post("/assistant/sessions", mw.cookie, gate, h.CreateAssistantSession)
-	api.Get("/assistant/sessions", mw.cookie, gate, h.ListAssistantSessions)
-	api.Get("/assistant/sessions/:id", mw.cookie, gate, h.GetAssistantSession)
-	api.Delete("/assistant/sessions/:id", mw.cookie, gate, h.DeleteAssistantSession)
-	api.Post("/assistant/sessions/:id/messages", mw.cookie, gate, h.PostAssistantMessage)
+	api.Post("/assistant/sessions", mw.key, gate, h.CreateAssistantSession)
+	api.Get("/assistant/sessions", mw.key, gate, h.ListAssistantSessions)
+	api.Get("/assistant/sessions/:id", mw.key, gate, h.GetAssistantSession)
+	api.Delete("/assistant/sessions/:id", mw.key, gate, h.DeleteAssistantSession)
+	api.Post("/assistant/sessions/:id/messages", mw.key, gate, h.PostAssistantMessage)
 }
 
 // requireRollout admits moderators and beta testers. Membership is read fresh per
@@ -149,7 +158,8 @@ func assistantSessionID(c *fiber.Ctx) (uuid.UUID, error) {
 }
 
 // CreateAssistantSession starts a new unbound conversation for the caller — a general
-// chat, or the experience interviewer when `?preset=profile` is given.
+// chat, the experience interviewer with `?preset=profile`, or a browsing session held
+// from the extension's side panel with `?preset=browse`.
 //
 // Only the presets that bind to NOTHING can be minted here. A tailoring session is
 // created by the tailoring bootstrap, which knows the CV and the vacancy to bind; letting
@@ -159,20 +169,32 @@ func (h *assistantHandlers) CreateAssistantSession(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	preset := assistant.PresetChat
-	switch requested := c.Query("preset"); requested {
-	case "", assistant.PresetChat:
-	case assistant.PresetProfile:
-		preset = assistant.PresetProfile
-	default:
-		return fiber.NewError(fiber.StatusBadRequest,
-			"preset must be chat or profile — a tailoring session is created from its CV")
+	preset, err := creatablePreset(c.Query("preset"))
+	if err != nil {
+		return err
 	}
 	sess, err := h.store.CreateSession(c.Context(), userID, preset, nil, nil)
 	if err != nil {
 		return err
 	}
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"data": sessionView(sess)})
+}
+
+// creatablePreset resolves the preset a client asked for, admitting only those that
+// bind to nothing. Naming the value it rejected and the ones it accepts matters:
+// this endpoint serves the web app and the extension both, and a bare 400 leaves a
+// client author guessing.
+func creatablePreset(asked string) (string, error) {
+	switch asked {
+	case "":
+		return assistant.PresetChat, nil
+	case assistant.PresetChat, assistant.PresetProfile, assistant.PresetBrowse:
+		return asked, nil
+	default:
+		return "", fiber.NewError(fiber.StatusBadRequest,
+			fmt.Sprintf("preset %q cannot be created here; use %q, %q or %q — a tailoring session is created from its CV",
+				asked, assistant.PresetChat, assistant.PresetProfile, assistant.PresetBrowse))
+	}
 }
 
 // ListAssistantSessions returns the caller's chat conversations, newest activity

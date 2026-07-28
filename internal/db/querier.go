@@ -801,12 +801,14 @@ type Querier interface {
 	// The caller's session rail: their unbound conversations, most recently active first.
 	// Owner-scoped by construction — another user's sessions can never appear.
 	//
-	// The rail carries every preset that binds to NOTHING, which is chat and profile alike: an
+	// The rail carries every preset that binds to NOTHING: chat, profile and browse alike. An
 	// experience interview is resumable and would otherwise be lost the moment its author
-	// navigated away. Tailoring conversations are deliberately excluded for the opposite
-	// reason — they belong to the CV that owns them and are reached through the tailoring
-	// workspace, so listing one here would put a conversation in the rail that leads nowhere
-	// useful and cannot be continued without its CV.
+	// navigated away; a browsing conversation begun in the extension's side panel is one the
+	// candidate can pick up at their desk, where it simply cannot see a page any more.
+	// Tailoring conversations are deliberately excluded for the opposite reason — they belong
+	// to the CV that owns them and are reached through the tailoring workspace, so listing one
+	// here would put a conversation in the rail that leads nowhere useful and cannot be
+	// continued without its CV.
 	ListAssistantChatSessions(ctx context.Context, userID int64) ([]ListAssistantChatSessionsRow, error)
 	// A session's whole transcript in order. It is both what the client replays and what the
 	// model's history is rebuilt from, so tool calls and tool results are included.
