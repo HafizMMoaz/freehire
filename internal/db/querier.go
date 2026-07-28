@@ -285,10 +285,11 @@ type Querier interface {
 	// defaults NULL (the tailoring seam is unused in phase 1). Returns the metadata the list
 	// and detail responses need.
 	CreateCV(ctx context.Context, arg CreateCVParams) (CreateCVRow, error)
-	// Record a contribution of a novel company board. The UNIQUE (source, board) constraint
-	// rejects a second contribution of the same board (another vacancy or the listing); the
-	// repository maps that unique violation to ErrBoardAlreadyContributed. The AI-credits reward
-	// is granted separately by the handler (credits.Reward), idempotent by the contribution id.
+	// Record a contribution of a novel company board. The unique index on (source, board) over the
+	// live statuses (migration 0049) rejects a second contribution of a board already queued or
+	// onboarded; the repository maps that violation to ErrBoardAlreadyContributed. A board that was
+	// rejected releases its identity, so it can be contributed again. The AI-credits reward is
+	// granted separately by the caller (credits.Reward), idempotent by the contribution id.
 	CreateContribution(ctx context.Context, arg CreateContributionParams) (LinkContribution, error)
 	CreateExperienceEmployment(ctx context.Context, arg CreateExperienceEmploymentParams) (ExperienceEmployment, error)
 	// Record a member's offer to refer into a company. The UNIQUE (user_id, company_slug)

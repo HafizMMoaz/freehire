@@ -74,9 +74,9 @@ func (q *Queries) CompanyForBoard(ctx context.Context, arg CompanyForBoardParams
 }
 
 const createContribution = `-- name: CreateContribution :one
-INSERT INTO link_contributions (submitted_by, url, source, board)
-VALUES ($1::bigint, $2, $3, $4)
-RETURNING id, submitted_by, url, source, board, status, created_at
+INSERT INTO link_contributions (submitted_by, url, source, board, surface)
+VALUES ($1::bigint, $2, $3, $4, $5)
+RETURNING id, submitted_by, url, source, board, status, created_at, surface
 `
 
 type CreateContributionParams struct {
@@ -84,18 +84,21 @@ type CreateContributionParams struct {
 	URL         string      `json:"url"`
 	Source      pgtype.Text `json:"source"`
 	Board       pgtype.Text `json:"board"`
+	Surface     string      `json:"surface"`
 }
 
-// Record a contribution of a novel company board. The UNIQUE (source, board) constraint
-// rejects a second contribution of the same board (another vacancy or the listing); the
-// repository maps that unique violation to ErrBoardAlreadyContributed. The AI-credits reward
-// is granted separately by the handler (credits.Reward), idempotent by the contribution id.
+// Record a contribution of a novel company board. The unique index on (source, board) over the
+// live statuses (migration 0049) rejects a second contribution of a board already queued or
+// onboarded; the repository maps that violation to ErrBoardAlreadyContributed. A board that was
+// rejected releases its identity, so it can be contributed again. The AI-credits reward is
+// granted separately by the caller (credits.Reward), idempotent by the contribution id.
 func (q *Queries) CreateContribution(ctx context.Context, arg CreateContributionParams) (LinkContribution, error) {
 	row := q.db.QueryRow(ctx, createContribution,
 		arg.SubmittedBy,
 		arg.URL,
 		arg.Source,
 		arg.Board,
+		arg.Surface,
 	)
 	var i LinkContribution
 	err := row.Scan(
@@ -106,19 +109,21 @@ func (q *Queries) CreateContribution(ctx context.Context, arg CreateContribution
 		&i.Board,
 		&i.Status,
 		&i.CreatedAt,
+		&i.Surface,
 	)
 	return i, err
 }
 
 const createReviewContribution = `-- name: CreateReviewContribution :one
-INSERT INTO link_contributions (submitted_by, url, status)
-VALUES ($1::bigint, $2, 'review')
-RETURNING id, submitted_by, url, source, board, status, created_at
+INSERT INTO link_contributions (submitted_by, url, status, surface)
+VALUES ($1::bigint, $2, 'review', $3)
+RETURNING id, submitted_by, url, source, board, status, created_at, surface
 `
 
 type CreateReviewContributionParams struct {
 	SubmittedBy int64  `json:"submitted_by"`
 	URL         string `json:"url"`
+	Surface     string `json:"surface"`
 }
 
 // Record an unrecognized-but-valid link for manual review: source/board unset, status
@@ -126,7 +131,7 @@ type CreateReviewContributionParams struct {
 // duplicate submission of the same url; the repository maps that violation to
 // ErrBoardAlreadyContributed. A maintainer later resolves source/board and promotes the row.
 func (q *Queries) CreateReviewContribution(ctx context.Context, arg CreateReviewContributionParams) (LinkContribution, error) {
-	row := q.db.QueryRow(ctx, createReviewContribution, arg.SubmittedBy, arg.URL)
+	row := q.db.QueryRow(ctx, createReviewContribution, arg.SubmittedBy, arg.URL, arg.Surface)
 	var i LinkContribution
 	err := row.Scan(
 		&i.ID,
@@ -136,6 +141,7 @@ func (q *Queries) CreateReviewContribution(ctx context.Context, arg CreateReview
 		&i.Board,
 		&i.Status,
 		&i.CreatedAt,
+		&i.Surface,
 	)
 	return i, err
 }
@@ -163,7 +169,7 @@ func (q *Queries) JobsExistForBoard(ctx context.Context, arg JobsExistForBoardPa
 }
 
 const listContributionsByUser = `-- name: ListContributionsByUser :many
-SELECT id, submitted_by, url, source, board, status, created_at FROM link_contributions
+SELECT id, submitted_by, url, source, board, status, created_at, surface FROM link_contributions
 WHERE submitted_by = $1
 ORDER BY created_at DESC
 `
@@ -186,6 +192,7 @@ func (q *Queries) ListContributionsByUser(ctx context.Context, submittedBy int64
 			&i.Board,
 			&i.Status,
 			&i.CreatedAt,
+			&i.Surface,
 		); err != nil {
 			return nil, err
 		}

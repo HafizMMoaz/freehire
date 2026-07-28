@@ -53,7 +53,7 @@ func TestRecordAndDedups(t *testing.T) {
 	repo := NewQueriesRepository(db.New(pool))
 	userID := insertUser(t, pool, "u@example.test")
 
-	in := RecordInput{SubmittedBy: userID, URL: "https://jobs.ashbyhq.com/blitzy", Source: "ashby", Board: "blitzy"}
+	in := RecordInput{SubmittedBy: userID, URL: "https://jobs.ashbyhq.com/blitzy", Source: "ashby", Board: "blitzy", Surface: SurfaceCLI}
 
 	c, err := repo.Record(ctx, in)
 	if err != nil {
@@ -61,6 +61,11 @@ func TestRecordAndDedups(t *testing.T) {
 	}
 	if c.ID == 0 || c.Status != "pending" || c.Board != "blitzy" {
 		t.Errorf("recorded row unexpected: %+v", c)
+	}
+	// The surface rides with the row, so repeated use is attributable to a channel and not
+	// only to a user.
+	if c.Surface != SurfaceCLI {
+		t.Errorf("surface = %q, want %q", c.Surface, SurfaceCLI)
 	}
 
 	// Same board again (e.g. via a different vacancy URL) → rejected, no second row.

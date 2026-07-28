@@ -256,14 +256,17 @@ func Register(app *fiber.App, cfg Config) {
 	a.autofillPlanner = cfg.LLM
 	creditsStore := credits.NewStore(queries, cfg.Pool, cfg.Credits)
 	// Imports fetch a user-supplied page, so they dial through the same SSRF-guarded
-	// client the crawlers use (sources.NewClient). cfg.Search may be nil (no engine
-	// configured), which only skips the index push.
-	importer := linkimport.New(cfg.Pool, queries, cfg.Search, sources.NewClient())
+	// client the crawlers use (sources.NewClient). That one client also backs the ingest
+	// registry board coverage reads a vacancy through, so an import and a crawl of the same
+	// board share transport and rate limits. cfg.Search may be nil (no engine configured),
+	// which only skips the index push.
+	ingestClient := sources.NewClient()
+	importer := linkimport.New(cfg.Pool, queries, cfg.Search, ingestClient, sources.All(ingestClient), boardresolve.New())
 	contributionsH := newContributionHandlers(contributionSvc, creditsStore, queries, importer)
 	creditsH := newCreditsHandlers(creditsStore, queries)
 	matchH := newMatchHandlers(queries, profileSvc, resumeStore, matchAnalyzer, creditsStore)
 	cvH := newCVHandlers(queries, cfg.TypstBin, resumeStore, creditsStore, matchH)
-	telegramH := newTelegramHandlers(queries, cfg.JWTSecret, cfg.TelegramBotToken, cfg.TelegramBotUsername, cfg.TelegramWebhookSecret, cfg.FrontendOrigin, contributionSvc, creditsStore)
+	telegramH := newTelegramHandlers(queries, cfg.JWTSecret, cfg.TelegramBotToken, cfg.TelegramBotUsername, cfg.TelegramWebhookSecret, cfg.FrontendOrigin, contributionsH.intake)
 	inboxH := newInboxHandlers(queries, cfg.Pool, cfg.GmailConnector, cfg.GmailCipher, cfg.FrontendOrigin, cfg.CookieSecure, cfg.MailboxDomain)
 	// Account deletion reaches past the FK cascade: cfg.Blob is nil when storage is
 	// unconfigured and the revoker is nil when Gmail is — either way there is nothing

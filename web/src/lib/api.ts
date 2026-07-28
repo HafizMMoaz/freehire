@@ -42,6 +42,7 @@ import type {
   Submission,
   SubmissionInput,
   Contribution,
+  ResolvedLink,
   ReferralOffer,
   ReferralRequestInput,
   SeekerReferralRequest,
@@ -1060,10 +1061,11 @@ export function createApi(
     return requestData<Submission[]>('/api/v1/me/submissions');
   }
 
-  /** Contribute a job link. The server detects the ATS, dedups by derived identity, and
-   *  records + rewards a novel link (422 unsupported ATS, 409 already held / contributed). */
-  async function submitContribution(url: string): Promise<Contribution> {
-    return requestData<Contribution>('/api/v1/me/contributions', jsonBody('POST', { url }));
+  /** Hand a job link to freehire. One sequence serves every surface: the catalog is checked,
+   *  the vacancy imported when anything can read it, and the board behind it recorded for
+   *  onboarding either way. The outcome says which of those happened (422 for a non-URL). */
+  async function resolveJobLink(url: string): Promise<ResolvedLink> {
+    return requestData<ResolvedLink>('/api/v1/jobs/resolve', jsonBody('POST', { url, surface: 'web' }));
   }
 
   /** The caller's own link contributions, newest first. */
@@ -1508,7 +1510,7 @@ export function createApi(
     telegramUnlink,
     submitJob,
     listMySubmissions,
-    submitContribution,
+    resolveJobLink,
     listMyContributions,
     createReferralRequest,
     listMyReferralRequests,
