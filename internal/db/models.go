@@ -209,6 +209,15 @@ type ExperienceEmployment struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type GhostReport struct {
+	ID          int64              `json:"id"`
+	UserID      int64              `json:"user_id"`
+	JobID       int64              `json:"job_id"`
+	AppliedOn   pgtype.Date        `json:"applied_on"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	RetractedAt pgtype.Timestamptz `json:"retracted_at"`
+}
+
 type GmailConnection struct {
 	UserID          int64              `json:"user_id"`
 	Email           string             `json:"email"`
@@ -223,6 +232,12 @@ type InsightsCompanyGrowth struct {
 	CompanySlug   string `json:"company_slug"`
 	OpenCount     int32  `json:"open_count"`
 	OpenCountPrev int32  `json:"open_count_prev"`
+}
+
+type InsightsCompanyResponse struct {
+	CompanySlug  string `json:"company_slug"`
+	Applications int32  `json:"applications"`
+	Answered     int32  `json:"answered"`
 }
 
 type InsightsCompanyStat struct {
@@ -326,6 +341,7 @@ type Job struct {
 	SalaryPeriodManual    string             `json:"salary_period_manual"`
 	UpvoteCount           int32              `json:"upvote_count"`
 	DownvoteCount         int32              `json:"downvote_count"`
+	AtsAbsentAt           pgtype.Timestamptz `json:"ats_absent_at"`
 }
 
 type JobDailyStat struct {

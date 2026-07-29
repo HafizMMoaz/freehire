@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"time"
+
 	"context"
 
 	"github.com/gofiber/fiber/v2"
@@ -91,6 +93,7 @@ func (h *searchHandlers) SearchJobs(c *fiber.Ctx) error {
 	for i, hit := range res.Hits {
 		views[i] = hit.Job
 	}
+	h.attachGhost(c, res.Hits, views)
 
 	return listResponse(c, views, res.Total, limit, offset)
 }
@@ -154,4 +157,61 @@ func searchSort(c *fiber.Ctx) []string {
 // so the two cannot drift. Returns nil when no facet is set.
 func buildSearchFilter(c *fiber.Ctx) any {
 	return search.FilterFromValues(queryValues(c))
+}
+
+// attachGhost attaches the ghost signal to a page of search hits.
+//
+// Search is the surface where job cards are actually browsed, so leaving it out
+// would mean the badge existed almost nowhere. It costs two extra reads per page:
+// the outcome evidence (sparse — only jobs anyone reported or applied to) and the
+// absence stamps.
+//
+// The stamps have to come from Postgres because they cannot be in the index:
+// cmd/reindex pushes only documents whose content_hash moved, and no adapter writes
+// ats_absent_at, so the column would never reach Meilisearch on its own. That is the
+// same trap is_tech already fell into. The reality class, by contrast, IS on the
+// document (search.FromJob promotes it), so it is read from the hit rather than
+// recomputed.
+//
+// Best-effort: a failed lookup leaves the signal off the page rather than failing
+// the search.
+func (h *searchHandlers) attachGhost(c *fiber.Ctx, hits []search.JobDocument, views []jobview.Job) {
+	if len(hits) == 0 || h.queries == nil {
+		return
+	}
+	ids := make([]int64, len(hits))
+	for i, hit := range hits {
+		ids[i] = hit.ID
+	}
+
+	stampRows, err := h.queries.ListJobGhostStamps(c.Context(), ids)
+	if err != nil {
+		return
+	}
+	stamps := make(map[int64]db.ListJobGhostStampsRow, len(stampRows))
+	for _, r := range stampRows {
+		stamps[r.ID] = r
+	}
+	evidence := ghostEvidenceFor(c.Context(), h.queries, ids)
+
+	now := time.Now()
+	for i, hit := range hits {
+		realityClass := ""
+		if hit.Reality != nil {
+			realityClass = hit.Reality.Class
+		}
+		row := stamps[hit.ID]
+		views[i].Ghost = jobview.ClassifyGhost(jobview.GhostInput{
+			Now: now,
+			// Read from Postgres, not from the hit: a sweep-closed job stays in the
+			// index until a reindex, whose timer is disabled, so the index cannot be
+			// trusted to say a posting is still up. Without this a warning would
+			// appear on postings already taken down.
+			Closed:       row.ClosedAt.Valid,
+			RealityClass: realityClass,
+			ATSAbsentAt:  row.AtsAbsentAt.Time,
+			HasATSAbsent: row.AtsAbsentAt.Valid,
+			Evidence:     evidence[hit.ID],
+		})
+	}
 }

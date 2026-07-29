@@ -129,6 +129,9 @@ type Querier interface {
 	// worker died (stale claimed_at), so no separate reaper process is needed.
 	// Oldest post first so a backlog drains in posting order.
 	ClaimTelegramPosts(ctx context.Context, arg ClaimTelegramPostsParams) ([]ClaimTelegramPostsRow, error)
+	// Withdraw the absence stamp: the role turned up on the company's board after all.
+	// Scoped to rows that carry a stamp so a run over a healthy company writes nothing.
+	ClearJobATSAbsent(ctx context.Context, jobIds []int64) error
 	// Reset a tracked job to the wishlist: drop stage and applied state, keep saved/viewed/notes.
 	ClearJobProgress(ctx context.Context, arg ClearJobProgressParams) (UserJob, error)
 	// Explicitly clear a user's job vote (the DELETE endpoint). No-op when no row or no
@@ -260,6 +263,10 @@ type Querier interface {
 	// Total live messages for the caller (same optional filters as ListEmails), for
 	// pagination.
 	CountEmails(ctx context.Context, arg CountEmailsParams) (int64, error)
+	// How many claims this account has filed since a cutoff, for the daily cap. Counts
+	// retracted rows too: filing and withdrawing in a loop is exactly the pattern the cap
+	// exists to bound, so forgiving it would leave the cap trivially bypassable.
+	CountGhostReportsSince(ctx context.Context, arg CountGhostReportsSinceParams) (int64, error)
 	// Per-stage application counts for the Pipeline snapshot. An application is any
 	// row the user applied to or staged (saved-only rows are excluded); a row with
 	// applied_at set but no stage groups under a NULL stage. The Go layer folds these
@@ -318,6 +325,22 @@ type Querier interface {
 	// granted separately by the caller (credits.Reward), idempotent by the contribution id.
 	CreateContribution(ctx context.Context, arg CreateContributionParams) (LinkContribution, error)
 	CreateExperienceEmployment(ctx context.Context, arg CreateExperienceEmploymentParams) (ExperienceEmployment, error)
+	// File one person's claim that they applied to a posting and were never answered.
+	//
+	// Two of the three refusals are STRUCTURAL rather than checks the service performs:
+	// the INSERT selects from users and jobs, so an unproven address or a posting already
+	// taken down inserts no row at all. That is the same shape CreateAPIKey uses for the
+	// verified-address gate — a guarantee nothing downstream can forget to apply.
+	//
+	// A conflicting row that has been RETRACTED is revived rather than refused: retracting
+	// by mistake must not lock somebody out of their own claim forever, and reviving cannot
+	// inflate anything, since the row (and so the person) is still counted once. A
+	// conflicting row that is still live updates nothing (the DO UPDATE's WHERE), returning
+	// no row, which the repository reports as a duplicate.
+	//
+	// Because all four outcomes are "no row", the repository asks GhostReportRefusalReason
+	// which one it was. That costs an extra query only on the failure path.
+	CreateGhostReport(ctx context.Context, arg CreateGhostReportParams) (GhostReport, error)
 	// Record a member's offer to refer into a company. The UNIQUE (user_id, company_slug)
 	// constraint rejects a second offer for the same company; the repository maps that unique
 	// violation to a domain "already offered" error. Starts pending, awaiting moderation.
@@ -384,6 +407,7 @@ type Querier interface {
 	// Per-company open/growth scalar (backs the /insights/companies leaderboard)
 	// ---------------------------------------------------------------------------
 	DeleteAllInsightsCompanyGrowth(ctx context.Context) error
+	DeleteAllInsightsCompanyResponse(ctx context.Context) error
 	// ---------------------------------------------------------------------------
 	// Per-company hiring signal
 	// ---------------------------------------------------------------------------
@@ -635,6 +659,10 @@ type Querier interface {
 	// the table grows columns (e.g. collections); an explicit subset makes sqlc emit a
 	// distinct row type and breaks the company-detail handler on every new column.
 	GetCompany(ctx context.Context, slug string) (Company, error)
+	// The observable application counts for one company. A company with no row has no
+	// observable applications at all, which the caller must treat as "not enough data"
+	// rather than as a zero response rate.
+	GetCompanyResponse(ctx context.Context, companySlug string) (GetCompanyResponseRow, error)
 	// The caller's current vote for a company (0 when none). Always returns one row.
 	GetCompanyVote(ctx context.Context, arg GetCompanyVoteParams) (int16, error)
 	GetEmail(ctx context.Context, arg GetEmailParams) (GetEmailRow, error)
@@ -791,6 +819,12 @@ type Querier interface {
 	// decide whether a correctly-signed token was revoked. One primary-key lookup; this
 	// is the price of making a stateless JWT revocable at all.
 	GetUserTokenVersion(ctx context.Context, id int64) (int32, error)
+	// Why CreateGhostReport returned no row. Read only on the failure path, so the happy
+	// path stays one statement. Each column answers one gate, and the repository maps the
+	// first failing one — unverified before closed before duplicate — because an
+	// unverified account should be told to confirm its address rather than that somebody
+	// already reported the job.
+	GhostReportRefusalReason(ctx context.Context, arg GhostReportRefusalReasonParams) (GhostReportRefusalReasonRow, error)
 	IncrementThreadReplyCount(ctx context.Context, id int64) error
 	// Mint a persona. ON CONFLICT (user_id) DO NOTHING makes a concurrent same-user mint
 	// return no row (the repository re-reads the winner); a handle-unique violation is a
@@ -855,6 +889,15 @@ type Querier interface {
 	// worker groups these by canonical(query) so each distinct filter hits the search
 	// index once regardless of how many subscriptions share it.
 	ListActiveSubscriptions(ctx context.Context) ([]ListActiveSubscriptionsRow, error)
+	// Keyset page of open aggregator postings to cross-check, ordered by id so the scan
+	// resumes exactly where it stopped. The worker buffers a page and groups it by company
+	// itself, so a company's board is read once rather than once per posting; ordering by
+	// company instead would make the keyset cursor non-unique and risk skipping rows.
+	//
+	// The caller passes the aggregator provider names (sources.AggregatorProviders): the
+	// provider taxonomy lives in Go adapter markers, not in the database, and copying it
+	// into SQL would leave two lists to keep in step.
+	ListAggregatorJobsForCrosscheck(ctx context.Context, arg ListAggregatorJobsForCrosscheckParams) ([]ListAggregatorJobsForCrosscheckRow, error)
 	// The notify fan-out targets: every approved referrer of a company with their email and
 	// linked Telegram chat (NULL when unlinked). Email is always present; chat_id drives the
 	// optional Telegram ping.
@@ -901,6 +944,15 @@ type Querier interface {
 	// companies that are actually hiring, matching the /companies list's hiring scope, and
 	// rides companies_hiring_job_count_idx instead of scanning the full heap.
 	ListCompaniesForReindex(ctx context.Context, arg ListCompaniesForReindexParams) ([]Company, error)
+	// The open titles a company carries on its OWN board — a source of kind `ats` or
+	// `company`, never an aggregator. The worker turns these into role keys and asks
+	// whether an aggregator posting's key is among them.
+	//
+	// This is the COVERAGE GATE's data as well as its answer. An empty result means we do
+	// not crawl this company's board at all, and the worker must then stamp nothing:
+	// absence is evidence only where we looked, and without the gate the signal would
+	// report our own blind spots as the employer's fault.
+	ListCompanyBoardTitles(ctx context.Context, arg ListCompanyBoardTitlesParams) ([]string, error)
 	// All companies with their current collection membership. cmd/import-collections
 	// reads this to know the existing company slugs (the match target) and each
 	// company's current tags (so it can reconcile only the tags it manages, leaving any
@@ -968,6 +1020,30 @@ type Querier interface {
 	// top-N per facet without re-sorting. Aggregate only — per-value counts, no
 	// record-level data.
 	ListFacetStats(ctx context.Context) ([]InsightsFacetStat, error)
+	// Candidate applications for the ghost signal, for a page of jobs at a time.
+	//
+	// This query selects and gates; it does NOT judge. Whether an application is
+	// actually silent is decided in Go by internal/userjob's threshold ladder, whose
+	// five values carry their measured provenance. Restating that ladder here would let
+	// a change to it disagree silently with the personal tracking board — the same
+	// application judged by two ladders on two surfaces, with nothing binding them.
+	//
+	// The mailbox gate is the one rule that DOES belong here, because it is a join.
+	// jobtracking.Silence falls back to applied_at when an application has no linked
+	// mail, which is right for the owner's own board and wrong as input to a public
+	// claim: for a user with no connected mailbox there is never linked mail, so every
+	// application of theirs reads silent once the threshold passes — including the ones
+	// the employer answered somewhere we cannot see. Absence of a reply is evidence only
+	// where a reply would have been observed.
+	//
+	// last_activity_at and has_pending_suggestion mirror ListTrackedJobs deliberately:
+	// one definition of "when did this application last move", not two.
+	ListGhostApplicationEvidence(ctx context.Context, jobIds []int64) ([]ListGhostApplicationEvidenceRow, error)
+	// Non-retracted ghost reports for a page of jobs. Maturity — whether the stated
+	// apply date has aged past the `applied` threshold — is applied in Go alongside the
+	// silence ladder it reads from, so both channels clear the same bar from the same
+	// source.
+	ListGhostReportEvidence(ctx context.Context, jobIds []int64) ([]ListGhostReportEvidenceRow, error)
 	// The referrer inbox: open (sent) requests for every company the referrer has an approved
 	// offer for. Joins the request pool to the caller's approved offers on company_slug, and
 	// the catalogue for the company's display name (LEFT so a request survives an unknown
@@ -1009,6 +1085,16 @@ type Querier interface {
 	// The emails linked to one of the caller's applications, newest first, for the
 	// application detail page.
 	ListJobEmails(ctx context.Context, arg ListJobEmailsParams) ([]ListJobEmailsRow, error)
+	// The absence stamp AND the closed state of a page of jobs, for the read paths that do
+	// not already hold the rows — search results come back from Meilisearch, which does not
+	// carry ats_absent_at (and cannot: reindex is content_hash-incremental, so a column no
+	// adapter writes would never reach the index on its own).
+	//
+	// closed_at rides along because a closed posting must carry no ghost signal, and the
+	// index is NOT a reliable source for that either: a sweep-closed job stays in Meili
+	// until a reindex, whose timer is disabled. Reading the truth from Postgres is what
+	// stops a warning appearing on a posting that has already been taken down.
+	ListJobGhostStamps(ctx context.Context, jobIds []int64) ([]ListJobGhostStampsRow, error)
 	// Id-only projection of ListJobsByIDAfter, used as the corruption-degrade path:
 	// when a full SELECT * batch faults on a corrupted TOAST value (SQLSTATE XX001),
 	// the scan re-reads the same window as bare ids (id is never toasted, so this
@@ -1341,6 +1427,16 @@ type Querier interface {
 	// uses open-as-of @prev_ts. Companies open at neither point are dropped (HAVING) to
 	// keep the table lean.
 	RebuildInsightsCompanyGrowth(ctx context.Context, prevTs pgtype.Timestamptz) (int64, error)
+	// One row per company with an OBSERVABLE application: the applicant has a connected
+	// mailbox, so a reply would have been seen. Applications from people we cannot observe
+	// are excluded from BOTH sides of the ratio — counting them in the denominator would
+	// report our own blind spot as the employer's silence, which is the same mistake the
+	// job-level signal's mailbox gate exists to prevent.
+	//
+	// "Answered" is any non-deleted mail linked to that application. Not a stage advance:
+	// a stage is what the candidate recorded, and a company that replied to somebody who
+	// never updated their board still replied.
+	RebuildInsightsCompanyResponse(ctx context.Context) (int64, error)
 	// Per-(company, day) hiring velocity with a running open count, from the retained
 	// jobs lifecycle. Each canonical, attributable job (company_slug <> '' AND
 	// duplicate_of IS NULL) emits an added event on its created_at (UTC) day and, if
@@ -1564,6 +1660,9 @@ type Querier interface {
 	// Undo a soft-delete, scoped to the caller and idempotent. Returns 0 rows only
 	// when it is not the caller's message (→ 404).
 	RestoreEmail(ctx context.Context, arg RestoreEmailParams) (int64, error)
+	// Withdraw a live claim. Scoped to a non-retracted row so a second retraction affects
+	// nothing and surfaces as not-found, rather than silently re-stamping the date.
+	RetractGhostReport(ctx context.Context, arg RetractGhostReportParams) (GhostReport, error)
 	// Undo a whole autopilot run: restore the pre-run document and clear both autopilot columns.
 	// The report goes with the document because a report describing edits that no longer exist
 	// misdescribes the CV. A CV with no snapshot matches nothing and returns no row, which the
@@ -1584,6 +1683,20 @@ type Querier interface {
 	// more than one posting are returned (singletons are the count-1 default a lookup miss
 	// already implies), keeping the map small. NULL/empty fingerprints are excluded.
 	RoleClusterCountsAll(ctx context.Context) ([]RoleClusterCountsAllRow, error)
+	// Role-cluster counts for a SPECIFIC set of (company_slug, role_fingerprint) pairs, so
+	// a read path can resolve a page of cards in one query instead of one per card.
+	//
+	// RoleClusterCountsAll exists beside this and is not a substitute: it aggregates the
+	// whole catalogue, which is right for a reindex building its lookup once and ruinous
+	// for a request. Filtering on role_fingerprint alone would not do either, since
+	// jobs_company_role_fingerprint_idx leads with company_slug; leading with the company
+	// set keeps the index usable.
+	//
+	// The two sets are matched as a cross product here and narrowed to the exact pairs by
+	// the caller. A pair-wise join would need a two-argument unnest the query analyzer
+	// cannot type, and the surplus is bounded: a page holds few distinct companies, and a
+	// fingerprint belonging to another of them simply has no rows.
+	RoleClusterCountsFor(ctx context.Context, arg RoleClusterCountsForParams) ([]RoleClusterCountsForRow, error)
 	// The whole-catalogue role-cluster geography union in one pass, so the reindex can widen
 	// each collapsed canon's countries/regions/cities with the union across its cluster's
 	// OPEN rows (a canon in one country must still be findable by the countries of the reposts
@@ -1699,6 +1812,10 @@ type Querier interface {
 	// scoped to the caller and idempotent. Returns 0 rows only when it is not the
 	// caller's message (→ 404).
 	SoftDeleteEmail(ctx context.Context, arg SoftDeleteEmailParams) (int64, error)
+	// Record that this posting's role was not found on its company's own board, as of now.
+	// Re-stamped on every run, so the reader can ignore a stamp that has aged out and a
+	// worker that has stopped falls silent instead of accusing from a frozen snapshot.
+	StampJobATSAbsent(ctx context.Context, jobIds []int64) error
 	// Record that a batch of jobs' content is embedded under the given model. Run in the
 	// same transaction as DeleteSemanticEntriesBatch on the success path, so a crash between
 	// the index write and this stamp is safely retried (idempotent re-embed). The stamp
