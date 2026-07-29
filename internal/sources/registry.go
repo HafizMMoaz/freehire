@@ -3,6 +3,7 @@ package sources
 import (
 	"os"
 	"slices"
+	"time"
 )
 
 // SelfClosingProviders returns the provider names in reg that manage their own closes and
@@ -25,6 +26,20 @@ func FullCatalogProviders(reg map[string]Source) []string {
 	for name, src := range reg {
 		if _, ok := src.(fullCatalog); ok {
 			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// SweepGraceWindows returns the post-run sweep window each adapter in reg declares that is wider
+// than the default (see sweepGrace). cmd/ingest consults this when computing a provider's cutoff;
+// a provider absent from the map is swept on the default window, which is every provider but the
+// slice-crawled few.
+func SweepGraceWindows(reg map[string]Source) map[string]time.Duration {
+	out := make(map[string]time.Duration)
+	for name, src := range reg {
+		if s, ok := src.(sweepGrace); ok {
+			out[name] = s.sweepGrace()
 		}
 	}
 	return out
@@ -256,6 +271,13 @@ func All(c HTTPClient) map[string]Source {
 	}
 	if key := os.Getenv("REED_API_KEY"); key != "" {
 		registry["reed"] = NewReed(c, key)
+	}
+	// whatjobs is a CPC network freehire publishes for, so its credential is the publisher id rather
+	// than an API key — but it is registered the same way: only when configured, so an environment
+	// without it does not list a provider whose every board would 410. The id is per-country; this
+	// account serves US inventory.
+	if id := os.Getenv("WHATJOBS_PUBLISHER_ID"); id != "" {
+		registry["whatjobs"] = NewWhatJobs(c, id)
 	}
 	// taleo needs a cookie-persisting client (its searchjobs POST requires the session cookie
 	// a careersection GET sets), so it cannot use the shared jar-less client. Build a dedicated
