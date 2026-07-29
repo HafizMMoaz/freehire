@@ -10,7 +10,7 @@
     deleteSession,
     SessionNotFound,
   } from '$lib/assistant/api';
-  import { sendTurn, type Turn } from '$lib/assistant/client';
+  import { sendTurn, startAutopilot, type Turn } from '$lib/assistant/client';
   import { initChat, reduceTurnEvent, type ChatState } from '$lib/assistant/chat';
   import { splitPresentingCalls } from '$lib/assistant/deck';
   import { renderMarkdown } from '$lib/assistant/markdown';
@@ -28,7 +28,7 @@
     type SessionItem,
   } from '$lib/assistant/sessions';
   import { eventsFromTranscript, type TurnEvent } from '$lib/assistant/wire';
-  import { opensInRail, type ChatPreset } from '$lib/assistant/presets';
+  import { opensInRail, type ChatPreset, type OpeningAction } from '$lib/assistant/presets';
 
   // The agent chat. The agent runs inside the freehire backend, so this is an
   // ordinary authenticated API surface: the session list, one session's stored
@@ -53,18 +53,38 @@
     kickoff = undefined,
     sessionLabel = undefined,
     onTurnComplete = undefined,
+    onRunStateChange = undefined,
+    onTurnStateChange = undefined,
+    beforeTurn = undefined,
     onSessionChange = undefined,
     showSessionRail = true,
     requireBeta = false,
     preset = 'chat',
+    openingActions = undefined,
   }: {
     session?: string;
     kickoff?: string;
     sessionLabel?: string;
     onTurnComplete?: () => void;
+    /** Told when an UNATTENDED run starts and ends. The tailoring host locks its editor for
+     *  the duration: a run rewrites the same document the editor holds and saves on a
+     *  debounce, and whoever writes last would silently win. */
+    onRunStateChange?: (running: boolean) => void;
+    /** Told when ANY turn starts and ends, so a host can disable what a running turn would
+     *  make a no-op. `onRunStateChange` is the narrower signal: only unattended runs. */
+    onTurnStateChange?: (active: boolean) => void;
+    /** Awaited before a turn is started. The tailoring host writes its pending edit here: a
+     *  debounce armed a moment ago would otherwise fire mid-turn and overwrite what the agent
+     *  wrote — and the run's pre-run snapshot would be taken without that edit in it. */
+    beforeTurn?: () => Promise<void>;
     onSessionChange?: (id: string) => void;
     showSessionRail?: boolean;
     requireBeta?: boolean;
+    /** What an empty conversation offers instead of a blank prompt. Shown only while the
+     *  session has no messages: once it has any, the composer is the way in. A host that
+     *  passes these should NOT also pass a kickoff — the whole point is that the first turn
+     *  is the caller's choice rather than ours. */
+    openingActions?: OpeningAction[];
     /** Which unbound conversation a NEW session starts as. An existing session keeps
      *  whatever preset it was created with. */
     preset?: ChatPreset;
@@ -123,6 +143,28 @@
    * same words in the caller's mouth again.
    */
   const arrival: { preset: ChatPreset; kickoff?: string } = { preset, kickoff };
+
+  // Whether the turn in flight is an unattended run rather than a reply to something typed.
+  let runActive = $state(false);
+
+  /** Whether a turn may be started right now: the pane is settled and nothing is running. */
+  const canStartTurn = () => phase === 'ready' && !turnActive && !switching && !!activeId;
+
+  /**
+   * Start an unattended run from outside the chat — the workspace's "Run again" beside the
+   * run report. Exported rather than driven by a prop because it is an ACTION, not state:
+   * a boolean the host toggles would re-run the moment anything else re-rendered.
+   */
+  export function startRun() {
+    if (!canStartTurn()) return;
+    void dispatch(undefined);
+  }
+
+  /** Run an opening action — the first turn of a conversation nobody has typed into yet. */
+  function runOpening(action: OpeningAction) {
+    if (!canStartTurn()) return;
+    void dispatch(action.kind === 'message' ? action.text : undefined);
+  }
 
   /** The conversation the host is currently being navigated to, or null. Held until the
    *  `session` prop catches up, so a switch we started is never undone by the stale URL. */
@@ -400,6 +442,11 @@
   function endTurn() {
     turnActive = false;
     turn = null;
+    onTurnStateChange?.(false);
+    if (runActive) {
+      runActive = false;
+      onRunStateChange?.(false);
+    }
     // A completed turn may have edited an artifact (e.g. the tailored CV) — let the host refresh.
     onTurnComplete?.();
     if (queue.length > 0) {
@@ -443,12 +490,31 @@
     void dispatch(text);
   }
 
-  async function dispatch(text: string) {
+  // `text` undefined means the unattended run: the same turn, streamed the same way, but
+  // opened by the server's brief rather than by anything typed here.
+  async function dispatch(text: string | undefined) {
     const id = activeId;
     if (!id) return;
     error = null;
     turnActive = true;
-    const started = sendTurn(id, text, (event) => onEvent(id, event));
+    onTurnStateChange?.(true);
+    // Before anything reaches the server: the host may be holding an edit on a timer, and
+    // the run is about to snapshot and rewrite the very document that edit belongs to.
+    if (beforeTurn) {
+      try {
+        await beforeTurn();
+      } catch {
+        /* the host reports its own save failures; a turn is still worth starting */
+      }
+    }
+    let started: Turn;
+    if (text === undefined) {
+      runActive = true;
+      onRunStateChange?.(true);
+      started = startAutopilot(id, (event) => onEvent(id, event));
+    } else {
+      started = sendTurn(id, text, (event) => onEvent(id, event));
+    }
     turn = started;
     void scrollToBottom();
     try {
@@ -591,6 +657,24 @@
         <div class="mx-auto flex max-w-3xl flex-col gap-3">
           {#if phase === 'loading'}
             <p class="text-sm text-muted-foreground">Connecting to the agent…</p>
+          {:else if chat.messages.length === 0 && openingActions?.length}
+            <div class="rounded-xl border border-border bg-muted/30 p-4">
+              <div class="flex flex-wrap gap-2">
+                {#each openingActions as action (action.label)}
+                  <button
+                    type="button"
+                    class="rounded-lg bg-brand px-3 py-2 text-sm font-medium text-brand-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
+                    disabled={turnActive || switching}
+                    onclick={() => runOpening(action)}
+                  >
+                    {action.label}
+                  </button>
+                {/each}
+              </div>
+              {#each openingActions.filter((a) => a.hint) as action (action.label)}
+                <p class="mt-2 text-xs text-muted-foreground">{action.hint}</p>
+              {/each}
+            </div>
           {:else if chat.messages.length === 0}
             <p class="text-sm text-muted-foreground">Ask the agent anything to get started.</p>
           {/if}

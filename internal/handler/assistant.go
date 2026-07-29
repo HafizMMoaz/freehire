@@ -17,6 +17,7 @@ import (
 
 	"github.com/strelov1/freehire/internal/assistant"
 	"github.com/strelov1/freehire/internal/browsertools"
+	"github.com/strelov1/freehire/internal/cv"
 	"github.com/strelov1/freehire/internal/db"
 	"github.com/strelov1/freehire/internal/experience"
 	"github.com/strelov1/freehire/internal/llm"
@@ -83,6 +84,9 @@ func (h *assistantHandlers) register(api fiber.Router, mw middleware) {
 	api.Get("/assistant/sessions/:id", mw.key, gate, h.GetAssistantSession)
 	api.Delete("/assistant/sessions/:id", mw.key, gate, h.DeleteAssistantSession)
 	api.Post("/assistant/sessions/:id/messages", mw.key, gate, h.PostAssistantMessage)
+	// Cookie-only: an unattended run rewrites a CV, and the browser is the only place
+	// the candidate can watch it happen and undo it.
+	api.Post("/assistant/sessions/:id/autopilot", mw.cookie, gate, h.PostAssistantAutopilot)
 }
 
 // requireRollout admits moderators and beta testers. Membership is read fresh per
@@ -278,7 +282,17 @@ func (h *assistantHandlers) PostAssistantMessage(c *fiber.Ctx) error {
 	if len([]rune(prompt)) > assistantMaxPrompt {
 		return fiber.NewError(fiber.StatusBadRequest, "message is too long")
 	}
+	return h.streamTurn(c, sess, prompt, assistant.TurnConfig{})
+}
 
+// streamTurn runs one turn and writes it to the response as SSE. It is shared by every
+// entry point that starts a turn, so the stream's shape — the headers, the cleared write
+// deadline, the keepalive, the cancellation on a dead client — is written once.
+//
+// The prompt and the turn's bounds are the caller's arguments rather than the request's
+// body: an unattended run's brief and its raised ceiling are ours to choose, and a ceiling
+// a client can set is not a bound.
+func (h *assistantHandlers) streamTurn(c *fiber.Ctx, sess assistant.Session, prompt string, turn assistant.TurnConfig) error {
 	registry := h.registry(sess)
 	system := assistant.SystemPrompt(sess.Preset)
 
@@ -335,7 +349,7 @@ func (h *assistantHandlers) PostAssistantMessage(c *fiber.Ctx) error {
 			}
 		}()
 
-		err := h.runner.Run(ctx, sess, registry, system, prompt, func(e assistant.Event) {
+		err := h.runner.Run(ctx, sess, registry, system, prompt, turn, func(e assistant.Event) {
 			mu.Lock()
 			defer mu.Unlock()
 			if !write(string(e.Kind), e) {
@@ -352,6 +366,82 @@ func (h *assistantHandlers) PostAssistantMessage(c *fiber.Ctx) error {
 		}
 	}))
 	return nil
+}
+
+// autopilotMaxSteps bounds an unattended tailoring run. A run reads the fit analysis and
+// the CV, then spends roughly two rounds per requirement — a search and an edit — over a
+// dozen or two requirements. The ordinary ceiling is written for a question and would cut
+// such a run off halfway through the list.
+const autopilotMaxSteps = 30
+
+// autopilotBrief opens an unattended run. It is deliberately short: the method — walk every
+// requirement, search the bank, edit what the evidence supports, ask nothing until the end —
+// lives in the tailoring system prompt, where it is stated once. This only says which of the
+// two rhythms the candidate chose, because a turn does not start until a message arrives.
+const autopilotBrief = "Tailor this CV for the vacancy yourself, working from my experience bank. " +
+	"Go through every requirement without stopping to ask me, then tell me what is left."
+
+// PostAssistantAutopilot runs the unattended tailoring pass on a tailoring session: it
+// snapshots the CV so the whole run can be undone, then streams one long turn.
+//
+// Everything a client could otherwise dictate is fixed here — the brief, the ceiling, and
+// the snapshot. The snapshot in particular cannot be the client's job: a run that edits a
+// CV whose pre-run state was never captured is a run nobody can take back.
+func (h *assistantHandlers) PostAssistantAutopilot(c *fiber.Ctx) error {
+	sess, err := h.ownedSession(c)
+	if err != nil {
+		return err
+	}
+	if h.runner == nil || h.cv == nil || h.cv.cvStore == nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "the assistant is not available")
+	}
+	// Both bindings, not just the CV: the CV tools are registered only when the session
+	// carries a vacancy too, so a CV-only session would burn a thirty-round turn with no
+	// cv_context, no cv_edit and no way to report.
+	if sess.Preset != assistant.PresetTailor || sess.CVID == nil || sess.JobID == nil {
+		return fiber.NewError(fiber.StatusConflict, "this conversation is not tailoring a CV")
+	}
+	// The owner comes from the session the ownership check just resolved, not from the
+	// request a second time: two readings of who is calling are one too many.
+	if err := h.cv.cvStore.SnapshotForAutopilot(c.Context(), *sess.CVID, sess.UserID); err != nil {
+		return mapCVError(err)
+	}
+	h.layDownRunPlan(c.Context(), sess)
+	return h.streamTurn(c, sess, autopilotBrief, assistant.TurnConfig{MaxSteps: autopilotMaxSteps})
+}
+
+// layDownRunPlan writes the vacancy's requirements onto the CV as `not_reached` before the
+// run starts, so a run that never reports still leaves one.
+//
+// It has to be the server's doing, because the agent cannot cover this case: on reaching the
+// step cap the runner makes its final call with NO tools offered, so a run that spends its
+// whole budget is exactly the run that cannot call `tailor_report`. Without the plan, the
+// worst-case run — the one that edited the CV and stopped halfway — is also the one whose
+// panel shows nothing, and therefore offers no way to undo it.
+//
+// Best-effort: a missing or unreadable analysis leaves the report as it was. The run itself
+// is worth starting either way, and the agent replaces the whole report when it reports.
+func (h *assistantHandlers) layDownRunPlan(ctx context.Context, sess assistant.Session) {
+	if h.cv.matchAnalysisCache == nil {
+		return
+	}
+	analysis, err := h.cv.cachedAnalysisCtx(ctx, sess.UserID, *sess.JobID)
+	if err != nil || analysis == nil {
+		return
+	}
+	plan := make([]cv.AutopilotEntry, 0, len(analysis.RequirementMatch))
+	for _, r := range analysis.RequirementMatch {
+		if strings.TrimSpace(r.Text) == "" {
+			continue
+		}
+		plan = append(plan, cv.AutopilotEntry{Requirement: r.Text, Status: cv.AutopilotNotReached})
+	}
+	if len(plan) == 0 {
+		return
+	}
+	if err := h.cv.cvStore.SetAutopilotReport(ctx, *sess.CVID, sess.UserID, plan); err != nil {
+		log.Printf("assistant: could not lay down the run plan cv=%s: %v", sess.CVID, err)
+	}
 }
 
 // ownedSession resolves the :id route param to a session the caller owns.

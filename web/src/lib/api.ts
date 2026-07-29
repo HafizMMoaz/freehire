@@ -1328,6 +1328,12 @@ export function createApi(
     return requestData<CvMeta>(`/api/v1/me/cvs/${id}`, jsonBody('PUT', input));
   }
 
+  /** Undo a whole autopilot run: restores the pre-run document and clears the run's report.
+   *  409 when there is no run to undo. */
+  async function undoAutopilotRun(cvId: string): Promise<CvMeta> {
+    return requestData<CvMeta>(`/api/v1/me/cvs/${cvId}/autopilot/undo`, jsonBody('POST', {}));
+  }
+
   /** Delete a CV. */
   async function deleteCv(id: string): Promise<void> {
     await call(`/api/v1/me/cvs/${id}`, { method: 'DELETE' });
@@ -1556,6 +1562,7 @@ export function createApi(
     cvPdfUrl,
     tailorCv,
     startTailorSession,
+    undoAutopilotRun,
     listThreads,
     countThreads,
     getThread,

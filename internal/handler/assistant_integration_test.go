@@ -25,6 +25,7 @@ import (
 
 	"github.com/strelov1/freehire/internal/assistant"
 	"github.com/strelov1/freehire/internal/auth"
+	"github.com/strelov1/freehire/internal/cv"
 	"github.com/strelov1/freehire/internal/db"
 	"github.com/strelov1/freehire/internal/llm"
 )
@@ -48,7 +49,17 @@ func (m *turnModel) Chat(_ context.Context, _ []llms.MessageContent, _ []llms.To
 // scripted model behind the turn endpoint.
 func newAssistantApp(pool *pgxpool.Pool, iss *auth.Issuer, model assistant.Model) (*fiber.App, *assistantHandlers) {
 	queries := db.New(pool)
-	h := &assistantHandlers{store: assistant.NewStore(queries), queries: queries}
+	h := &assistantHandlers{
+		store: assistant.NewStore(queries), queries: queries,
+		// The tailoring tools and the autopilot run reach the CV store, so the assistant
+		// under test carries the same CV service the HTTP surface uses.
+		cv: &cvHandlers{
+			cvStore: cv.NewStore(cv.NewQueriesRepository(queries)), queries: queries,
+			// The run reads the cached fit analysis to lay down its plan, so the CV handlers
+			// under test carry the same cache the production wiring gives them.
+			matchAnalysisCache: queries,
+		},
+	}
 	if model != nil {
 		h.runner = assistant.NewRunner(model, h.store, assistant.RunnerConfig{MaxSteps: 3})
 	}
@@ -57,10 +68,14 @@ func newAssistantApp(pool *pgxpool.Pool, iss *auth.Issuer, model assistant.Model
 	// Both gates are supplied so the test exercises whichever one `register`
 	// mounts: the extension reaches the assistant with a Bearer credential, which
 	// only `key` resolves.
-	h.register(api, middleware{
+	mw := middleware{
 		cookie: auth.RequireAuth(iss, testVersions),
 		key:    auth.RequireAuthOrKey(iss, testVersions, apiKeys{queries}),
-	})
+	}
+	h.register(api, mw)
+	// The CV routes ride along: the autopilot's undo and the CV read that carries a run's
+	// report are the other half of the tailoring surface these tests exercise.
+	h.cv.register(api, mw)
 	return app, h
 }
 
