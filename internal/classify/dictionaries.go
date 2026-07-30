@@ -40,6 +40,27 @@ var gradeBlindPhrases = []string{
 	"lead-generation",
 }
 
+// categoryNone is the sentinel canonical for a "blind" alias: a phrase that CONTAINS a
+// categoryTable alias while naming no category of its own. "Software Design Engineer"
+// is software engineering — "design" qualifies what is engineered, it is not the craft
+// — and this vocabulary has no value for a software generalist (a bare "Staff Software
+// Engineer" resolves none either). Emitting nothing is the honest answer; is_tech comes
+// from the tech-title detector instead.
+//
+// It is a table entry rather than a pre-match mask on purpose. A mask (the shape
+// gradeBlindPhrases uses for grades) is wrong here on both counts: cutting the span
+// would expose whatever alias sits further down the table, so "Software Design
+// Engineer - Sales Tools" resolved to `sales` and lost its enrichment, and cutting is
+// boundary-blind where every matcher in this package is boundary-aware. As an entry it
+// simply wins the first-match walk, and matchCategory translates it to "".
+//
+// Only phrases with no better category belong here. Where one exists, route the title
+// to it instead — "cloud design engineer" → devops, "design engineer in test" → qa.
+// And keep the phrases narrow: "systems design engineer" was listed here once, which
+// blanked the category of every "HVAC/Mechanical Systems Design Engineer" and, with it,
+// the placement that vetoes deletion in ConfirmedNonTech.
+const categoryNone = "-"
+
 // seniorityTable lists seniority aliases in precedence order (most specific /
 // highest rank first), each paired with its vocab.SeniorityValues canonical.
 var seniorityTable = []aliasEntry{
@@ -235,6 +256,104 @@ var categoryTable = []aliasEntry{
 	{"разработчик документации", "technical_writing"},
 	{"специалист по документации", "technical_writing"},
 	{"ux-редактор", "technical_writing"},
+	// The word "design" names two unrelated crafts. Everything below down to the
+	// engineering block is a title whose "… design …" is NOT product design: it is
+	// engineering draughting (mechanical/electrical/civil), chip and board design, or
+	// a network role. They must precede the bare "designer"/"design" entries, which
+	// would otherwise claim them by virtue of the word alone — the defect this split
+	// fixes (a mining-equipment "Design Engineer" filed under product design).
+	//
+	// First, the titles that state a craft of their own and must NOT go to the
+	// engineering-design bucket the next block builds.
+	{"software design engineer in test", "qa"},
+	{"design engineer in test", "qa"},
+	{"software design engineer", categoryNone},
+	{"software design engineering", categoryNone},
+	{"network design engineer", "network_engineering"},
+	{"cloud design engineer", "devops"},
+	{"solution design engineer", "solutions_engineering"},
+	{"solutions design engineer", "solutions_engineering"},
+	// Silicon and board design belong to `hardware`, which already owns the rest of
+	// that team through the earlier "hardware"/"fpga" aliases. Routing them to
+	// engineering draughting would split one discipline across two facets and drop
+	// them out of the technical treatment (enrichment, embeddings) they have today.
+	// The list has to name the whole family: whatever is missing here falls through to
+	// the bare "design engineer" at the bottom of the block and lands in draughting.
+	{"pcb design", "hardware"},
+	{"pcb designer", "hardware"},
+	{"pcb layout", "hardware"},
+	{"physical design engineer", "hardware"},
+	{"analog design engineer", "hardware"},
+	{"rtl design engineer", "hardware"},
+	{"mixed signal design engineer", "hardware"},
+	// The hyphenated spelling is the industry's own and a hyphen is a word boundary, so
+	// it needs its own entry — the same trap "middle-east" and "ai-product engineer"
+	// document elsewhere in this file.
+	{"mixed-signal design engineer", "hardware"},
+	{"digital design engineer", "hardware"},
+	{"dft design engineer", "hardware"},
+	{"rf design engineer", "hardware"},
+	{"rfic design", "hardware"},
+	{"analogue design engineer", "hardware"},
+	{"silicon design", "hardware"},
+	{"memory design engineer", "hardware"},
+	{"standard cell design", "hardware"},
+	{"vlsi design", "hardware"},
+	{"chip design", "hardware"},
+	{"asic design", "hardware"},
+	{"soc design", "hardware"},
+	{"ic design", "hardware"},
+	{"semiconductor design", "hardware"},
+	{"product design engineer", "design"},
+	{"design systems engineer", "design"},
+	{"design system engineer", "design"},
+	{"ux design engineer", "design"},
+	{"ui design engineer", "design"},
+	{"ui/ux design engineer", "design"},
+	{"web design engineer", "design"},
+	{"design engineer, product", "design"},
+	// Design disciplines of their own, on the product side of the split.
+	{"service design engineer", "design"},
+	{"experience design engineer", "design"},
+	{"sound design engineer", "design"},
+	{"game design engineer", "design"},
+	// Then engineering design. The bare "design engineer" closes the block, and it
+	// carries every qualified "<discipline> design engineer" form with it — those need
+	// no entry of their own, since they resolve to the same category. Only the titles
+	// the bare alias CANNOT see are listed: the "…designer" nouns, the design-less
+	// phrases ("pcb design"), and the draughting words. The bare form routes here
+	// because that population is overwhelmingly mechanical and industrial in this
+	// catalogue — a product hybrid has to state one of the markers above.
+	{"mechanical designer", "engineering_design"},
+	{"electrical designer", "engineering_design"},
+	{"civil designer", "engineering_design"},
+	{"structural designer", "engineering_design"},
+	{"piping designer", "engineering_design"},
+	{"plumbing designer", "engineering_design"},
+	{"hvac designer", "engineering_design"},
+	{"cad designer", "engineering_design"},
+	{"design technician", "engineering_design"},
+	// The BIM / architectural-draughting family. "architectural" does not contain the
+	// whole word "architect", so it cannot reach the software-architecture category
+	// below. Bare "drafter"/"draftsman" is the profession itself, in any discipline.
+	{"architectural designer", "engineering_design"},
+	{"bim designer", "engineering_design"},
+	{"bim coordinator", "engineering_design"},
+	{"bim modeler", "engineering_design"},
+	{"bim specialist", "engineering_design"},
+	{"revit designer", "engineering_design"},
+	// No bare "layout designer": magazine and print layout is the product-design craft,
+	// and the phrase names both.
+	{"tool designer", "engineering_design"},
+	{"mold designer", "engineering_design"},
+	{"die designer", "engineering_design"},
+	{"drafter", "engineering_design"},
+	{"draftsman", "engineering_design"},
+	{"draughtsman", "engineering_design"},
+	// Russian: the draughting profession. "инженер-конструктор" needs no entry of its
+	// own — the hyphen is a word boundary, so the bare form resolves it.
+	{"конструктор", "engineering_design"},
+	{"design engineer", "engineering_design"},
 	{"designer", "design"},
 	{"design", "design"},
 	{"ux", "design"},

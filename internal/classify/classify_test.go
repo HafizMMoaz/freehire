@@ -210,9 +210,36 @@ func TestCanonicalValuesAreInVocabulary(t *testing.T) {
 		}
 	}
 	for _, e := range categoryTable {
+		// categoryNone is the one canonical outside the vocabulary: a blind alias uses
+		// it to say "this title names no category", and matchCategory serves it as "".
+		if e.canonical == categoryNone {
+			continue
+		}
 		if !slices.Contains(vocab.CategoryValues, e.canonical) {
 			t.Errorf("category alias %q -> %q not in CategoryValues", e.alias, e.canonical)
 		}
+	}
+}
+
+// A blind alias must never leak its sentinel to a caller — Parse and Categories both
+// have to translate it, or "-" would be written into jobs.category and served as a
+// facet value.
+func TestCategoryNoneNeverEscapes(t *testing.T) {
+	for _, title := range []string{
+		"Software Design Engineer",
+		"Senior Software Design Engineer",
+		"Software Design Engineering Manager",
+	} {
+		if got := Parse(title).Category; got == categoryNone {
+			t.Errorf("Parse(%q).Category leaked the sentinel", title)
+		}
+		if got := Categories(title); slices.Contains(got, categoryNone) {
+			t.Errorf("Categories(%q) = %v leaked the sentinel", title, got)
+		}
+	}
+	// The alias map feeds cmd/gen-contracts, so a leak there reaches the web picker.
+	if _, ok := CategoryAliases()[categoryNone]; ok {
+		t.Error("CategoryAliases() carries the sentinel; it would ship as a pickable value")
 	}
 }
 
@@ -313,6 +340,145 @@ func TestParse_ITCompanyRoles(t *testing.T) {
 		{"Content Writer", "marketing"},         // stays marketing, not technical_writing
 		{"Account Manager", "sales"},            // stays sales, not customer_success
 		{"Data Analyst", "data_analytics"},      // plain analyst role unaffected
+	}
+	for _, c := range cases {
+		if got := Parse(c.title).Category; got != c.wantCategory {
+			t.Errorf("Parse(%q).Category = %q, want %q", c.title, got, c.wantCategory)
+		}
+	}
+}
+
+// TestParse_DesignSplit covers the split of the design craft: engineering
+// draughting (mechanical, electrical, civil, chip) resolves to engineering_design,
+// while `design` keeps meaning product, visual and experience design. The bare
+// "Design Engineer" goes to the engineering side — that population is
+// overwhelmingly mechanical in the catalogue — so a product hybrid has to state a
+// marker of its own. The guards at the end pin the neighbouring aliases that the
+// inserted block sits next to.
+func TestParse_DesignSplit(t *testing.T) {
+	cases := []struct{ title, wantCategory string }{
+		// engineering design — the qualified forms
+		{"Mechanical Design Engineer", "engineering_design"},
+		{"Senior Electrical Design Engineer", "engineering_design"},
+		{"Civil Design Engineer", "engineering_design"},
+		{"Structural Designer", "engineering_design"},
+		{"Piping Designer", "engineering_design"},
+		{"Plumbing Designer / Drafter", "engineering_design"},
+		{"Process Design Engineer", "engineering_design"},
+		{"Packaging Design Engineer", "engineering_design"},
+		{"Electrical Designer", "engineering_design"},
+		{"Civil Designer", "engineering_design"},
+		{"CAD Designer", "engineering_design"},
+		{"Design Drafter", "engineering_design"},
+		// The BIM / architectural-draughting family. It is the largest population still
+		// left in `design` after the first pass — `revit` alone tags 2846 of those jobs —
+		// and the bare "design engineer" alias cannot see any of these titles.
+		{"Architectural Designer", "engineering_design"},
+		{"BIM Designer", "engineering_design"},
+		{"Revit Designer", "engineering_design"},
+		{"Senior BIM Coordinator", "engineering_design"},
+		{"BIM Specialist", "engineering_design"},
+		{"Die Designer", "engineering_design"},
+		{"Tool Designer", "engineering_design"},
+		// Print and magazine layout is the product-design craft, so no bare
+		// "layout designer" alias: the phrase names both trades.
+		{"Magazine Layout Designer", "design"},
+		{"Mold Designer", "engineering_design"},
+		{"Draftsman", "engineering_design"},
+		{"CAD Drafter", "engineering_design"},
+		{"Design Technician", "engineering_design"},
+		// Silicon and board design stay with `hardware`, which already owns the rest of
+		// that team: "Hardware Design Engineer" and "FPGA Design Engineer" resolve there
+		// through the earlier hardware aliases, so filing their colleagues under
+		// draughting would split one discipline across two facets — and cost them the
+		// technical treatment (enrichment, embeddings) they have today.
+		{"PCB Design Engineer", "hardware"},
+		{"PCB Layout Designer", "hardware"},
+		{"Physical Design Engineer", "hardware"},
+		{"Analog Design Engineer", "hardware"},
+		{"RTL Design Engineer", "hardware"},
+		{"VLSI Design Engineer", "hardware"},
+		{"Senior VLSI Design Lead", "hardware"},
+		{"Hardware Design Engineer", "hardware"},
+		{"FPGA Design Engineer", "hardware"},
+		// the bare title resolves to the engineering side
+		{"Design Engineer", "engineering_design"},
+		{"Senior Design Engineer", "engineering_design"},
+		// product hybrids keep `design`, but only with an explicit marker
+		{"Product Design Engineer", "design"},
+		{"Design Systems Engineer", "design"},
+		{"UI Engineer", "design"},
+		{"UX Engineer", "design"},
+		// The interface-design hybrids: the marker must be read BEFORE the bare
+		// "design engineer" below, which would otherwise file them as draughting.
+		{"UX Design Engineer", "design"},
+		{"UI Design Engineer", "design"},
+		{"UI/UX Design Engineer", "design"},
+		{"Web Design Engineer", "design"},
+		{"Design Engineer, Product", "design"},
+		// product / visual design is untouched
+		{"Senior Product Designer", "design"},
+		{"UX Designer", "design"},
+		{"UI/UX Designer", "design"},
+		{"Visual Designer", "design"},
+		{"Graphic Designer", "design"},
+		{"Дизайнер интерфейсов", "design"},
+		// Russian: "конструктор" is the draughting profession, not a UI designer, and
+		// the hyphen is a word boundary so the compound form resolves through it.
+		{"Инженер-конструктор", "engineering_design"},
+		{"Конструктор металлоконструкций", "engineering_design"},
+
+		// Software-anchored forms: "design" here qualifies the engineering, it is not
+		// the craft. They must not be filed as draughting — that would take a software
+		// job out of the technical catalogue entirely — and they must not fall through
+		// to the business aliases further down the table either.
+		{"Software Design Engineer", ""},
+		{"Senior Software Design Engineer", ""},
+		{"Software Design Engineer - Sales Tools", ""},
+		{"Software Design Engineer, Support Platform", ""},
+		{"Software Design Engineering Manager", ""},
+		// SDET spelled out has a category of its own.
+		{"Software Design Engineer in Test", "qa"},
+		// "Systems Design Engineer" is NOT masked: a qualifier makes it draughting, and
+		// blanking the category would strip the placement that vetoes deletion.
+		{"HVAC Systems Design Engineer", "engineering_design"},
+		{"Mechanical Systems Design Engineer", "engineering_design"},
+		{"Systems Design Engineer", "engineering_design"},
+		// Where a better category exists, say so rather than emitting nothing.
+		{"Cloud Design Engineer", "devops"},
+		{"Solution Design Engineer", "solutions_engineering"},
+		{"Solutions Design Engineer", "solutions_engineering"},
+		// These name design disciplines of their own and stay on the product side.
+		{"Service Design Engineer", "design"},
+		{"Experience Design Engineer", "design"},
+		{"Sound Design Engineer", "design"},
+		{"Game Design Engineer", "design"},
+
+		// The rest of the silicon family rides with `hardware` too — the first pass
+		// covered only six phrases and left these as draughting.
+		{"ASIC Design Engineer", "hardware"},
+		{"SoC Design Engineer", "hardware"},
+		{"IC Design Engineer", "hardware"},
+		{"Digital Design Engineer", "hardware"},
+		{"Mixed Signal Design Engineer", "hardware"},
+		{"DFT Design Engineer", "hardware"},
+		{"Semiconductor Design Engineer", "hardware"},
+		// The hyphenated spelling is the industry's own, and a hyphen is a word
+		// boundary — so it needs its own alias, like "middle-east" and "ai-product".
+		{"Mixed-Signal Design Engineer", "hardware"},
+		{"Analog/Mixed-Signal Design Engineer", "hardware"},
+		{"RF Design Engineer", "hardware"},
+		{"RFIC Design Engineer", "hardware"},
+		{"Analogue Design Engineer", "hardware"},
+		{"Silicon Design Engineer", "hardware"},
+		{"Memory Design Engineer", "hardware"},
+
+		// precision — the neighbours of the inserted block must not shift
+		{"Hardware Design Engineer", "hardware"},        // hardware precedes the design block
+		{"Content Designer", "technical_writing"},       // technical_writing still wins
+		{"UX Writer", "technical_writing"},              // ditto
+		{"Senior Firmware Design Engineer", "embedded"}, // embedded precedes the design block
+		{"Network Design Engineer", "network_engineering"},
 	}
 	for _, c := range cases {
 		if got := Parse(c.title).Category; got != c.wantCategory {

@@ -338,6 +338,45 @@ var wordAliases = map[string]string{
 	"cad":     "cad",
 	"fpga":    "fpga",
 	"verilog": "verilog",
+	// mechanical CAD and EDA — the stack the engineering-design category states.
+	// "nx" (Siemens NX) is NOT here: it collides with the Nx JS monorepo tool, and
+	// "eagle" (Autodesk EAGLE) collides with the bird and with "eagle-eyed" boilerplate.
+	"solidworks": "solidworks",
+	"catia":      "catia",
+	"sketchup":   "sketchup",
+	"altium":     "altium",
+	"kicad":      "kicad",
+	"ansys":      "ansys",
+	// design tools — brand tokens, unambiguous on their own. "sketch", "maya" and
+	// "blender" are listed too but gated by ambiguousWords (ordinary English, a person's
+	// name, a kitchen appliance).
+	//
+	// Two products are absent because their token belongs to someone else: "framer" is
+	// the carpentry trade AND the Framer Motion React library, and "spline" is the
+	// splined shaft of the very mechanical population this dictionary now describes —
+	// both would tag a posting with a design tool it never mentions. "creo" is Spanish
+	// for "I think", so it resolves only through the "ptc creo"/"creo parametric" phrase.
+	"illustrator": "illustrator",
+	"indesign":    "indesign",
+	"webflow":     "webflow",
+	"invision":    "invision",
+	"zeplin":      "zeplin",
+	"protopie":    "protopie",
+	"canva":       "canva",
+	"figjam":      "figjam",
+	"lottie":      "lottie",
+	"blender":     "blender",
+	"sketch":      "sketch",
+	"maya":        "maya",
+	// design practices — the craft, not the tool. The singular "wireframe" is left out:
+	// it is also CAD prose ("wireframe model", "wireframe view"), and the plural and
+	// gerund carry the intent a posting actually states.
+	"prototyping":   "prototyping",
+	"wireframing":   "wireframing",
+	"wireframes":    "wireframing",
+	"typography":    "typography",
+	"accessibility": "accessibility",
+	"a11y":          "accessibility",
 	// web3 / crypto (mined from enrichment->skills; the long tail sits below the
 	// freq-500 floor). Distinctive tokens only — the ambiguous ones are NOT added:
 	// "cosmos" (↔ Azure Cosmos DB), "foundry" (↔ Palantir/Cloud Foundry),
@@ -675,6 +714,31 @@ var ambiguousWords = map[string]bool{
 	"rancher":   true,
 	"postman":   true,
 	"braze":     true,
+	// design words whose lowercase form is ordinary English, a person's name, an
+	// occupation or a kitchen appliance: a retail posting "sketches out ideas", managers
+	// called Maya and Lottie, a line cook's "industrial blender", a building's
+	// "accessibility ramp", the "typography of the shelf labels", a book imprint hiring
+	// an "Illustrator", a store using "Canva" for posters, a CNC operator reading
+	// "wireframes". A real design posting names Figma, Photoshop or a CAD product beside
+	// them, so corroboration costs nothing and drops the false ones.
+	//
+	// The last five matter for a second reason: a STRONG match lifts the gate off every
+	// weak word in the same text, so leaving them strong would have made the gate on
+	// sketch/maya/blender decorative — "Typography of the shelf labels … sketch out
+	// ideas" tagged both.
+	"sketch":  true,
+	"maya":    true,
+	"blender": true,
+	// "invision" is how half the postings misspell "envision"; "prototyping" is what a
+	// line cook does with a menu.
+	"invision":      true,
+	"prototyping":   true,
+	"accessibility": true,
+	"typography":    true,
+	"illustrator":   true,
+	"canva":         true,
+	"lottie":        true,
+	"wireframes":    true,
 }
 
 // phraseAlias is a punctuated or multi-word term matched against the normalized
@@ -923,6 +987,41 @@ var engineeringPhraseAliases = []phraseAlias{
 	{"structured authoring", "structured-authoring"},
 	{"information architecture", "information-architecture"},
 	{"madcap flare", "madcap-flare"},
+	// design — the multi-word tools and the named practices. They sit with the
+	// engineering vocabulary (not the professional one) for the same reason technical
+	// writing does: design is craft a technical employer posts, and HasEngineering must
+	// not read a design-only board as "never posted anything technical".
+	// "adobe illustrator"/"adobe indesign" need no phrase: the word pass already sees
+	// the product name inside them. "xd" alone is far too short to be safe.
+	{"adobe xd", "adobe-xd"},
+	// "adobe after effects" only: bare "after effects" is clinical prose, and
+	// healthcare is the largest non-technical mass this dictionary runs over.
+	{"adobe after effects", "after-effects"},
+	// No "design system"/"design systems": that is the ordinary verb phrase of every
+	// backend, embedded and architecture posting ("you will design systems that scale",
+	// "design system architecture"). A phrase match is always strong, so tagging it
+	// would not merely mislabel those postings — it would lift the corroboration gate
+	// off every weak word beside it, which is how a maintenance posting once came back
+	// tagged {react, sap}. The practice is still reachable through the job title
+	// ("Design Systems Engineer" → the design category and the design_engineer role).
+	{"design thinking", "design-thinking"},
+	{"user research", "user-research"}, {"ux research", "user-research"},
+	{"usability testing", "usability-testing"},
+	{"interaction design", "interaction-design"},
+	// No "visual design" either: "visual design of the store" is retail prose, and a
+	// phrase always matches strong, so it would corroborate the gated words beside it.
+	{"motion design", "motion-design"},
+	{"motion graphics", "motion-graphics"},
+	{"user flows", "user-flows"},
+	// mechanical CAD phrases (the single-token products live in wordAliases).
+	{"3ds max", "3ds-max"},
+	{"fusion 360", "fusion-360"},
+	{"civil 3d", "civil-3d"},
+	// No "solid edge": "a solid edge over the competition" is sales prose, and the
+	// CAD product is rare enough here that the phrase costs more than it recalls.
+	{"autodesk inventor", "autodesk-inventor"},
+	{"ptc creo", "creo"}, {"creo parametric", "creo"},
+	{"cadence virtuoso", "cadence-virtuoso"},
 }
 
 // professionalPhraseAliases is the non-engineering half of the IT-company role

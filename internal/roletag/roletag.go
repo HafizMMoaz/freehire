@@ -63,6 +63,7 @@ var categoryNoun = map[string]string{
 	"blockchain":          "Blockchain Engineer",
 	"architecture":        "Architect",
 	"design":              "Designer",
+	"engineering_design":  "Engineering Designer",
 	"product":             "Product Manager",
 	"project_management":  "Project Manager",
 	"management":          "Manager",
@@ -165,6 +166,42 @@ var namedRoleTable = []struct {
 	{"ux_designer", "UX Designer", []string{"ux designer", "ui designer", "ui/ux designer"}},
 	{"graphic_designer", "Graphic Designer", []string{"graphic designer"}},
 	{"interior_designer", "Interior Designer", []string{"interior designer"}},
+	{"visual_designer", "Visual Designer", []string{"visual designer"}},
+	{"brand_designer", "Brand Designer", []string{"brand designer", "branding designer"}},
+	{"motion_designer", "Motion Designer", []string{"motion designer", "motion graphics designer"}},
+	{"web_designer", "Web Designer", []string{"web designer"}},
+	{"industrial_designer", "Industrial Designer", []string{"industrial designer"}},
+	{"ux_researcher", "UX Researcher", []string{"ux researcher", "user researcher", "ux research", "user experience researcher"}},
+	{"art_director", "Art Director", []string{"art director"}},
+	{"creative_director", "Creative Director", []string{"creative director"}},
+	{"design_ops", "Design Ops", []string{"design ops", "designops", "design operations"}},
+	// design_engineer is the UNQUALIFIED "Design Engineer" — the product/engineering
+	// hybrid and the titles that state no discipline. Every qualified engineering form
+	// below carries a longer alias, and Derive matches longest-first, so a
+	// "Mechanical Design Engineer" never comes back as a generic design engineer.
+	{"design_engineer", "Design Engineer", []string{"design engineer", "product design engineer", "design systems engineer", "design system engineer"}},
+
+	// Engineering-design specializations (the engineering_design category).
+	{"mechanical_designer", "Mechanical Designer", []string{"mechanical design engineer", "mechanical designer"}},
+	{"electrical_designer", "Electrical Designer", []string{"electrical design engineer", "electrical designer"}},
+	{"civil_designer", "Civil Designer", []string{"civil design engineer", "civil designer", "structural designer"}},
+	{"drafter", "Drafter", []string{"drafter", "draftsman", "draughtsman", "design drafter", "design draftsman", "cad drafter"}},
+	{"bim_specialist", "BIM Specialist", []string{"bim modeler", "bim coordinator", "bim designer", "bim specialist", "revit designer"}},
+	{"pcb_designer", "PCB Designer", []string{"pcb design engineer", "pcb designer", "pcb layout engineer", "pcb layout designer"}},
+	// The silicon family has many spellings and they all name one role. Whatever is
+	// missing here falls back to the generic design_engineer, which is why the list
+	// mirrors the categoryTable block that routes these titles to `hardware`.
+	{"chip_designer", "Chip Designer", []string{
+		"physical design engineer", "vlsi design engineer", "rtl design engineer",
+		"analog design engineer", "mixed signal design engineer", "digital design engineer",
+		"chip design engineer", "asic design engineer", "soc design engineer",
+		"ic design engineer", "semiconductor design engineer", "dft design engineer",
+		// A hyphen is a word boundary, so the industry's own "mixed-signal" spelling
+		// needs its own alias — the same trap the classify table documents.
+		"mixed-signal design engineer", "rf design engineer", "rfic design engineer",
+		"analogue design engineer", "silicon design engineer", "memory design engineer",
+		"standard cell design engineer",
+	}},
 
 	// Non-software professions the catalogue carries (broad scope).
 	{"electrical_engineer", "Electrical Engineer", []string{"electrical engineer"}},
@@ -247,6 +284,9 @@ var nonGradeable = map[string]bool{
 	"head_of_product": true, "head_of_growth": true, "head_of_design": true, "head_of_marketing": true,
 	// team_lead already implies the lead grade; director is exec-level.
 	"team_lead": true, "director": true,
+	// Directorial and ops titles that state their own level: "Senior Creative
+	// Director" is not a rung anyone posts.
+	"art_director": true, "creative_director": true, "design_ops": true,
 }
 
 func buildNamedAliases() []namedAlias {
