@@ -5,8 +5,8 @@
 surface, so app code imports from `$lib/ui` and never reaches into the package directly.
 
 Being extracted from `web/` in phases by an external contributor; the phase inventory lives
-in `design-system/docs/`. A script that still `echo`s a placeholder (`validate:docs`) is an
-unfinished phase, not breakage.
+in `design-system/docs/`. A script that still `echo`s a placeholder is an unfinished phase,
+not breakage.
 
 ## Always true
 
@@ -74,6 +74,26 @@ to the bundler's JS parser and dies on the markup. The cost is the autodocs prop
 the Docs tab renders thin, and `argTypes` are hand-maintained: they drift from a component's
 actual variants with nothing to catch it. `Button`'s list already did, losing `destructive`.
 
+## DSDS docs
+
+`docs/dsds/*.json` describes the system as entities a docs site can render: `foundation.json`
+(one entity per token family, each listing its token names), `theme.json` (the dark mode and
+its `.dark` selector), `components.json` (one entity per primitive — props, defaults, and
+links to its source and story).
+
+`pnpm validate:docs` (`scripts/validate-docs.mjs`, run in CI) checks structure — every entity
+carries `id`, `type`, `name` — and then the two things that actually rot: every `source.file`
+and `stories[].file` resolves, a foundation entity's `tokens` list matches the keys of the
+token file it names **in both directions**, and no `src/*.stories.ts` goes unclaimed. Phase 6
+shipped with all three broken (every foundation path off by a directory, `destructive-foreground`
+undocumented, five story files orphaned) and the structural check passed, which is why they are
+checked now.
+
+**What is still hand-maintained: `props`, their `values`, and every `description`.** A variant
+added to a `tv()` call leaves the entity stale with CI green — the same drift that costs
+`argTypes` their accuracy, and for the same reason: the values live inside a Svelte module
+script that only a compiler can read. Touch a primitive, update its entity in the same commit.
+
 ## Limitations
 
-- The DSDS docs site is not configured yet.
+- The DSDS docs site itself is not configured yet — only the entity JSON it would consume.
