@@ -82,7 +82,9 @@
     ['jd', 'Job'],
     ['templates', 'Templates'],
   ];
-  let width = $state(340);
+  // 400 rather than the 340 floor: at the floor the tab strip wraps "Job Match" onto two lines
+  // and the vacancy title truncates after a couple of words, so the panel opened looking cramped.
+  let width = $state(400);
   let resizing = false;
   // Collapsed to a rail so the centre CV preview can take the width. Desktop-only: below lg
   // the columns already show one at a time, and collapsing there would hide a view with no

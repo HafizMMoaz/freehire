@@ -88,7 +88,7 @@
   // Left panel: which tab is shown, and its resizable width. The chat stays mounted across tab
   // switches (hidden, not unmounted) so its live session is never dropped.
   let leftTab = $state<'chat' | 'editor' | 'settings'>('chat');
-  let leftWidth = $state(380);
+  let leftWidth = $state(350);
   // Folded to a rail so the centre CV preview can take the width. Desktop-only: below lg the
   // columns already show one at a time, and collapsing there would hide a view with no way back.
   let leftCollapsed = $state(false);
@@ -127,9 +127,9 @@
     else if (v !== 'preview') artifactTab = v;
   }
 
-  // Centre preview zoom, clamped to 50–150% in 10% steps. Starts at 90% so the full A4 page
-  // fits the centre column on load.
-  let zoom = $state(0.9);
+  // Centre preview zoom, clamped to 50–150% in 10% steps. Starts at 80%: the A4 page then fits
+  // the centre column with both side panels open, so nothing has to be dragged before reading.
+  let zoom = $state(0.8);
   const zoomPct = $derived(Math.round(zoom * 100));
   const clampZoom = (z: number) => Math.min(1.5, Math.max(0.5, Math.round(z * 10) / 10));
   const zoomOut = () => (zoom = clampZoom(zoom - 0.1));

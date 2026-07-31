@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
-  import { AlertTriangle, PanelLeft, Plus, Trash2 } from '@lucide/svelte';
+  import { AlertTriangle, MessagesSquare, PanelLeft, Plus, Trash2, WandSparkles } from '@lucide/svelte';
   import { resolve } from '$app/paths';
   import {
     createSession,
@@ -664,13 +664,19 @@
           {:else if chat.messages.length === 0 && openingActions?.length}
             <div class="rounded-xl border border-border bg-muted/30 p-4">
               <div class="flex flex-wrap gap-2">
+                <!-- The icon comes from the action's kind, not from the action itself: the
+                     surfaces that offer these are plain modules, and a Svelte component cannot
+                     travel through one. The two kinds are the two rhythms — the unattended run
+                     and the conversation — so the mapping is complete by construction. -->
                 {#each openingActions as action (action.label)}
+                  {@const Icon = action.kind === 'autopilot' ? WandSparkles : MessagesSquare}
                   <button
                     type="button"
-                    class="rounded-lg bg-brand px-3 py-2 text-sm font-medium text-brand-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
+                    class="inline-flex items-center gap-1.5 rounded-lg bg-brand px-3 py-2 text-sm font-medium text-brand-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
                     disabled={turnActive || switching}
                     onclick={() => runOpening(action)}
                   >
+                    <Icon class="size-4" />
                     {action.label}
                   </button>
                 {/each}
