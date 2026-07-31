@@ -35,7 +35,8 @@ type fakeCVRenderer struct {
 	photosSeen [][]byte
 }
 
-func (f *fakeCVRenderer) Render(_ context.Context, doc cv.Document, tmpl cv.Template, photo []byte) ([]byte, error) {
+func (f *fakeCVRenderer) Render(_ context.Context, doc cv.Document, tmpl cv.Template, photo []byte, hrefs cv.LinkHrefs) ([]byte, error) {
+	_ = hrefs
 	f.calls++
 	f.gotTmpl = tmpl
 	f.docsSeen = append(f.docsSeen, doc)

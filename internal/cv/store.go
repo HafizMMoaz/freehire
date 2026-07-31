@@ -46,7 +46,12 @@ type Record struct {
 	IsTailored bool
 	// AgentSessionID is the roy session bound to a tailored CV (empty when none).
 	AgentSessionID string
-	Document       Document
+	// TracerLinksEnabled is the candidate's consent for this CV's links to be traced.
+	TracerLinksEnabled bool
+	// CompanySlug is the vacancy's company, used as the tracer token's readable prefix. Empty
+	// for a base CV and for a tailored copy whose vacancy was pruned.
+	CompanySlug string
+	Document    Document
 	// AutopilotReport is the last unattended run's account of itself, one entry per
 	// requirement it considered. Empty when no run has happened (or the last was reverted).
 	AutopilotReport []AutopilotEntry
@@ -76,6 +81,7 @@ type Repository interface {
 	GetBase(ctx context.Context, userID int64) (db.GetBaseCVByUserRow, error)
 	CreateTailored(ctx context.Context, userID, jobID int64, title, templateID string, data []byte) (db.CreateTailoredCVRow, error)
 	SetSession(ctx context.Context, id uuid.UUID, userID int64, sessionID string) (int64, error)
+	SetTracerLinks(ctx context.Context, id uuid.UUID, userID int64, enabled bool) (int64, error)
 	ListTailored(ctx context.Context, userID int64) ([]db.ListTailoredCVsByUserRow, error)
 	SetAutopilotReport(ctx context.Context, id uuid.UUID, userID int64, report []byte) (int64, error)
 	GetTailoredForJob(ctx context.Context, userID, jobID int64) (db.GetTailoredCVForJobRow, error)
@@ -135,12 +141,14 @@ func (s *Store) Get(ctx context.Context, id uuid.UUID, userID int64) (Record, er
 		return Record{}, err
 	}
 	return Record{
-		Meta:            Meta{ID: row.ID, Title: row.Title, TemplateID: row.TemplateID, CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time},
-		JobID:           int8Value(row.JobID),
-		IsTailored:      row.IsTailored,
-		AgentSessionID:  textValue(row.AgentSessionID),
-		Document:        doc,
-		AutopilotReport: decodeAutopilotReport(row.AutopilotReport),
+		Meta:               Meta{ID: row.ID, Title: row.Title, TemplateID: row.TemplateID, CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time},
+		JobID:              int8Value(row.JobID),
+		IsTailored:         row.IsTailored,
+		AgentSessionID:     textValue(row.AgentSessionID),
+		TracerLinksEnabled: row.TracerLinksEnabled,
+		CompanySlug:        row.CompanySlug,
+		Document:           doc,
+		AutopilotReport:    decodeAutopilotReport(row.AutopilotReport),
 	}, nil
 }
 
@@ -182,6 +190,23 @@ func textValue(v pgtype.Text) string {
 // SetSession binds (or rebinds) the agent session to an owned CV, or returns ErrNotFound.
 func (s *Store) SetSession(ctx context.Context, id uuid.UUID, userID int64, sessionID string) error {
 	n, err := s.repo.SetSession(ctx, id, userID, sessionID)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetTracerLinks turns link tracing on or off for one CV. Owner-scoped: a foreign or missing id
+// is ErrNotFound.
+//
+// It writes the column directly rather than going through cvedit, the only other writer of a
+// stored CV. A cvedit write becomes a revision with a computed inverse, and consent to track a
+// third party must not be something an undo of an unrelated edit can grant or revoke.
+func (s *Store) SetTracerLinks(ctx context.Context, id uuid.UUID, userID int64, enabled bool) error {
+	n, err := s.repo.SetTracerLinks(ctx, id, userID, enabled)
 	if err != nil {
 		return err
 	}
@@ -373,6 +398,10 @@ func (r queriesRepository) SetSession(ctx context.Context, id uuid.UUID, userID 
 		ID: id, UserID: userID,
 		AgentSessionID: pgtype.Text{String: sessionID, Valid: sessionID != ""},
 	})
+}
+
+func (r queriesRepository) SetTracerLinks(ctx context.Context, id uuid.UUID, userID int64, enabled bool) (int64, error) {
+	return r.q.SetCVTracerLinks(ctx, db.SetCVTracerLinksParams{ID: id, UserID: userID, TracerLinksEnabled: enabled})
 }
 
 func (r queriesRepository) ListTailored(ctx context.Context, userID int64) ([]db.ListTailoredCVsByUserRow, error) {

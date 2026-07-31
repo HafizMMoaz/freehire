@@ -19,6 +19,7 @@ import (
 	"github.com/strelov1/freehire/internal/db"
 	"github.com/strelov1/freehire/internal/headshot"
 	"github.com/strelov1/freehire/internal/resume"
+	"github.com/strelov1/freehire/internal/tracerlink"
 )
 
 // CV-builder HTTP surface: per-user structured CVs (CRUD + seed) and on-demand PDF
@@ -36,7 +37,14 @@ type cvHandlers struct {
 	// cvStore owns the CV-builder use cases (per-user structured CVs, CRUD + seed).
 	cvStore    *cv.Store
 	cvRenderer cv.Renderer
-	resume     *resume.Store
+	// tracerSalt keys the visitor hash of a traced click. Empty means the deployment cannot
+	// identify visitors at all, which is why enabling tracing is refused without it.
+	tracerSalt string
+	// tracerMinter issues the tokens a traced render substitutes in; nil disables tracing.
+	tracerMinter *tracerlink.Minter
+	// tracerBaseURL is the public origin a traced link points at, e.g. "https://freehire.me".
+	tracerBaseURL string
+	resume        *resume.Store
 	// photos serves the headshot the photo-bearing templates print. Nil-safe: an
 	// unconfigured bucket, like a member with no photo, means the placeholder.
 	photos             *headshot.Store
@@ -67,9 +75,18 @@ type jobReader interface {
 	GetJob(ctx context.Context, id int64) (db.Job, error)
 }
 
-func newCVHandlers(pool *pgxpool.Pool, queries *db.Queries, typstBin string, resumeStore *resume.Store, photoStore *headshot.Store, creditsStore *credits.Store, match *matchHandlers) *cvHandlers {
+func newCVHandlers(pool *pgxpool.Pool, queries *db.Queries, typstBin, tracerSalt, baseURL string, servedHosts []string, resumeStore *resume.Store, photoStore *headshot.Store, creditsStore *credits.Store, match *matchHandlers) *cvHandlers {
 	h := &cvHandlers{
-		cvStore: cv.NewStore(cv.NewQueriesRepository(queries)),
+		cvStore:    cv.NewStore(cv.NewQueriesRepository(queries)),
+		tracerSalt: tracerSalt,
+		tracerMinter: tracerlink.NewMinter(tracerlink.NewRepository(
+			func(ctx context.Context, cvID uuid.UUID, userID int64, token, sourcePath, destURL, destHash string) (string, error) {
+				return queries.UpsertTracerLink(ctx, db.UpsertTracerLinkParams{
+					CvID: cvID, UserID: userID, Token: token, SourcePath: sourcePath,
+					DestinationUrl: destURL, DestinationHash: destHash,
+				})
+			}), servedHosts),
+		tracerBaseURL: baseURL,
 		// The editor is the only thing that writes a stored CV. The evidence gate is
 		// attached later (withExperienceBank) because the bank is wired after this.
 		editor:             cvedit.NewEditor(cvedit.NewRepository(pool, queries), nil),
@@ -126,6 +143,11 @@ func (h *cvHandlers) register(api fiber.Router, mw middleware) {
 	api.Put("/me/cvs/:id", mw.cookie, h.UpdateCV)
 	// Change only the template (the gallery's one-field switch); cookie-only like other mutations.
 	api.Put("/me/cvs/:id/template", mw.cookie, h.SetCVTemplate)
+	// Cookie-only, and deliberately its own route rather than a field on the update above:
+	// consent to track a third party is the candidate's to give, and it must not ride along
+	// with a document save the tailoring agent can also make.
+	api.Put("/me/cvs/:id/tracer-links", mw.cookie, h.SetCVTracerLinks)
+	api.Get("/me/cvs/:id/tracer-links", mw.cookie, h.ListCVTracerLinks)
 	api.Delete("/me/cvs/:id", mw.cookie, h.DeleteCV)
 	api.Get("/me/cvs/:id/pdf", mw.key, h.RenderCVPDF)
 	// Tailoring: the browser starts a session (cookie-only bootstrap); the agent's CLI drives
@@ -172,6 +194,9 @@ type cvResponse struct {
 	// requirement. The workspace panel renders it from this read rather than by parsing
 	// the conversation, so it survives a reload. Empty when no run has happened.
 	AutopilotReport []cv.AutopilotEntry `json:"autopilot_report,omitempty"`
+	// TracerLinksEnabled is the candidate's consent for this CV's links to be traced. Reported so
+	// the editor can show the toggle's actual state rather than assume it.
+	TracerLinksEnabled bool `json:"tracer_links_enabled"`
 }
 
 // cvTailoredResponse is a tailored CV in the /my/cvs re-open list: metadata plus the vacancy
@@ -204,10 +229,11 @@ func metaResponse(m cv.Meta) cvMetaResponse {
 
 func recordResponse(rec cv.Record) cvResponse {
 	return cvResponse{
-		cvMetaResponse:  metaResponse(rec.Meta),
-		AgentSessionID:  rec.AgentSessionID,
-		Document:        rec.Document,
-		AutopilotReport: rec.AutopilotReport,
+		cvMetaResponse:     metaResponse(rec.Meta),
+		AgentSessionID:     rec.AgentSessionID,
+		Document:           rec.Document,
+		AutopilotReport:    rec.AutopilotReport,
+		TracerLinksEnabled: rec.TracerLinksEnabled,
 	}
 }
 
@@ -343,6 +369,117 @@ func (h *cvHandlers) UpdateCV(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"data": metaResponse(meta)})
 }
 
+type setCVTracerLinksRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+// SetCVTracerLinks records the candidate's decision to have the links in this CV's PDF traced,
+// or to stop. Off is the state of every CV that has not been through here.
+//
+// Enabling is refused when the deployment has no visitor salt: without one there is no honest way
+// to tell one visitor from another, and accepting the consent while quietly recording less would
+// answer a question the candidate did not ask. Disabling is never refused — withdrawing consent is
+// not a favour the deployment grants.
+func (h *cvHandlers) SetCVTracerLinks(c *fiber.Ctx) error {
+	userID, err := requireUserID(c)
+	if err != nil {
+		return err
+	}
+	id, err := cvPathID(c)
+	if err != nil {
+		return err
+	}
+	var in setCVTracerLinksRequest
+	if err := c.BodyParser(&in); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+	}
+	if in.Enabled && h.tracerSalt == "" {
+		return fiber.NewError(fiber.StatusConflict,
+			"link tracing is not configured on this deployment")
+	}
+	if err := h.cvStore.SetTracerLinks(c.Context(), id, userID, in.Enabled); err != nil {
+		return mapCVError(err)
+	}
+	return c.JSON(fiber.Map{"data": fiber.Map{"tracer_links_enabled": in.Enabled}})
+}
+
+// tracedHrefs mints a token for each of this CV's traceable links and returns where each should
+// point, or nothing at all when the candidate has not asked for tracing.
+//
+// It runs on every download because the PDF is never stored, so the minting underneath must be
+// idempotent — otherwise three downloads would leave three tokens for one link and scatter the
+// counts across them.
+//
+// A zero value is the ordinary render: the links still resolve absolutely, they just point where
+// the candidate wrote them.
+func (h *cvHandlers) tracedHrefs(ctx context.Context, rec cv.Record, userID int64) cv.LinkHrefs {
+	if !rec.TracerLinksEnabled || h.tracerMinter == nil || h.tracerBaseURL == "" {
+		return cv.LinkHrefs{}
+	}
+	projectLinks := make([]string, len(rec.Document.Projects))
+	for i, p := range rec.Document.Projects {
+		projectLinks[i] = p.Link
+	}
+	minted := h.tracerMinter.Mint(ctx, rec.ID, userID, h.tracerBaseURL,
+		rec.CompanySlug, rec.Document.Header.Links, projectLinks)
+	return cv.LinkHrefs{Header: minted.Header, Projects: minted.Projects}
+}
+
+// tracerLinkResponse is one traced link as the owner reads it.
+type tracerLinkResponse struct {
+	SourcePath     string `json:"source_path"`
+	DestinationURL string `json:"destination_url"`
+	TracedURL      string `json:"traced_url"`
+	Clicks         int64  `json:"clicks"`
+	BotClicks      int64  `json:"bot_clicks"`
+	// DistinctVisitors is omitted rather than reported as zero when the deployment has no salt:
+	// every click then carries an empty hash, and counting those would say "one visitor" about any
+	// number of people. Absent is the honest answer; zero would be a wrong one.
+	DistinctVisitors *int64     `json:"distinct_visitors,omitempty"`
+	LastClickAt      *time.Time `json:"last_click_at,omitempty"`
+}
+
+// ListCVTracerLinks reports what is known about each of an owned CV's traced links.
+//
+// Clicks the owner made themselves are excluded by the query — they are recorded so the history
+// stays complete, not so they can be read back as somebody else's interest. Automated traffic is
+// counted separately rather than dropped, so the UI's "include likely bots" switch needs no second
+// request.
+func (h *cvHandlers) ListCVTracerLinks(c *fiber.Ctx) error {
+	userID, err := requireUserID(c)
+	if err != nil {
+		return err
+	}
+	id, err := cvPathID(c)
+	if err != nil {
+		return err
+	}
+	rows, err := h.queries.ListTracerLinkStats(c.Context(), db.ListTracerLinkStatsParams{CvID: id, UserID: userID})
+	if err != nil {
+		return err
+	}
+	out := make([]tracerLinkResponse, 0, len(rows))
+	for _, r := range rows {
+		item := tracerLinkResponse{
+			SourcePath:     r.SourcePath,
+			DestinationURL: r.DestinationUrl,
+			TracedURL:      h.tracerBaseURL + "/cv/" + r.Token,
+			Clicks:         r.Clicks,
+			BotClicks:      r.BotClicks,
+		}
+		if h.tracerSalt != "" {
+			n := r.DistinctVisitors
+			item.DistinctVisitors = &n
+		}
+		if r.LastClickAt.Valid {
+			t := r.LastClickAt.Time
+			item.LastClickAt = &t
+		}
+		out = append(out, item)
+	}
+	return c.JSON(fiber.Map{"data": out})
+}
+
 // DeleteCV removes an owned CV.
 func (h *cvHandlers) DeleteCV(c *fiber.Ctx) error {
 	userID, err := requireUserID(c)
@@ -447,7 +584,9 @@ func (h *cvHandlers) RenderCVPDF(c *fiber.Ctx) error {
 	if err != nil {
 		return mapCVError(err)
 	}
-	pdf, err := h.cvRenderer.Render(c.Context(), rec.Document, tmpl, headshotForTemplate(c.Context(), h.photos, userID, tmpl))
+	pdf, err := h.cvRenderer.Render(c.Context(), rec.Document, tmpl,
+		headshotForTemplate(c.Context(), h.photos, userID, tmpl),
+		h.tracedHrefs(c.Context(), rec, userID))
 	if err != nil {
 		return err
 	}

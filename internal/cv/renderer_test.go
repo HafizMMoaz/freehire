@@ -11,6 +11,7 @@ import (
 	"io"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -64,7 +65,7 @@ func TestTypstRendererProducesExtractableATSText(t *testing.T) {
 		t.Fatalf("resolve template: %v", err)
 	}
 
-	data, err := NewTypstRenderer(bin).Render(context.Background(), doc, tmpl, nil)
+	data, err := NewTypstRenderer(bin).Render(context.Background(), doc, tmpl, nil, LinkHrefs{})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -92,7 +93,7 @@ func TestRendererResolvesBundledSansFont(t *testing.T) {
 	tmpl := Template{ID: "sans-probe", source: []byte(
 		"#set text(font: \"Liberation Sans\")\nAda Lovelace — backend engineer\n")}
 
-	data, err := NewTypstRenderer(bin).Render(context.Background(), Document{}, tmpl, nil)
+	data, err := NewTypstRenderer(bin).Render(context.Background(), Document{}, tmpl, nil, LinkHrefs{})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -127,7 +128,7 @@ func TestAllTemplatesProduceExtractableText(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolve: %v", err)
 			}
-			data, err := r.Render(context.Background(), doc, tmpl, nil)
+			data, err := r.Render(context.Background(), doc, tmpl, nil, LinkHrefs{})
 			if err != nil {
 				t.Fatalf("render: %v", err)
 			}
@@ -171,11 +172,11 @@ func TestRenderAppliesMargins(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolve: %v", err)
 			}
-			a, err := r.compile(context.Background(), tight, tmpl, "svg", nil)
+			a, err := r.compile(context.Background(), tight, tmpl, "svg", nil, LinkHrefs{})
 			if err != nil {
 				t.Fatalf("compile tight: %v", err)
 			}
-			b, err := r.compile(context.Background(), wide, tmpl, "svg", nil)
+			b, err := r.compile(context.Background(), wide, tmpl, "svg", nil, LinkHrefs{})
 			if err != nil {
 				t.Fatalf("compile wide: %v", err)
 			}
@@ -192,7 +193,7 @@ func TestRenderAppliesMargins(t *testing.T) {
 func TestRenderPayloadCarriesHasPhoto(t *testing.T) {
 	doc := Document{Header: Header{FullName: "Ada Lovelace"}}
 	for _, hasPhoto := range []bool{true, false} {
-		data, err := renderPayload(doc, hasPhoto)
+		data, err := renderPayload(doc, hasPhoto, LinkHrefs{})
 		if err != nil {
 			t.Fatalf("renderPayload: %v", err)
 		}
@@ -236,11 +237,11 @@ func TestPhotoIsStagedOnlyForPhotoTemplates(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolve: %v", err)
 			}
-			with, err := r.compile(context.Background(), doc, tmpl, "svg", photo)
+			with, err := r.compile(context.Background(), doc, tmpl, "svg", photo, LinkHrefs{})
 			if err != nil {
 				t.Fatalf("compile with photo: %v", err)
 			}
-			without, err := r.compile(context.Background(), doc, tmpl, "svg", nil)
+			without, err := r.compile(context.Background(), doc, tmpl, "svg", nil, LinkHrefs{})
 			if err != nil {
 				t.Fatalf("compile without photo: %v", err)
 			}
@@ -275,7 +276,7 @@ func TestPhotoTemplateRendersWithoutAPhoto(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolve %q: %v", id, err)
 		}
-		data, err := NewTypstRenderer(bin).Render(context.Background(), doc, tmpl, nil)
+		data, err := NewTypstRenderer(bin).Render(context.Background(), doc, tmpl, nil, LinkHrefs{})
 		if err != nil {
 			t.Fatalf("render %q without a photo: %v", id, err)
 		}
@@ -376,7 +377,7 @@ func TestStyledDocumentRendersInEveryTemplate(t *testing.T) {
 			render := func(s Style) []byte {
 				d := doc
 				d.Style = s
-				out, err := r.compile(context.Background(), d, tmpl, "svg", nil)
+				out, err := r.compile(context.Background(), d, tmpl, "svg", nil, LinkHrefs{})
 				if err != nil {
 					t.Fatalf("render %+v: %v", s, err)
 				}
@@ -401,7 +402,7 @@ func TestStyledDocumentRendersInEveryTemplate(t *testing.T) {
 			// see the face embedded in the output.
 			d := doc
 			d.Style = Style{FontFamily: "carlito"}
-			data, err := r.Render(context.Background(), d, tmpl, nil)
+			data, err := r.Render(context.Background(), d, tmpl, nil, LinkHrefs{})
 			if err != nil {
 				t.Fatalf("render pdf: %v", err)
 			}
@@ -434,11 +435,11 @@ func TestFontSizeScalesTheWholeHierarchy(t *testing.T) {
 		t.Fatalf("resolve: %v", err)
 	}
 
-	small, err := r.Render(context.Background(), styledDoc(Style{FontSize: 8.5}), tmpl, nil)
+	small, err := r.Render(context.Background(), styledDoc(Style{FontSize: 8.5}), tmpl, nil, LinkHrefs{})
 	if err != nil {
 		t.Fatalf("render small: %v", err)
 	}
-	large, err := r.Render(context.Background(), styledDoc(Style{FontSize: 12.0}), tmpl, nil)
+	large, err := r.Render(context.Background(), styledDoc(Style{FontSize: 12.0}), tmpl, nil, LinkHrefs{})
 	if err != nil {
 		t.Fatalf("render large: %v", err)
 	}
@@ -453,11 +454,11 @@ func TestFontSizeScalesTheWholeHierarchy(t *testing.T) {
 			"#let st = cv.at(\"style\", default: (:))\n" +
 			"#set text(font: \"Libertinus Serif\", size: (if st.at(\"font_size\", default: 0) > 0 { st.font_size } else { 9.5 }) * 1pt)\n" +
 			"#text(size: 1.25em)[Ada Lovelace]\n")}
-	pSmall, err := r.Render(context.Background(), Document{Style: Style{FontSize: 8.5}}, probe, nil)
+	pSmall, err := r.Render(context.Background(), Document{Style: Style{FontSize: 8.5}}, probe, nil, LinkHrefs{})
 	if err != nil {
 		t.Fatalf("render probe small: %v", err)
 	}
-	pLarge, err := r.Render(context.Background(), Document{Style: Style{FontSize: 12.0}}, probe, nil)
+	pLarge, err := r.Render(context.Background(), Document{Style: Style{FontSize: 12.0}}, probe, nil, LinkHrefs{})
 	if err != nil {
 		t.Fatalf("render probe large: %v", err)
 	}
@@ -492,7 +493,7 @@ func TestUnstyledRenderMatchesTheTemplatesOwnDefaults(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolve: %v", err)
 			}
-			styled, err := r.compile(context.Background(), doc, tmpl, "svg", nil)
+			styled, err := r.compile(context.Background(), doc, tmpl, "svg", nil, LinkHrefs{})
 			if err != nil {
 				t.Fatalf("render styled: %v", err)
 			}
@@ -504,7 +505,7 @@ func TestUnstyledRenderMatchesTheTemplatesOwnDefaults(t *testing.T) {
 			if bytes.Equal(plain.source, tmpl.source) {
 				t.Fatalf("template %q has no style preamble to neutralise", ti.ID)
 			}
-			bare, err := r.compile(context.Background(), doc, plain, "svg", nil)
+			bare, err := r.compile(context.Background(), doc, plain, "svg", nil, LinkHrefs{})
 			if err != nil {
 				t.Fatalf("render bare: %v", err)
 			}
@@ -530,12 +531,93 @@ func TestRenderDoesNotMutateTheCallersDocument(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if _, err := NewTypstRenderer(bin).Render(context.Background(), doc, tmpl, nil); err != nil {
+	if _, err := NewTypstRenderer(bin).Render(context.Background(), doc, tmpl, nil, LinkHrefs{}); err != nil {
 		t.Fatalf("render: %v", err)
 	}
 	if doc.Style.FontFamily != "tinos" {
 		t.Errorf("render rewrote the caller's font family to %q; it must resolve on a copy", doc.Style.FontFamily)
 	}
+}
+
+// TestEveryTemplateRendersLinksAsClickableLinks proves each registered template emits its
+// links as PDF link annotations rather than as inert text. Registry-driven, so a template
+// added later is held to the rule without this test being edited.
+//
+// This is a precondition of link tracing, not a cosmetic preference: tracing substitutes the
+// link's target while leaving the visible text alone, so a template that prints a link as
+// plain text carries no target to substitute and would report no clicks at all.
+//
+// classic-ats is the control. If every template fails, including it, the detector below is
+// wrong rather than the templates.
+func TestEveryTemplateRendersLinksAsClickableLinks(t *testing.T) {
+	bin, err := exec.LookPath("typst")
+	if err != nil {
+		t.Skip("typst not installed; skipping clickable-link render regression")
+	}
+	doc := Document{
+		// Two header links, not one: a template that linked only the first would otherwise
+		// pass, and this test exists to hold templates that do not exist yet.
+		Header:     Header{FullName: "Ada Lovelace", Email: "ada@example.com", Links: []string{"github.com/ada", "linkedin.com/in/ada"}},
+		Summary:    "Backend engineer with a decade of systems work.",
+		Experience: []ExperienceItem{{Role: "Senior Engineer", Company: "Analytical Engines", Start: "2018", End: "Present", Bullets: []string{"Cut latency by 40%."}}},
+		Projects:   []Project{{Name: "opensched", Link: "opensched.dev", Bullets: []string{"A tiny cron scheduler."}}},
+		Skills:     []SkillGroup{{Group: "Languages", Items: []string{"Go"}}},
+	}
+	r := NewTypstRenderer(bin)
+	for _, ti := range Templates() {
+		t.Run(ti.ID, func(t *testing.T) {
+			tmpl, err := ResolveTemplate(ti.ID)
+			if err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
+			data, err := r.Render(context.Background(), doc, tmpl, nil, LinkHrefs{})
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			targets := pdfLinkTargets(t, data)
+			for _, want := range []string{"github.com/ada", "linkedin.com/in/ada", "opensched.dev"} {
+				if !linksTo(targets, want) {
+					t.Errorf("template %q renders no link to %q — it prints the link as inert text, or "+
+						"drops the section carrying it, and both leave nothing for tracing to substitute; "+
+						"link targets found: %v", ti.ID, want, targets)
+				}
+			}
+			// Clickable is not the same as followable. CVs store links scheme-less, and an
+			// annotation carrying that verbatim is a relative URI that opens nothing.
+			for _, got := range targets {
+				if !strings.HasPrefix(got, "https://") && !strings.HasPrefix(got, "http://") {
+					t.Errorf("template %q renders %q — a relative URI no reader can follow", ti.ID, got)
+				}
+			}
+		})
+	}
+}
+
+// linksTo reports whether any rendered link points at the given destination. Substring, not
+// equality: what matters is which destination the link carries, not the exact spelling the
+// payload hands to Typst.
+func linksTo(targets []string, want string) bool {
+	return slices.ContainsFunc(targets, func(got string) bool { return strings.Contains(got, want) })
+}
+
+// pdfLinkTargets returns the URI of every link annotation in the rendered PDF — what a
+// reader actually follows, as opposed to what they see.
+func pdfLinkTargets(t *testing.T, data []byte) []string {
+	t.Helper()
+	rd, err := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("open rendered pdf: %v", err)
+	}
+	var targets []string
+	for i := 1; i <= rd.NumPage(); i++ {
+		annots := rd.Page(i).V.Key("Annots")
+		for j := 0; j < annots.Len(); j++ {
+			if uri := annots.Index(j).Key("A").Key("URI"); uri.Kind() == pdf.String {
+				targets = append(targets, uri.RawString())
+			}
+		}
+	}
+	return targets
 }
 
 func extractPDFText(t *testing.T, data []byte) string {
@@ -553,4 +635,137 @@ func extractPDFText(t *testing.T, data []byte) string {
 		t.Fatalf("read text: %v", err)
 	}
 	return buf.String()
+}
+
+// TestRenderPayloadMakesEveryLinkAbsolute pins the fix for a defect that predates tracing: CVs
+// store links the way a candidate writes them on paper ("github.com/ada"), and a PDF annotation
+// carrying that verbatim is a *relative* URI no reader can follow. The payload is where it is
+// normalised — not in six copies of Typst string handling.
+func TestRenderPayloadMakesEveryLinkAbsolute(t *testing.T) {
+	doc := Document{
+		Header:   Header{Links: []string{"github.com/ada", "mailto:ada@example.com", "https://x.dev/a"}},
+		Projects: []Project{{Name: "opensched", Link: "opensched.dev"}},
+	}
+	data, err := renderPayload(doc, false, LinkHrefs{})
+	if err != nil {
+		t.Fatalf("renderPayload: %v", err)
+	}
+	var payload struct {
+		LinkHrefs LinkHrefs `json:"link_hrefs"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	want := []string{"https://github.com/ada", "", "https://x.dev/a"}
+	if len(payload.LinkHrefs.Header) != len(want) {
+		t.Fatalf("header hrefs = %q, want %q", payload.LinkHrefs.Header, want)
+	}
+	for i := range want {
+		if payload.LinkHrefs.Header[i] != want[i] {
+			t.Errorf("header href[%d] = %q, want %q", i, payload.LinkHrefs.Header[i], want[i])
+		}
+	}
+	if got := payload.LinkHrefs.Projects; len(got) != 1 || got[0] != "https://opensched.dev" {
+		t.Errorf("project hrefs = %q, want [https://opensched.dev]", got)
+	}
+}
+
+// An href supplied by the caller — the traced URL minted for that position — replaces the
+// normalised default. Anything the caller leaves empty keeps the default, so a link that cannot
+// be traced still ends up absolute.
+func TestSuppliedHrefsOverrideTheDefaults(t *testing.T) {
+	doc := Document{Header: Header{Links: []string{"github.com/ada", "linkedin.com/in/ada"}}}
+	data, err := renderPayload(doc, false, LinkHrefs{Header: []string{"https://freehire.me/cv/acme-x7abc"}})
+	if err != nil {
+		t.Fatalf("renderPayload: %v", err)
+	}
+	var payload struct {
+		LinkHrefs LinkHrefs `json:"link_hrefs"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if got := payload.LinkHrefs.Header[0]; got != "https://freehire.me/cv/acme-x7abc" {
+		t.Errorf("traced href[0] = %q, want the supplied one", got)
+	}
+	if got := payload.LinkHrefs.Header[1]; got != "https://linkedin.com/in/ada" {
+		t.Errorf("href[1] = %q, want the normalised default", got)
+	}
+}
+
+// The whole bargain of tracing: the reader sees the candidate's own link text and follows ours.
+// If the substitution reached the visible text, the CV would advertise an opaque product URL
+// where a recruiter expects github.com/name — and the ATS text layer would carry it too.
+func TestATracedRenderSubstitutesTheTargetAndNotTheText(t *testing.T) {
+	bin, err := exec.LookPath("typst")
+	if err != nil {
+		t.Skip("typst not installed; skipping traced render test")
+	}
+	doc := Document{
+		Header:     Header{FullName: "Ada Lovelace", Links: []string{"github.com/ada"}},
+		Summary:    "Backend engineer.",
+		Experience: []ExperienceItem{{Role: "Engineer", Company: "Acme", Start: "2018", End: "Present"}},
+	}
+	const traced = "https://freehire.me/cv/acme-x7abc"
+	tmpl, err := ResolveTemplate(DefaultTemplateID)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	data, err := NewTypstRenderer(bin).Render(context.Background(), doc, tmpl, nil,
+		LinkHrefs{Header: []string{traced}})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	if !linksTo(pdfLinkTargets(t, data), traced) {
+		t.Errorf("rendered link targets = %v, want the traced URL", pdfLinkTargets(t, data))
+	}
+	text := extractPDFText(t, data)
+	if !strings.Contains(text, "github.com/ada") {
+		t.Errorf("the reader no longer sees the candidate's own link:\n%s", text)
+	}
+	if strings.Contains(text, "freehire.me") {
+		t.Error("the traced URL leaked into the visible text layer")
+	}
+}
+
+// Every template must honour the substitution, or tracing would work in one design and silently
+// report nothing in the others — the same hole the clickable-link guard exists to close.
+func TestEveryTemplateHonoursASuppliedHref(t *testing.T) {
+	bin, err := exec.LookPath("typst")
+	if err != nil {
+		t.Skip("typst not installed; skipping per-template traced render test")
+	}
+	doc := Document{
+		Header:   Header{FullName: "Ada Lovelace", Links: []string{"github.com/ada"}},
+		Projects: []Project{{Name: "opensched", Link: "opensched.dev"}},
+	}
+	hrefs := LinkHrefs{
+		Header:   []string{"https://freehire.me/cv/acme-aaaaa"},
+		Projects: []string{"https://freehire.me/cv/acme-bbbbb"},
+	}
+	r := NewTypstRenderer(bin)
+	for _, ti := range Templates() {
+		t.Run(ti.ID, func(t *testing.T) {
+			tmpl, err := ResolveTemplate(ti.ID)
+			if err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
+			data, err := r.Render(context.Background(), doc, tmpl, nil, hrefs)
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			targets := pdfLinkTargets(t, data)
+			for _, want := range hrefs.Header {
+				if !linksTo(targets, want) {
+					t.Errorf("template %q ignored the traced header href; targets: %v", ti.ID, targets)
+				}
+			}
+			for _, want := range hrefs.Projects {
+				if !linksTo(targets, want) {
+					t.Errorf("template %q ignored the traced project href; targets: %v", ti.ID, targets)
+				}
+			}
+		})
+	}
 }
