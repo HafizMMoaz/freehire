@@ -1,17 +1,20 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
-  import { AlertTriangle, MessagesSquare, PanelLeft, Plus, Trash2, WandSparkles } from '@lucide/svelte';
+  import { AlertTriangle, ArrowDown, MessagesSquare, PanelLeft, Plus, Trash2, WandSparkles } from '@lucide/svelte';
   import { resolve } from '$app/paths';
   import {
     createSession,
     listSessions,
     getSession,
     deleteSession,
+    suggestFollowUps,
     SessionNotFound,
   } from '$lib/assistant/api';
+  import { forDisplay, shouldRequest } from '$lib/assistant/followups';
   import { openRehearsal, sendTurn, startAutopilot, type Turn } from '$lib/assistant/client';
   import { initChat, reduceTurnEvent, type ChatState } from '$lib/assistant/chat';
   import { splitPresentingCalls } from '$lib/assistant/deck';
+  import { atBottom } from '$lib/assistant/scrolling';
   import { renderMarkdown } from '$lib/assistant/markdown';
   import JobDeck from '$lib/assistant/JobDeck.svelte';
   import SessionRail from '$lib/assistant/SessionRail.svelte';
@@ -116,7 +119,17 @@
 
   let sidebarOpen = $state(true);
   let scroller = $state<HTMLDivElement | null>(null);
+  // Whether arriving turn events may move the pane. Set from the pane's own scroll
+  // events, so scrolling up mid-turn holds position and scrolling back resumes
+  // following with no further ceremony.
+  let stickToBottom = $state(true);
   let textareaEl = $state<HTMLTextAreaElement | null>(null);
+
+  // What the caller might ask next, offered under the newest answer only. Cleared the
+  // moment anything else starts, and never requested on replay — a suggestion is about
+  // the present moment, and paying a model call to reconstruct it for history is spend
+  // with no reader.
+  let followUps = $state<string[]>([]);
 
   // Messages typed while a turn is in flight, drained one by one when it ends.
   let queue = $state<{ id: string; text: string }[]>([]);
@@ -204,9 +217,30 @@
     return () => clearInterval(id);
   });
 
-  async function scrollToBottom() {
+  /**
+   * Bring the newest content into view.
+   *
+   * `force` is the difference between a frame that ARRIVED and an act the reader
+   * PERFORMED. An arriving frame defers to where they are reading; sending a message,
+   * starting a run and opening a conversation do not, because the thing each produces
+   * is at the bottom and leaving it off screen hides the result of the act.
+   */
+  async function scrollToBottom(force = false) {
+    if (!force && !stickToBottom) return;
     await tick();
-    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    // Asked again after the await: a frame that was allowed to scroll when it arrived
+    // must not still scroll if the reader started reading during that tick.
+    if (!force && !stickToBottom) return;
+    if (!scroller) return;
+    scroller.scrollTop = scroller.scrollHeight;
+    // Landing at the bottom is also a decision to follow again. The pane's own scroll
+    // event would say so a moment later; saying it here spares the next frame that wait.
+    stickToBottom = true;
+  }
+
+  /** The pane moved. Follow the stream only while the reader is at its end. */
+  function onPaneScroll() {
+    if (scroller) stickToBottom = atBottom(scroller);
   }
 
   // --- Session orchestration -----------------------------------------------
@@ -332,6 +366,7 @@
     try {
       chat = initChat();
       queue = [];
+      followUps = [];
       activeId = id;
       activePreset = null;
       // Raise the guard HERE, not after the fetch below: the URL-following effect reruns
@@ -356,7 +391,7 @@
     } finally {
       switching = false;
     }
-    void scrollToBottom();
+    void scrollToBottom(true);
   }
 
   /**
@@ -476,8 +511,32 @@
       sessions = setLabel(sessions, sessionId, labelFromMessage(event.text));
     }
     chat = reduceTurnEvent(chat, event);
-    if (event.type === 'result') endTurn();
+    if (event.type === 'result') {
+      endTurn();
+      void askForFollowUps(sessionId, event);
+    }
     void scrollToBottom();
+  }
+
+  /**
+   * Fetch the "what now?" strip for a turn that just settled.
+   *
+   * Every failure is silence. The strip is decoration, the answer the caller came for
+   * is already on screen, and an error about a suggestion is a problem they cannot act
+   * on. The server says the same thing from its side, answering an empty list rather
+   * than a status for anything that goes wrong there.
+   */
+  async function askForFollowUps(sessionId: string, result: Extract<TurnEvent, { type: 'result' }>) {
+    const last = chat.messages[chat.messages.length - 1];
+    if (!shouldRequest(result, last?.role === 'assistant' ? last.text : '')) return;
+    try {
+      const got = await suggestFollowUps(sessionId);
+      // The caller may have switched conversations while this was in flight, and
+      // suggestions drawn from one chat must never appear under another.
+      if (sessionId === activeId) followUps = got;
+    } catch {
+      /* decoration: a suggestion that cannot be fetched is simply not offered */
+    }
   }
 
   // Composer submit: while a turn is in flight the message is queued and drained
@@ -488,7 +547,8 @@
     draft = '';
     if (turnActive || queue.length > 0) {
       enqueue(text);
-      void scrollToBottom();
+      followUps = [];
+      void scrollToBottom(true);
       return;
     }
     void dispatch({ kind: 'message', text });
@@ -504,6 +564,9 @@
     if (!id) return;
     error = null;
     turnActive = true;
+    // The strip belongs to the answer above it. Once anything new is running, the
+    // questions it offered are about a moment that has passed.
+    followUps = [];
     onTurnStateChange?.(true);
     // Before anything reaches the server: the host may be holding an edit on a timer, and
     // the run is about to snapshot and rewrite the very document that edit belongs to.
@@ -525,7 +588,7 @@
       started = sendTurn(id, start.text, (event) => onEvent(id, event));
     }
     turn = started;
-    void scrollToBottom();
+    void scrollToBottom(true);
     try {
       await started.done;
     } catch (err) {
@@ -657,7 +720,7 @@
       {/if}
 
       <!-- Message list -->
-      <div bind:this={scroller} class="flex-1 overflow-y-auto p-4">
+      <div bind:this={scroller} onscroll={onPaneScroll} class="flex-1 overflow-y-auto p-4">
         <div class="mx-auto flex max-w-3xl flex-col gap-3">
           {#if phase === 'loading'}
             <p class="text-sm text-muted-foreground">Connecting to the agent…</p>
@@ -747,6 +810,29 @@
             {/if}
           {/each}
 
+          <!-- What to ask next. Rendered as TEXT NODES, never through renderMarkdown:
+               the model that wrote these has read job descriptions and browsed pages,
+               so a suggestion may carry an attacker's words — and activating one speaks
+               them in the caller's own voice. What they agree to has to be exactly what
+               they can see, with nothing able to style, link or hide part of itself. -->
+          {#if followUps.length > 0 && !turnActive}
+            <div class="mt-1 flex flex-col items-start gap-1 self-start">
+              <span class="px-1 text-xs font-medium text-muted-foreground">Ask next</span>
+              {#each followUps as suggestion (suggestion)}
+                <!-- Sent as displayed, not as received: the caller agreed to the words
+                     in front of them, so those are the words that go. -->
+                <button
+                  type="button"
+                  onclick={() => submitText(forDisplay(suggestion))}
+                  disabled={switching}
+                  class="max-w-full rounded-lg border border-border/60 px-3 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:border-border hover:text-foreground disabled:opacity-50"
+                >
+                  {forDisplay(suggestion)}
+                </button>
+              {/each}
+            </div>
+          {/if}
+
           {#if turnActive}
             <div class="self-start inline-flex items-baseline gap-2 px-2 py-1 text-xs text-muted-foreground">
               <span class="star-glow font-mono text-[0.85rem] font-semibold">
@@ -757,6 +843,22 @@
             </div>
           {/if}
         </div>
+
+        <!-- Jump to latest. Sticky rather than absolute so it needs no positioned
+             ancestor: as the scroller's last child its natural place is past the bottom
+             of the scrollport, which is exactly when `bottom-2` pins it into view. -->
+        {#if !stickToBottom}
+          <div class="pointer-events-none sticky bottom-2 mt-2 flex justify-center">
+            <button
+              type="button"
+              onclick={() => scrollToBottom(true)}
+              class="pointer-events-auto flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground shadow-md transition-colors hover:text-foreground"
+            >
+              <ArrowDown class="size-3.5" />
+              Jump to latest
+            </button>
+          </div>
+        {/if}
       </div>
 
       <Composer
