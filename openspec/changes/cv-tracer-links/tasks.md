@@ -78,18 +78,20 @@
       the per-link panel with the "include likely bots" switch
 - [x] 8.2 Tracking board: the CV-opened marker beside the existing state, worded as evidence
       rather than proof
-- [ ] 8.3 Verify both visually in a real browser
+- [x] 8.3 Verify visually in a real browser — the 410 page shipped unstyled, reading as a
+      server fault rather than an explanation; it is the only surface a stranger sees
 
 ## 9. Retention and configuration
 
-- [ ] 9.1 `cmd/prune` deletes click records older than 180 days, dry-run by default like every
+- [x] 9.1 `cmd/prune` deletes click records older than 180 days, dry-run by default like every
       other removal it performs
-- [ ] 9.2 `TRACER_LINK_SALT` documented in the environment reference and `.env.example`
+- [x] 9.2 `TRACER_LINK_SALT` documented in the environment reference and `.env.example`
 
 ## 10. Documentation
 
-- [ ] 10.1 Privacy policy: what a traced link records, opt-in per CV and off by default, the
+- [x] 10.1 Privacy policy: what a traced link records, opt-in per CV and off by default, the
       180-day window, and that the owner's own clicks are not counted
-- [ ] 10.2 `internal/cv/AGENTS.md`: adding a template now requires emitting `link()`, and why
+- [x] 10.2 `internal/cv/AGENTS.md`: adding a template now requires emitting `link()`, and why
       the registry test exists
-- [ ] 10.3 Offer a `/blog` changelog entry once the feature ships
+- [x] 10.3 Changelog entry written as `draft: true` — visible in dev, hidden in prod until
+      `TRACER_LINK_SALT` is set and the feature can actually be switched on
