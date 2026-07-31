@@ -48,5 +48,8 @@
 ## 8. Verify and ship
 
 - [x] 8.1 `go build ./... && go vet ./... && go test ./...` green, and the web build and lint at their baseline
-- [ ] 8.2 Run `-dry-run` against production; inspect `hq_country` coverage and the per-collection counts, and record the numbers in the change before any write
-- [ ] 8.3 Run the real import, then `make reindex` (never stacked with `reindex-companies`), and confirm the facet returns jobs for both credentials
+- [x] 8.2 Measure the gates against live data before any write. Run without database access, by exercising the real resolvers/parsers/gates against the live registers and the public catalogue API (`/api/v1/companies?countries=<c>` — note it paginates by `offset`; a `page` parameter is silently ignored and returns page one every time). Numbers recorded on 2026-07-31:
+  - **UK** — register resolved to the `2026-07-31` snapshot, 142,649 rows. Catalogue: 7,944 companies hiring in GB, `hq_country` populated for 2,106 (26.5%). Outcome: **matched 457**, gated 460, ambiguous 1,452. Top grants are the right legal entities (EPAM Systems, Ford, Rolls-Royce, BP, NatWest, Graphcore, several county councils); no false positive found in the top 40.
+  - **NL** — 12,887 register rows. Catalogue: 2,732 companies hiring in NL, `hq_country` populated for 535 (19.6%). Outcome: **matched 83**, gated 173, ambiguous 37. Top grants: Thermo Fisher, Arcadis, NXP, ING Bank, Adyen, Booking.com, Elsevier, IMC Trading.
+  - `hq_country` is **mixed-format**, which is why the country-alias comparison matters: 117 companies store `United Kingdom` rather than `gb`. Without the alias fix those 37 UK companies — Graphcore among them — and Adyen in NL would silently fail the single-token rule.
+- [ ] 8.3 Run the real import, then `make reindex` (never stacked with `reindex-companies`), and confirm the facet returns jobs for both credentials — BLOCKED: needs production database access (`DATABASE_URL` or a shell on the host). Until this runs the feature is live in code but empty in production: no badges render and the credential filter returns nothing.
