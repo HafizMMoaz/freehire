@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"sync"
 	"time"
 
+	"github.com/getsentry/sentry-go"
+	sentryfiber "github.com/getsentry/sentry-go/fiber"
 	"github.com/gofiber/fiber/v2"
 	"github.com/valyala/fasthttp"
 
@@ -76,18 +79,24 @@ func (h *matchHandlers) StreamMatchAnalysis(c *fiber.Ctx) error {
 	c.Set(fiber.HeaderConnection, "keep-alive")
 	c.Set("X-Accel-Buffering", "no") // stop nginx buffering so events reach the browser promptly
 
-	// The server's 10s WriteTimeout would kill this long-lived stream mid-analysis, so
-	// clear the connection's write deadline for the SSE response only (captured here while
-	// the ctx is valid; used inside the writer, which runs after this handler returns).
+	// The server's 10s WriteTimeout would kill this long-lived stream mid-analysis, so the
+	// SSE response sets its own, per-write deadline instead (see sseStream). Captured here
+	// while the ctx is valid; used inside the writer, which runs after this handler returns.
 	conn := c.Context().Conn()
 
+	// Same reason as conn: the sentryfiber hub is request-scoped and the ctx is released
+	// once this handler returns, so take a clone now. A clone rather than the hub itself
+	// because the writer outlives the request that owns its scope.
+	var hub *sentry.Hub
+	if reqHub := sentryfiber.GetHubFromContext(c); reqHub != nil {
+		hub = reqHub.Clone()
+	}
+
 	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
-		if conn != nil {
-			_ = conn.SetWriteDeadline(time.Time{})
-		}
+		stream := newSSEStream(w, conn, sseWriteTimeout)
 		start := time.Now()
 		log.Printf("matchanalysis: stream start user=%d job=%d has_cv=%v", userID, job.ID, hasCV)
-		writeSSE(w, "meta", map[string]bool{"has_cv": hasCV})
+		stream.event("meta", map[string]bool{"has_cv": hasCV})
 		if !hasCV {
 			return
 		}
@@ -107,9 +116,7 @@ func (h *matchHandlers) StreamMatchAnalysis(c *fiber.Ctx) error {
 		// connection go quiet long enough for nginx's proxy_read_timeout to sever it
 		// mid-analysis — the client sees a bare "Connection lost". A periodic SSE comment
 		// keeps bytes flowing so the stream survives silent stages. The ticker goroutine
-		// and the stage callback both write to w, so a mutex serializes them (bufio.Writer
-		// is not safe for concurrent use).
-		var mu sync.Mutex
+		// and the stage callback both write, which sseStream serializes.
 		stopHeartbeat := make(chan struct{})
 		var heartbeat sync.WaitGroup
 		heartbeat.Add(1)
@@ -122,28 +129,25 @@ func (h *matchHandlers) StreamMatchAnalysis(c *fiber.Ctx) error {
 				case <-stopHeartbeat:
 					return
 				case <-t.C:
-					mu.Lock()
-					writeComment(w, "keepalive")
-					mu.Unlock()
+					stream.comment("keepalive")
 				}
 			}
 		}()
 
 		analysis, err := h.matchAnalysis.AnalyzeStream(ctx, input, func(e matchanalysis.Event) {
 			events++
-			mu.Lock()
-			writeSSE(w, string(e.Kind), e)
-			mu.Unlock()
+			stream.event(string(e.Kind), e)
 		})
 		close(stopHeartbeat)
 		heartbeat.Wait()
 		if err != nil {
 			log.Printf("matchanalysis: stream FAILED user=%d job=%d dur=%s events=%d: %v", userID, job.ID, time.Since(start).Round(time.Millisecond), events, err)
-			writeSSE(w, "stream_error", map[string]string{"message": "analysis failed"})
+			reportStreamFault(hub, err)
+			stream.event("stream_error", map[string]string{"message": "analysis failed"})
 			return
 		}
 		if analysis == nil {
-			writeSSE(w, "stream_error", map[string]string{"message": "analysis unavailable"})
+			stream.event("stream_error", map[string]string{"message": "analysis unavailable"})
 			return
 		}
 		h.cacheAnalysis(ctx, userID, job, cvUploadedAt, analysis)
@@ -155,25 +159,83 @@ func (h *matchHandlers) StreamMatchAnalysis(c *fiber.Ctx) error {
 	return nil
 }
 
-// writeSSE writes one named SSE event with a JSON data payload and flushes it. A write
-// error (client disconnected) is swallowed — the stream is best-effort.
-func writeSSE(w *bufio.Writer, event string, data any) {
+// reportStreamFault sends a fault that surfaced AFTER the response body began streaming
+// to Sentry. It exists because RenderError — the single reporting point for the whole API
+// — only ever sees errors a handler RETURNS, and this handler returns nil before the body
+// writer runs. Without this seam every failed analysis is invisible: the reader gets a
+// `stream_error` event, the access log records the 200 the stream opened with, and the
+// error inbox stays empty.
+//
+// hub is a clone captured while the request context was still alive; it is nil when Sentry
+// is unconfigured, which must report nothing rather than panic on the SSE goroutine.
+//
+// What counts as a fault is classify's decision, not a second policy invented here: the
+// streaming path must not disagree with the returned-error path about whether a reader
+// who walked away is an error. Only classify's status mapping is dropped — the response
+// status was fixed when the stream opened, long before this failure existed.
+func reportStreamFault(hub *sentry.Hub, err error) {
+	if hub == nil {
+		return
+	}
+	if _, _, report := classify(err); !report {
+		return
+	}
+	hub.CaptureException(err)
+}
+
+// sseWriteTimeout bounds a single SSE write. It is generous — a live reader never comes
+// close, and the deadline is refreshed per write, so a slow-but-alive client is never cut
+// off mid-analysis. Its job is only to put a ceiling on a write that would otherwise never
+// return, which is what strands the analysis goroutine.
+const sseWriteTimeout = 30 * time.Second
+
+// sseStream owns one SSE response body: it serializes the writes (the heartbeat goroutine
+// and the analysis callback both write, and bufio.Writer is not safe for concurrent use)
+// and bounds each of them.
+//
+// The bounding is the point. The handler clears the connection's write deadline so the
+// server's 10s WriteTimeout cannot kill a long analysis — but a cleared deadline is
+// forever, so a reader that stopped reading blocks Flush indefinitely while holding the
+// lock, stranding the analysis goroutine for the life of the process. A per-write
+// deadline, refreshed on every write, keeps the long stream alive without ever letting a
+// single write block without limit.
+type sseStream struct {
+	mu      sync.Mutex
+	w       *bufio.Writer
+	conn    net.Conn
+	timeout time.Duration
+}
+
+func newSSEStream(w *bufio.Writer, conn net.Conn, timeout time.Duration) *sseStream {
+	return &sseStream{w: w, conn: conn, timeout: timeout}
+}
+
+// event writes one named SSE event with a JSON data payload and flushes it.
+func (s *sseStream) event(name string, data any) {
 	blob, err := json.Marshal(data)
 	if err != nil {
 		return
 	}
-	if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, blob); err != nil {
-		return
-	}
-	_ = w.Flush()
+	s.write(fmt.Sprintf("event: %s\ndata: %s\n\n", name, blob))
 }
 
-// writeComment writes an SSE comment line — ignored by EventSource — as a heartbeat that
-// keeps the connection producing bytes through long, silent stages. A write error (client
-// gone) is swallowed, exactly like writeSSE.
-func writeComment(w *bufio.Writer, text string) {
-	if _, err := fmt.Fprintf(w, ": %s\n\n", text); err != nil {
+// comment writes an SSE comment line — ignored by EventSource — as a heartbeat that keeps
+// the connection producing bytes through long, silent stages.
+func (s *sseStream) comment(text string) {
+	s.write(fmt.Sprintf(": %s\n\n", text))
+}
+
+// write emits one frame under the lock, with a fresh deadline. A write error (the reader
+// is gone) is swallowed — the stream is best-effort — but the deadline is what guarantees
+// the call RETURNS, so a reader that stopped reading cannot pin this goroutine.
+func (s *sseStream) write(frame string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conn != nil {
+		_ = s.conn.SetWriteDeadline(time.Now().Add(s.timeout))
+	}
+	if _, err := s.w.WriteString(frame); err != nil {
 		return
 	}
-	_ = w.Flush()
+	_ = s.w.Flush()
 }

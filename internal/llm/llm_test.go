@@ -77,6 +77,40 @@ func TestGenerateJSONStream_AccumulatesContentAndStreamsThinking(t *testing.T) {
 	}
 }
 
+// truncatingModel models what the production gateway actually does when our own per-call
+// deadline fires mid-stream: it stops emitting and hands back whatever accumulated so far,
+// reporting success. Prod logged exactly this shape — `dur=3m0.018s err=<nil>` — and the
+// truncated JSON then surfaced downstream as "unexpected end of JSON input", which names
+// neither the deadline nor the stage that blew it.
+type truncatingModel struct{}
+
+func (truncatingModel) GenerateContent(ctx context.Context, _ []llms.MessageContent, _ ...llms.CallOption) (*llms.ContentResponse, error) {
+	<-ctx.Done()
+	return &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: `{"score"`}}}, nil
+}
+func (truncatingModel) Call(context.Context, string, ...llms.CallOption) (string, error) {
+	return "", nil
+}
+
+// A stream cut short by our own deadline is a failure, whatever the provider claims.
+// Trusting the nil error hands a truncated document to the caller, turning a timeout we
+// control into a parse error that looks like a bad model response.
+func TestGenerateJSONStream_DeadlineIsAFailureEvenWhenProviderReportsSuccess(t *testing.T) {
+	c := &Client{model: truncatingModel{}, timeout: 20 * time.Millisecond}
+
+	got, err := c.GenerateJSONStream(context.Background(), "s", "u", nil)
+
+	if err == nil {
+		t.Fatalf("GenerateJSONStream returned %q with a nil error, want a deadline failure", got)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error = %v, want one wrapping context.DeadlineExceeded", err)
+	}
+	if got != "" {
+		t.Errorf("content = %q, want empty when the call failed", got)
+	}
+}
+
 func TestGenerateJSONStream_NoReasoningIsFine(t *testing.T) {
 	m := &streamModel{content: []string{`{"ok":`, `true}`}} // no reasoning deltas
 	c := &Client{model: m, timeout: time.Second}

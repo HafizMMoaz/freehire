@@ -3,6 +3,7 @@ package matchanalysis
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -179,16 +180,17 @@ func (a *Analyzer) AnalyzeStream(ctx context.Context, in Input, emit func(Event)
 	return &analysis, nil
 }
 
-// stageAttempts is how many times a stage's LLM call is tried on a PARSE failure. The
-// gateway occasionally returns a transient HTML error page (a 502/504) that fails JSON
-// parsing; a single re-try recovers it, mirroring the enrichment worker. A transport
-// error (timeout, connection) is NOT retried — the model is slow, so a retry with the
-// same timeout would only double the wait — it is returned immediately.
+// stageAttempts is how many times a stage's LLM call is tried. Two failures earn a retry:
+// a PARSE failure (the gateway occasionally returns a transient HTML error page that fails
+// JSON parsing — a single re-try recovers it, mirroring the enrichment worker), and a
+// TIMEOUT (a stage that burns its whole budget is hung, not slow; prod showed the retry
+// answering in seconds). A connection error, or a caller who has gone away, is returned
+// immediately. Two attempts of matchAnalysisLLMTimeout bound the worst case per stage.
 const stageAttempts = 2
 
 // streamStage runs one streaming JSON call, forwarding reasoning deltas as thinking
-// events for the given stage, and unmarshals the accumulated JSON into out. A transport
-// failure returns at once; a parse failure (non-JSON gateway error page) is retried once.
+// events for the given stage, and unmarshals the accumulated JSON into out. A parse
+// failure and a timed-out stage are each retried once; anything else returns at once.
 func (a *Analyzer) streamStage(ctx context.Context, stage int, system, user string, emit func(Event), out any) error {
 	var parseErr error
 	for attempt := 1; attempt <= stageAttempts; attempt++ {
@@ -196,7 +198,16 @@ func (a *Analyzer) streamStage(ctx context.Context, stage int, system, user stri
 			emit(Event{Kind: EventThinking, Stage: stage, Thinking: t})
 		})
 		if err != nil {
-			return err // transport/timeout — retrying wouldn't help, fail fast
+			// A stage that burned its own per-call deadline is retried like a parse failure.
+			// Production showed such a call hung rather than slow — it ate the full budget
+			// while the very next attempt answered in seconds — so failing here throws away
+			// an analysis that was one retry away. A caller who went away is final: nobody
+			// is left to read a second answer, and it would only spend tokens.
+			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil && attempt < stageAttempts {
+				log.Printf("matchanalysis: stage %d timed out, retrying: %v", stage, err)
+				continue
+			}
+			return err // transport error, or a caller who is gone — retrying wouldn't help
 		}
 		if parseErr = json.Unmarshal([]byte(strings.TrimSpace(raw)), out); parseErr == nil {
 			return nil

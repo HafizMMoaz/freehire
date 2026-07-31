@@ -599,8 +599,18 @@ func mapAssistantError(err error) error {
 	return err
 }
 
+// writeComment writes an SSE comment line — ignored by EventSource — as a heartbeat that
+// keeps the connection producing bytes through long, silent stages. A write error (client
+// gone) is swallowed: the turn learns a connection is dead from writeEvent, not from here.
+func writeComment(w *bufio.Writer, text string) {
+	if _, err := fmt.Fprintf(w, ": %s\n\n", text); err != nil {
+		return
+	}
+	_ = w.Flush()
+}
+
 // writeEvent writes one named SSE event, reporting whether the write reached the
-// client. Unlike writeSSE it does not swallow the failure: a dead connection is
+// client. Unlike writeComment it does not swallow the failure: a dead connection is
 // how a streamed turn learns to stop.
 func writeEvent(w *bufio.Writer, event string, data any) bool {
 	blob, err := json.Marshal(data)

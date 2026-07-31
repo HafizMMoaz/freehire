@@ -8,13 +8,17 @@ package handler
 import (
 	"bufio"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/getsentry/sentry-go"
+	sentryfiber "github.com/getsentry/sentry-go/fiber"
 	"github.com/gofiber/fiber/v2"
+	"github.com/tmc/langchaingo/llms"
 
 	"github.com/strelov1/freehire/internal/auth"
 	"github.com/strelov1/freehire/internal/credits"
@@ -25,6 +29,17 @@ import (
 	"github.com/strelov1/freehire/internal/resumeextract"
 	"github.com/strelov1/freehire/internal/userprofile"
 )
+
+// failingFitModel stands in for an upstream that is down or times out mid-stage — the
+// shape of the production failure this test is about.
+type failingFitModel struct{}
+
+func (*failingFitModel) GenerateContent(context.Context, []llms.MessageContent, ...llms.CallOption) (*llms.ContentResponse, error) {
+	return nil, errors.New("upstream llm exploded")
+}
+func (*failingFitModel) Call(context.Context, string, ...llms.CallOption) (string, error) {
+	return "", nil
+}
 
 // sseEvents reads an SSE body and returns the ordered list of event names.
 func sseEvents(t *testing.T, body string) []string {
@@ -72,7 +87,9 @@ func TestMatchAnalysisStreamEndpoint(t *testing.T) {
 		return s
 	}
 
-	appFor := func(store *resume.Store, an *matchanalysis.Analyzer) *fiber.App {
+	// mws are mounted before the route so a test can install the sentryfiber middleware
+	// the server runs in production; the existing subtests pass none and are unaffected.
+	appFor := func(store *resume.Store, an *matchanalysis.Analyzer, mws ...fiber.Handler) *fiber.App {
 		h := &matchHandlers{
 			queries:     queries,
 			userProfile: userprofile.New(ownedProfile()),
@@ -80,6 +97,9 @@ func TestMatchAnalysisStreamEndpoint(t *testing.T) {
 			credits: credits.NewStore(queries, pool, credits.Config{MonthlyGrant: 20, CostMatch: 1, CostTailor: 3}),
 		}
 		app := fiber.New(fiber.Config{ErrorHandler: RenderError})
+		for _, mw := range mws {
+			app.Use(mw)
+		}
 		app.Get("/api/v1/jobs/:slug/fit/stream", auth.RequireAuth(iss, testVersions), h.StreamMatchAnalysis)
 		return app
 	}
@@ -135,6 +155,35 @@ func TestMatchAnalysisStreamEndpoint(t *testing.T) {
 		_ = pool.QueryRow(ctx, `SELECT count(*) FROM user_job_analysis WHERE user_id=$1 AND job_id=$2`, userID, jobID).Scan(&n)
 		if n != 1 {
 			t.Errorf("cache rows = %d, want 1 after stream", n)
+		}
+	})
+
+	// The regression this whole change exists for. The handler returns nil long before the
+	// chain runs, so a chain failure never reaches RenderError — the only place the API
+	// reports to Sentry. The reader sees `stream_error` and the access log records the 200
+	// the stream opened with, which is why the outage looked like an empty error inbox.
+	t.Run("a failed chain reaches Sentry", func(t *testing.T) {
+		tr := &recordingTransport{}
+		if err := sentry.Init(sentry.ClientOptions{
+			Dsn:       "https://public@o0.ingest.sentry.io/0",
+			Transport: tr,
+		}); err != nil {
+			t.Fatalf("sentry.Init: %v", err)
+		}
+		app := appFor(
+			storeWithCV(),
+			matchanalysis.NewAnalyzer(llm.NewWithModel(&failingFitModel{})),
+			sentryfiber.New(sentryfiber.Options{Repanic: true, WaitForDelivery: true}),
+		)
+		status, body := get(t, app, token)
+		if status != fiber.StatusOK {
+			t.Fatalf("status = %d, want 200 (the stream opens before it fails)", status)
+		}
+		if names := sseEvents(t, body); len(names) == 0 || names[len(names)-1] != "stream_error" {
+			t.Fatalf("last event = %v, want stream_error", names)
+		}
+		if got := tr.count(); got != 1 {
+			t.Errorf("sentry events = %d, want exactly 1 for a failed chain", got)
 		}
 	})
 

@@ -55,7 +55,13 @@ const (
 	// matchAnalysisLLMTimeout is the per-stage LLM timeout for the fit analysis: its reasoning
 	// model spends tens of seconds thinking before answering, so a stage needs more than
 	// the shared client's default.
-	matchAnalysisLLMTimeout = 180 * time.Second
+	//
+	// It is a budget for ONE attempt, not for the stage: matchanalysis retries a timed-out
+	// stage once, so the worst case per stage is twice this. 90s sits well past the observed
+	// spread (healthy stages answer in 3–25s) while leaving room for that retry — a call
+	// still running at 90s is hung rather than slow, and in production the retry after such
+	// a call answered in under eight seconds.
+	matchAnalysisLLMTimeout = 90 * time.Second
 	// resumeExtractLLMTimeout bounds the single structured-résumé extraction call. It runs
 	// off the upload response path (background) so it can be generous, but still bounded so
 	// a stalled gateway cannot leak a goroutine indefinitely.

@@ -277,6 +277,14 @@ func (c *Client) GenerateJSONStream(
 	})
 
 	resp, err := model.GenerateContent(ctx, messages, llms.WithJSONMode(), stream)
+	// A gateway that stops emitting when our own deadline fires can hand back whatever it
+	// accumulated and call it success — production logged exactly that as `dur=3m0.018s
+	// err=<nil>`, and the truncated JSON then failed downstream as "unexpected end of JSON
+	// input", naming neither the deadline nor the stage. Our context is the authority on
+	// whether the call had time to finish, so it overrules the provider's claim.
+	if err == nil && ctx.Err() != nil {
+		err = ctx.Err()
+	}
 	// The fit model is slow (tens of seconds per call); log the duration so per-stage
 	// cost stays observable without a tracer.
 	log.Printf("llm: stream model=%s dur=%s err=%v", c.modelID, time.Since(start).Round(time.Millisecond), err)

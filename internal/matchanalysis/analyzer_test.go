@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tmc/langchaingo/llms"
 
@@ -29,6 +30,66 @@ func (m *queuedModel) GenerateContent(context.Context, []llms.MessageContent, ..
 	return &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: r}}}, nil
 }
 func (*queuedModel) Call(context.Context, string, ...llms.CallOption) (string, error) { return "", nil }
+
+// hangsThenSucceedsModel burns the first call's entire deadline and then returns the
+// partial text a gateway hands back when it stops emitting — with a nil error, exactly as
+// production logged it. The second call answers normally. This is the 19:25 shape: a stage
+// that ate its whole budget while the retry finished in under eight seconds.
+type hangsThenSucceedsModel struct{ calls int }
+
+func (m *hangsThenSucceedsModel) GenerateContent(ctx context.Context, _ []llms.MessageContent, _ ...llms.CallOption) (*llms.ContentResponse, error) {
+	m.calls++
+	if m.calls == 1 {
+		<-ctx.Done()
+		return &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: `{"requi`}}}, nil
+	}
+	return &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: `{"ok":true}`}}}, nil
+}
+func (*hangsThenSucceedsModel) Call(context.Context, string, ...llms.CallOption) (string, error) {
+	return "", nil
+}
+
+// A hung stage is not a slow one: prod showed a call burn its full deadline while the very
+// next attempt answered in seconds. Failing the whole analysis there throws away an answer
+// that was one retry away, so a timed-out stage is retried like a parse failure.
+func TestStreamStage_RetriesATimedOutStage(t *testing.T) {
+	m := &hangsThenSucceedsModel{}
+	a := &Analyzer{client: llm.NewWithModel(m).WithTimeout(20 * time.Millisecond)}
+
+	var out struct {
+		OK bool `json:"ok"`
+	}
+	err := a.streamStage(context.Background(), 1, "sys", "usr", func(Event) {}, &out)
+
+	if err != nil {
+		t.Fatalf("streamStage: %v, want the retry to succeed", err)
+	}
+	if m.calls != 2 {
+		t.Errorf("model calls = %d, want 2 (the timed-out stage retried once)", m.calls)
+	}
+	if !out.OK {
+		t.Error("out was not populated from the retry's response")
+	}
+}
+
+// A retry is only worth spending when there is still someone to answer. When the caller's
+// own context is already dead, a second call would burn tokens on a reply nobody reads.
+func TestStreamStage_DoesNotRetryWhenTheCallerIsGone(t *testing.T) {
+	m := &hangsThenSucceedsModel{}
+	a := &Analyzer{client: llm.NewWithModel(m).WithTimeout(time.Second)}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	var out struct{}
+	err := a.streamStage(ctx, 1, "sys", "usr", func(Event) {}, &out)
+
+	if err == nil {
+		t.Fatal("streamStage returned nil, want the cancellation")
+	}
+	if m.calls != 1 {
+		t.Errorf("model calls = %d, want 1 (no retry once the caller is gone)", m.calls)
+	}
+}
 
 func sampleInput() Input {
 	return Input{
