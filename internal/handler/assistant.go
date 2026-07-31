@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/getsentry/sentry-go"
+	sentryfiber "github.com/getsentry/sentry-go/fiber"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -387,20 +389,30 @@ func (h *assistantHandlers) streamTurn(c *fiber.Ctx, sess assistant.Session, pro
 	c.Set(fiber.HeaderConnection, "keep-alive")
 	c.Set("X-Accel-Buffering", "no") // stop nginx buffering so events reach the browser promptly
 
-	// The server's write timeout would kill this long-lived stream mid-turn, so the
-	// deadline is cleared for the SSE response only (captured while the request ctx
+	// The server's write timeout would kill this long-lived stream mid-turn, so the SSE
+	// response carries its own, bounded deadline instead (captured while the request ctx
 	// is valid; used inside the writer, which runs after this handler returns).
 	conn := c.Context().Conn()
 
+	// Same reason as conn: the sentryfiber hub is request-scoped and the ctx is released
+	// once this handler returns, so take a clone now — the writer outlives the request
+	// that owns its scope.
+	var hub *sentry.Hub
+	if reqHub := sentryfiber.GetHubFromContext(c); reqHub != nil {
+		hub = reqHub.Clone()
+	}
+
 	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
-		// Clear the connection's write deadline before EVERY write, not once up
-		// front: fasthttp runs this stream writer on its own goroutine while the
-		// serving goroutine arms the server's WriteTimeout, so a single clear races
-		// with it and loses about half the time — the turn then dies at exactly ten
-		// seconds, mid-answer, for no reason the user can see.
+		// Set the write deadline before EVERY write, not once up front: fasthttp runs
+		// this stream writer on its own goroutine while the serving goroutine arms the
+		// server's WriteTimeout, so a single set races with it and loses about half the
+		// time — the turn then dies at exactly ten seconds, mid-answer, for no reason the
+		// user can see. It is a bounded deadline rather than a cleared one because a
+		// cleared deadline is forever: a reader that stopped reading would block the
+		// write, and with it this goroutine, for the life of the process.
 		write := func(event string, data any) bool {
 			if conn != nil {
-				_ = conn.SetWriteDeadline(time.Time{})
+				_ = conn.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
 			}
 			return writeEvent(w, event, data)
 		}
@@ -427,7 +439,7 @@ func (h *assistantHandlers) streamTurn(c *fiber.Ctx, sess assistant.Session, pro
 				case <-t.C:
 					mu.Lock()
 					if conn != nil {
-						_ = conn.SetWriteDeadline(time.Time{})
+						_ = conn.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
 					}
 					writeComment(w, "keepalive")
 					mu.Unlock()
@@ -447,8 +459,12 @@ func (h *assistantHandlers) streamTurn(c *fiber.Ctx, sess assistant.Session, pro
 		close(stop)
 		heartbeat.Wait()
 		if err != nil {
-			// The loop has already emitted its terminal error event; this is for us.
+			// The loop has already emitted its terminal error event; this is for us —
+			// and for Sentry, which would otherwise never learn of it: this handler
+			// returned nil long before the turn ran, so RenderError never sees the
+			// failure and the access log keeps the 200 the stream opened with.
 			log.Printf("assistant: turn failed session=%s: %v", sess.ID, err)
+			reportStreamFault(hub, err)
 		}
 	}))
 	return nil
