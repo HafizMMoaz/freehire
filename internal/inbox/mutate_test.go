@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/strelov1/freehire/internal/appevent"
 	"github.com/strelov1/freehire/internal/db"
 	"github.com/strelov1/freehire/internal/mailclassify"
 )
@@ -143,7 +144,7 @@ func TestRecordApplicationRefusesMailWithAPendingSuggestion(t *testing.T) {
 func TestRecordApplicationIsDatedByTheMail(t *testing.T) {
 	wrote := time.Date(2026, 3, 4, 9, 0, 0, 0, time.UTC)
 	q := &fakeQueries{
-		email: db.GetEmailRow{ID: 812, ReceivedAt: pgtype.Timestamptz{Time: wrote, Valid: true}},
+		email: db.GetEmailRow{ID: 812, Source: "hosted", ReceivedAt: pgtype.Timestamptz{Time: wrote, Valid: true}},
 		job:   db.Job{ID: 42},
 	}
 	apps := &fakeApps{}
@@ -153,6 +154,28 @@ func TestRecordApplicationIsDatedByTheMail(t *testing.T) {
 	}
 	if !apps.at.Equal(wrote) {
 		t.Errorf("application dated %v, want the message's %v", apps.at, wrote)
+	}
+	if apps.source != appevent.SourceMailHosted {
+		t.Errorf("recorded with provenance %q, want %q — an application reconstructed from mail was observed by the mail, not by whoever clicked", apps.source, appevent.SourceMailHosted)
+	}
+}
+
+// The provenance lookup is strict: an unrecognised store must not default to a
+// mail source, because every default here is one the timings trust. The store
+// vocabulary is pinned to appevent by TestEveryInboxMailSourceHasAnEventSource,
+// so this can only fire for a genuinely unknown value.
+func TestRecordApplicationRefusesAnUnknownMailStore(t *testing.T) {
+	q := &fakeQueries{
+		email: db.GetEmailRow{ID: 812, Source: "imap", ReceivedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true}},
+		job:   db.Job{ID: 42},
+	}
+	apps := &fakeApps{}
+
+	if _, err := New(q, apps).RecordApplication(context.Background(), 7, 812, "go-dev-acme"); err == nil {
+		t.Fatal("RecordApplication accepted an unknown mail store")
+	}
+	if apps.calls != 0 {
+		t.Error("an application was recorded despite the unresolvable provenance")
 	}
 }
 
@@ -213,12 +236,50 @@ func contains(list []string, want string) bool {
 }
 
 type fakeApps struct {
-	calls int
-	at    time.Time
+	calls  int
+	at     time.Time
+	source string
 }
 
-func (f *fakeApps) MarkAppliedAt(_ context.Context, _ int64, _ string, at time.Time) error {
+func (f *fakeApps) MarkAppliedAt(_ context.Context, _ int64, _ string, at time.Time, source string) error {
 	f.calls++
 	f.at = at
+	f.source = source
 	return nil
+}
+
+// Every link mutation funnels through mutate, and every one of them must end with a
+// ledger reconcile — that is the whole reason the rule lives in one place instead of
+// four. A sixth mutation added later without it would silently stop recording replies,
+// and nothing else would notice.
+func TestEveryLinkMutationReconcilesTheLedger(t *testing.T) {
+	ctx := context.Background()
+	for name, call := range map[string]func(*Service) error{
+		"link":    func(s *Service) error { _, err := s.Link(ctx, 7, 812, "go-dev-acme"); return err },
+		"unlink":  func(s *Service) error { _, err := s.Unlink(ctx, 7, 812); return err },
+		"confirm": func(s *Service) error { _, err := s.ResolveSuggestion(ctx, 7, 812, true); return err },
+		"reject":  func(s *Service) error { _, err := s.ResolveSuggestion(ctx, 7, 812, false); return err },
+		"triage": func(s *Service) error {
+			_, err := s.Triage(ctx, 7, 812, Verdict{Signal: "rejection", Slug: "go-dev-acme"})
+			return err
+		},
+	} {
+		q := &fakeQueries{
+			email: db.GetEmailRow{ID: 812, Source: "gmail"},
+			job:   db.Job{ID: 42},
+		}
+		if err := call(New(q, nil)); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(q.synced) != 1 {
+			t.Errorf("%s reconciled the ledger %d times, want exactly 1", name, len(q.synced))
+			continue
+		}
+		if q.synced[0].EventSource != appevent.SourceMailGmail {
+			t.Errorf("%s reconciled with source %q, want %q", name, q.synced[0].EventSource, appevent.SourceMailGmail)
+		}
+		if q.recordedBeforeRetract {
+			t.Errorf("%s recorded the event before retracting the superseded one; a re-link would then conflict with the row it was replacing and change nothing", name)
+		}
+	}
 }

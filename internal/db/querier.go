@@ -51,6 +51,25 @@ type Querier interface {
 	// means the key is unknown, revoked, or expired; the caller treats pgx.ErrNoRows as 401
 	// and an insufficient scope as 403.
 	AuthenticateAPIKey(ctx context.Context, tokenHash string) (AuthenticateAPIKeyRow, error)
+	// Replay one keyset batch of recorded applications. Keyed by job_id because user_jobs has
+	// no surrogate key; the pass walks (user_id, job_id) pairs in job order per user.
+	//
+	// Only applications carry a date. A row that was staged but never marked applied has
+	// nothing to replay, and the ledger says nothing about it rather than inventing a day.
+	// The cursor is the LAST ROW of the batch's own order, not max() of each column
+	// independently: the greatest user_id and the greatest job_id can belong to different
+	// rows, and a cursor assembled from both would jump past rows that were never scanned.
+	BackfillAppliedEvents(ctx context.Context, arg BackfillAppliedEventsParams) (BackfillAppliedEventsRow, error)
+	// Replay one keyset batch of already-linked mail into the ledger.
+	//
+	// Deleted mail is included deliberately. Deletion hides content; it does not un-happen the
+	// reply, and excluding it here would bake the very inbox-hygiene dependence this ledger
+	// exists to remove into its starting contents.
+	//
+	// The three appevent source names arrive as parameters rather than being written here, so
+	// the vocabulary stays in Go where a pin test guards it. Mail from an unrecognised store
+	// is skipped rather than defaulted: an unknown provenance must not read as observed.
+	BackfillEmployerReplyEvents(ctx context.Context, arg BackfillEmployerReplyEventsParams) (BackfillEmployerReplyEventsRow, error)
 	// Find the ashby board already carrying a job with this Ashby job id — for company careers
 	// pages that embed Ashby via the ashby_jid widget param (the board slug is JS-rendered, absent
 	// from the URL/markup). external_id is "<board>:<uuid>"; served by the
@@ -981,6 +1000,9 @@ type Querier interface {
 	// Requires jobs_source_id_open_idx (migration 0056); without it this is the same scan
 	// restricted to one source.
 	ListAggregatorJobsForCrosscheckBySource(ctx context.Context, arg ListAggregatorJobsForCrosscheckBySourceParams) ([]ListAggregatorJobsForCrosscheckBySourceRow, error)
+	// Every non-retracted event recorded against one application, oldest first. The follow-up
+	// history a single overwritten column used to destroy is readable here.
+	ListApplicationEventsForUserJob(ctx context.Context, arg ListApplicationEventsForUserJobParams) ([]ApplicationEvent, error)
 	// The notify fan-out targets: every approved referrer of a company with their email and
 	// linked Telegram chat (NULL when unlinked). Email is always present; chat_id drives the
 	// optional Telegram ping.
@@ -1421,6 +1443,13 @@ type Querier interface {
 	// application's date, whereas an ordinary re-apply refreshes it as it always
 	// has. Both paths share this one statement so the applied_count transition rule
 	// below cannot fork.
+	// The `applied` ledger event is written by the same statement, under the same
+	// predicate as the counter bump, for the same reason: two records of one
+	// transition, decided separately, would eventually disagree. `event_source` is
+	// the appevent source of the recording (user, assistant, or a mail source when
+	// the application is reconstructed from employer mail); occurred_at is taken
+	// from the row's own applied_at, so a dated recording carries the mail's date
+	// into the ledger rather than now().
 	MarkJobApplied(ctx context.Context, arg MarkJobAppliedParams) (MarkJobAppliedRow, error)
 	// Point one row at its canon. The import path only: the batch passes recompute whole companies
 	// (RecomputeRoleDuplicatesForCompany, SuppressAggregatorDuplicatesForCompany) and must keep
@@ -1546,9 +1575,22 @@ type Querier interface {
 	// report our own blind spot as the employer's silence, which is the same mistake the
 	// job-level signal's mailbox gate exists to prevent.
 	//
-	// "Answered" is any non-deleted mail linked to that application. Not a stage advance:
-	// a stage is what the candidate recorded, and a company that replied to somebody who
-	// never updated their board still replied.
+	// Both sides come from application_events, not from live mail. Reading the emails table
+	// made the served rate a function of the candidate's inbox hygiene: it counted messages
+	// WHERE deleted_at IS NULL, so someone clearing old mail made an employer that had
+	// answered them look silent, on a public page, about a named company. The ledger records
+	// that the reply arrived; what later became of the message is not the employer's doing.
+	//
+	// "Answered" is any live employer_reply event. Not a stage advance: a stage is what the
+	// candidate recorded, and a company that replied to somebody who never updated their
+	// board still replied. A retracted event does not count — it belongs to another employer.
+	//
+	// The median covers answered applications only and is therefore right-censored; the
+	// serving layer reports the unanswered count beside it so the number is never read as
+	// "employers reply in six days" when most of the sample was never replied to. Replies
+	// dated before their application (an application reconstructed from a later message, or
+	// clock skew) still count as answered but are kept out of the median, where they would
+	// contribute a negative duration.
 	RebuildInsightsCompanyResponse(ctx context.Context) (int64, error)
 	// Per-(company, day) hiring velocity with a running open count, from the retained
 	// jobs lifecycle. Each canonical, attributable job (company_slug <> '' AND
@@ -1603,6 +1645,19 @@ type Querier interface {
 	// aggregation a range scan. The IS DISTINCT FROM guard makes re-runs cheap and
 	// idempotent, and a closed canon fails over to the next min(id) on the next run.
 	RecomputeRoleDuplicatesForCompany(ctx context.Context, company string) (int64, error)
+	// Append one application event.
+	//
+	// Idempotent for mail-derived events by constraint rather than by coordination: the
+	// partial unique index on (user_id, kind, source_ref) makes emission and backfill the
+	// same operation, so cmd/classify-mail and cmd/backfill-application-events can meet on
+	// the same email in any order and produce one row. Manual events pass source_ref NULL
+	// and fall outside the index — two consecutive follow-ups are two facts, not a
+	// duplicate.
+	//
+	// occurred_at is the caller's to supply and is never now() for mail: it is the message's
+	// own received_at, so importing a year of ATS mail on the day a mailbox is connected
+	// does not report a year of replies arriving that day.
+	RecordApplicationEvent(ctx context.Context, arg RecordApplicationEventParams) error
 	// Record that the candidate chased a silent application. Owner-scoped: a foreign or untracked job
 	// matches no row, so the handler 404s and nothing is written. Idempotent by design — a double click
 	// just overwrites the timestamp with a later one rather than erroring.
@@ -1610,6 +1665,12 @@ type Querier interface {
 	// Only an application can be chased: a job merely viewed or saved has nobody to chase, which is why
 	// applied_at must be set. This is NOT fed into the last-activity derivation above; see the column
 	// comment in 0059 for why a chase must not clear the silence it was a response to.
+	// The ledger records one `follow_up_sent` event per chase, which is what the single
+	// column above cannot do: it holds the latest chase only, so the first is erased by the
+	// second even though a second chase is the candidate's deliberate decision.
+	// The column's own idempotence is the reason for the hour: a double submit arrives
+	// seconds apart, a genuine second chase days apart, so any threshold between them is
+	// safe. An hour is the smallest that sits comfortably above a retry.
 	RecordApplicationFollowUp(ctx context.Context, arg RecordApplicationFollowUpParams) (pgtype.Timestamptz, error)
 	// Count a failed crawl: bump consecutive_failures, record the error, stamp the run,
 	// and RETURN the new failure count so the caller can compute the cooldown (the backoff
@@ -1618,6 +1679,24 @@ type Querier interface {
 	// A successful crawl clears the failure state and stamps freshness. Upsert so a
 	// first-ever crawl creates the row.
 	RecordBoardSuccess(ctx context.Context, arg RecordBoardSuccessParams) error
+	// Step 2: record the event when the message is LINKED and no live event exists for it.
+	// Run RetractSupersededEmailEvent first.
+	//
+	// Linked, not linked-and-classified. Requiring a classification reads as the stricter,
+	// safer rule and is the opposite: `external` mail — the tier a caller's own harness
+	// pushes — is never classified server-side by design, so those users' replies would
+	// never count and their employers would look more silent than they were. That is the
+	// distortion this ledger exists to remove. The signal is detail about the reply, not
+	// evidence that one arrived; an unclassified reply records an empty signal.
+	//
+	// The message's own received_at is the date. now() would compress a year of imported
+	// history into the day a mailbox was connected.
+	//
+	// Idempotent by the partial unique index, so the classification worker, the manual link
+	// paths and the backfill can all call it in any order and produce one row.
+	// `event_source` is derived from the message's store by the caller, keeping that
+	// vocabulary in Go where a pin test guards it.
+	RecordEmailApplicationEvent(ctx context.Context, arg RecordEmailApplicationEventParams) error
 	// Count a failed attempt: bump attempts, record the error, and dead-letter (set
 	// failed_at) once attempts reach the max. The lease (claimed_at) is intentionally
 	// left in place — its expiry gates the retry to a later run and doubles as the
@@ -1781,9 +1860,34 @@ type Querier interface {
 	// Undo a soft-delete, scoped to the caller and idempotent. Returns 0 rows only
 	// when it is not the caller's message (→ 404).
 	RestoreEmail(ctx context.Context, arg RestoreEmailParams) (int64, error)
+	// Retract the events a source record produced, because the fact turned out to belong to
+	// a different employer.
+	//
+	// Only a link correction calls this. Deleting the message must NOT: the two actions look
+	// alike and mean opposite things — deletion says the candidate does not want to see the
+	// message, re-linking says the fact belongs elsewhere. A wrong link left standing poisons
+	// a named company's public response rate permanently.
+	//
+	// The row survives, stamped rather than deleted: an event recorded in error is itself a
+	// fact, and this table is append-only. Already-retracted rows are skipped so a repeated
+	// correction cannot move the stamp forward.
+	RetractApplicationEventsBySourceRef(ctx context.Context, arg RetractApplicationEventsBySourceRefParams) (int64, error)
 	// Withdraw a live claim. Scoped to a non-retracted row so a second retraction affects
 	// nothing and surfaces as not-found, rather than silently re-stamping the date.
 	RetractGhostReport(ctx context.Context, arg RetractGhostReportParams) (GhostReport, error)
+	// Step 1 of reconciling one email with the ledger: retract the live event when the
+	// message is no longer linked, or is now linked to a different application.
+	//
+	// Deleting or hiding the message is NOT one of those conditions and is deliberately not
+	// consulted: deletion says the reader does not want to see it, re-linking says the fact
+	// belongs to another employer. Only the second is a claim about who replied.
+	//
+	// This is a separate statement from RecordEmailApplicationEvent, and must run first.
+	// Folding both into one statement with data-modifying CTEs looks tidier and is wrong:
+	// CTEs all read the same pre-statement snapshot, so the insert's ON CONFLICT would still
+	// see the row this retracts as live, conflict with it, and silently record nothing — the
+	// correction would appear to succeed while leaving the wrong company credited.
+	RetractSupersededEmailEvent(ctx context.Context, arg RetractSupersededEmailEventParams) (int64, error)
 	// Whether the caller already received a reward for this ref (e.g. an accepted contribution).
 	// True means the reward was already granted and must not be granted again (idempotency).
 	RewardExists(ctx context.Context, arg RewardExistsParams) (bool, error)
@@ -1974,7 +2078,13 @@ type Querier interface {
 	// (user, job) row (viewed_at defaults). Partial update: a NULL param leaves that
 	// column unchanged (COALESCE keeps the existing value), so the caller can set the
 	// stage, the notes, or both in one call. Returns the row.
-	TrackJob(ctx context.Context, arg TrackJobParams) (UserJob, error)
+	// A `stage_set` ledger event is written when — and only when — the stage actually
+	// moves. `prior` reads the pre-upsert value, so re-setting the stage the row
+	// already carries, or a notes-only call, records nothing: the ledger holds
+	// transitions, and a row per no-op would make "how long did this stage last"
+	// unanswerable. The event carries no trusted date (source is the caller, not the
+	// employer), which is why nothing times it yet — see internal/appevent.
+	TrackJob(ctx context.Context, arg TrackJobParams) (TrackJobRow, error)
 	// Keep only the newest $2 revisions of a CV. A revision log is an aid to the candidate's
 	// current work, not an archive, and each row carries two operation documents on the table
 	// behind every CV page.

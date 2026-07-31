@@ -28,6 +28,13 @@ RETURNING *;
 -- application's date, whereas an ordinary re-apply refreshes it as it always
 -- has. Both paths share this one statement so the applied_count transition rule
 -- below cannot fork.
+-- The `applied` ledger event is written by the same statement, under the same
+-- predicate as the counter bump, for the same reason: two records of one
+-- transition, decided separately, would eventually disagree. `event_source` is
+-- the appevent source of the recording (user, assistant, or a mail source when
+-- the application is reconstructed from employer mail); occurred_at is taken
+-- from the row's own applied_at, so a dated recording carries the mail's date
+-- into the ledger rather than now().
 WITH prior AS (
     SELECT uj.applied_at FROM user_jobs uj WHERE uj.user_id = $1 AND uj.job_id = $2
 ), upsert AS (
@@ -44,6 +51,11 @@ WITH prior AS (
 ), bump AS (
     UPDATE jobs SET applied_count = applied_count + 1
     WHERE id = $2 AND NOT EXISTS (SELECT 1 FROM prior WHERE prior.applied_at IS NOT NULL)
+), event AS (
+    INSERT INTO application_events (user_id, job_id, company_slug, kind, occurred_at, source)
+    SELECT $1, $2, j.company_slug, 'applied', u.applied_at, sqlc.arg(event_source)::text
+      FROM upsert u JOIN jobs j ON j.id = $2
+     WHERE NOT EXISTS (SELECT 1 FROM prior WHERE prior.applied_at IS NOT NULL)
 )
 SELECT * FROM upsert;
 
@@ -102,12 +114,29 @@ LIMIT $2;
 -- (user, job) row (viewed_at defaults). Partial update: a NULL param leaves that
 -- column unchanged (COALESCE keeps the existing value), so the caller can set the
 -- stage, the notes, or both in one call. Returns the row.
-INSERT INTO user_jobs (user_id, job_id, stage, notes)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (user_id, job_id) DO UPDATE
-  SET stage = COALESCE(EXCLUDED.stage, user_jobs.stage),
-      notes = COALESCE(EXCLUDED.notes, user_jobs.notes)
-RETURNING *;
+-- A `stage_set` ledger event is written when — and only when — the stage actually
+-- moves. `prior` reads the pre-upsert value, so re-setting the stage the row
+-- already carries, or a notes-only call, records nothing: the ledger holds
+-- transitions, and a row per no-op would make "how long did this stage last"
+-- unanswerable. The event carries no trusted date (source is the caller, not the
+-- employer), which is why nothing times it yet — see internal/appevent.
+WITH prior AS (
+    SELECT uj.stage FROM user_jobs uj WHERE uj.user_id = $1 AND uj.job_id = $2
+), upsert AS (
+    INSERT INTO user_jobs (user_id, job_id, stage, notes)
+    VALUES ($1, $2, $3, $4)
+    ON CONFLICT (user_id, job_id) DO UPDATE
+      SET stage = COALESCE(EXCLUDED.stage, user_jobs.stage),
+          notes = COALESCE(EXCLUDED.notes, user_jobs.notes)
+    RETURNING *
+), event AS (
+    INSERT INTO application_events (user_id, job_id, company_slug, kind, signal, occurred_at, source)
+    SELECT $1, $2, j.company_slug, 'stage_set', u.stage, now(), sqlc.arg(event_source)::text
+      FROM upsert u JOIN jobs j ON j.id = $2
+     WHERE u.stage IS NOT NULL
+       AND u.stage IS DISTINCT FROM (SELECT prior.stage FROM prior)
+)
+SELECT * FROM upsert;
 
 -- name: ClearJobProgress :one
 -- Reset a tracked job to the wishlist: drop stage and applied state, keep saved/viewed/notes.
@@ -321,7 +350,28 @@ GROUP BY stage;
 -- Only an application can be chased: a job merely viewed or saved has nobody to chase, which is why
 -- applied_at must be set. This is NOT fed into the last-activity derivation above; see the column
 -- comment in 0059 for why a chase must not clear the silence it was a response to.
-UPDATE user_jobs
-SET followed_up_at = now()
-WHERE user_id = $1 AND job_id = $2 AND applied_at IS NOT NULL
-RETURNING followed_up_at;
+-- The ledger records one `follow_up_sent` event per chase, which is what the single
+-- column above cannot do: it holds the latest chase only, so the first is erased by the
+-- second even though a second chase is the candidate's deliberate decision.
+-- The column's own idempotence is the reason for the hour: a double submit arrives
+-- seconds apart, a genuine second chase days apart, so any threshold between them is
+-- safe. An hour is the smallest that sits comfortably above a retry.
+WITH prior AS (
+    SELECT uj.followed_up_at FROM user_jobs uj
+     WHERE uj.user_id = $1 AND uj.job_id = $2 AND uj.applied_at IS NOT NULL
+), upd AS (
+    UPDATE user_jobs
+    SET followed_up_at = now()
+    WHERE user_id = $1 AND job_id = $2 AND applied_at IS NOT NULL
+    RETURNING followed_up_at
+), event AS (
+    INSERT INTO application_events (user_id, job_id, company_slug, kind, occurred_at, source)
+    SELECT $1, $2, j.company_slug, 'follow_up_sent', u.followed_up_at, sqlc.arg(event_source)::text
+      FROM upd u JOIN jobs j ON j.id = $2
+     WHERE NOT EXISTS (
+         SELECT 1 FROM prior
+          WHERE prior.followed_up_at IS NOT NULL
+            AND prior.followed_up_at > now() - interval '1 hour'
+     )
+)
+SELECT followed_up_at FROM upd;
