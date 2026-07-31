@@ -70,6 +70,11 @@ func newAssistantHandlers(queries *db.Queries, model *llm.Client, maxSteps int,
 		browserTools: browserTools,
 		mail:         mail,
 	}
+	// The editor refuses an agent's unevidenced claim, and the bank is what answers that
+	// question — it is wired here because this is where the bank comes into existence.
+	if cvH != nil && cvH.editor != nil {
+		cvH.editor.WithEvidenceGate(bankGate{bank: h.experience})
+	}
 	if model != nil {
 		h.runner = assistant.NewRunner(model, h.store, assistant.RunnerConfig{MaxSteps: maxSteps})
 	}
@@ -281,7 +286,10 @@ func (h *assistantHandlers) PostAssistantMessage(c *fiber.Ctx) error {
 // body: an unattended run's brief and its raised ceiling are ours to choose, and a ceiling
 // a client can set is not a bound.
 func (h *assistantHandlers) streamTurn(c *fiber.Ctx, sess assistant.Session, prompt string, turn assistant.TurnConfig) error {
-	registry := h.registry(sess)
+	// One batch per turn. Every CV edit the agent makes in this turn is filed under it, so
+	// the history can group them and "undo the run" is undoing a batch — which is what
+	// retires the single pre-run snapshot and the edge two concurrent runs used to create.
+	registry := h.registry(sess, uuid.New())
 	system := assistant.SystemPrompt(sess.Preset)
 
 	c.Set(fiber.HeaderContentType, "text/event-stream")
@@ -388,11 +396,6 @@ func (h *assistantHandlers) PostAssistantAutopilot(c *fiber.Ctx) error {
 	// cv_context, no cv_edit and no way to report.
 	if sess.Preset != assistant.PresetTailor || sess.CVID == nil || sess.JobID == nil {
 		return fiber.NewError(fiber.StatusConflict, "this conversation is not tailoring a CV")
-	}
-	// The owner comes from the session the ownership check just resolved, not from the
-	// request a second time: two readings of who is calling are one too many.
-	if err := h.cv.cvStore.SnapshotForAutopilot(c.Context(), *sess.CVID, sess.UserID); err != nil {
-		return mapCVError(err)
 	}
 	h.layDownRunPlan(c.Context(), sess)
 	return h.streamTurn(c, sess, autopilotBrief, assistant.TurnConfig{MaxSteps: autopilotMaxSteps})

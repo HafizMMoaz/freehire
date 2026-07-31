@@ -32,7 +32,7 @@
     type CvFont,
     type CvJobMatch,
   } from '$lib/cv';
-  import type { Analysis, AutopilotEntry, Document } from '$lib/generated/contracts';
+  import type { Analysis, AutopilotEntry, Document, RevisionView } from '$lib/generated/contracts';
   import type { Job } from '$lib/types';
 
   const slug = $derived(page.params.slug ?? '');
@@ -66,7 +66,6 @@
   // the Editor tab holds in memory and saves on a debounce, so both writing at once loses one
   // side's work silently.
   let autopilotReport = $state<AutopilotEntry[] | undefined>(undefined);
-  let autopilotRevertable = $state(false);
   // What tailoring did to the CV's ATS readiness, refreshed at the two moments the document
   // has just changed most: the workspace opening, and an agent turn finishing. Null until the
   // first read, and after any failure — the panel renders it as an absence either way, so a
@@ -79,7 +78,6 @@
   let runActive = $state(false);
   // Any turn, not just a run: "Run again" would silently do nothing while one is in flight.
   let turnActive = $state(false);
-  let undoing = $state(false);
   // The chat owns starting a turn; "Run again" beside the report reaches it through here.
   let chatRef = $state<AssistantChat>();
 
@@ -167,7 +165,6 @@
     templateId = rec.template_id;
     doc = toEditable(rec.document);
     autopilotReport = rec.autopilot_report;
-    autopilotRevertable = rec.autopilot_revertable;
     lastSnapshot = snapshot();
     cvLoaded = true;
   }
@@ -240,9 +237,10 @@
       }
       status = 'ready';
       // Not awaited: the workspace is usable before the comparison lands, and the comparison
-      // costs two renders.
+      // costs two renders. The history is the same kind of accessory read.
       void refreshAtsDelta();
       void refreshJobMatch();
+      void loadRevisions();
       // Not awaited either: an empty list only means the font picker has nothing to offer yet,
       // and the preview falls back to the template's own face meanwhile.
       void api.listCvFonts().then((f) => (fonts = f)).catch(() => {});
@@ -261,6 +259,56 @@
     }
   });
 
+  // ---- Revision history ----
+  // The feed is loaded beside the CV and refreshed after anything that writes: a save, an
+  // agent turn, an undo. `pinnedRevision` is what the preview underlines; it lives here rather
+  // than in the panel because the highlight belongs to the document, not to the tab.
+  let revisions = $state<RevisionView[]>([]);
+  let pinnedRevision = $state<RevisionView | null>(null);
+
+  async function loadRevisions(highlightNewestRun = false) {
+    if (!cvId) return;
+    try {
+      revisions = await api.listCvRevisions(cvId);
+      // After a run, what it changed is underlined without being asked: the candidate's first
+      // question is "what did it do to my CV", and the answer is on the page.
+      if (highlightNewestRun) {
+        pinnedRevision = revisions.find((r) => r.actor === 'agent' && !r.reverted) ?? pinnedRevision;
+      }
+    } catch {
+      // The history is an accessory read: a workspace that cannot list it still edits.
+      revisions = [];
+    }
+  }
+
+  // Undoing goes through undoRun's ordering for the reason it was written: the document is
+  // saved on a debounce, so undoing without flushing the pending save first lets the timer
+  // write the old text straight back a second later — the undo appears to work and then
+  // silently reverses itself. The re-read comes last, and only on success.
+  async function undoRevision(revision: RevisionView) {
+    await undoRun({
+      flush: flushPendingSave,
+      undo: () => api.undoCvRevision(cvId, revision.id).then(() => undefined),
+      refetch: afterUndo,
+    });
+  }
+
+  async function undoRevisionRun(batchId: string) {
+    await undoRun({
+      flush: flushPendingSave,
+      undo: () => api.undoCvRevisionRun(cvId, batchId).then(() => undefined),
+      refetch: afterUndo,
+    });
+  }
+
+  async function afterUndo() {
+    await loadCv();
+    pdfVersion += 1;
+    void loadRevisions();
+    void refreshAtsDelta();
+    void refreshJobMatch();
+  }
+
   // ---- Autosave (folded in from the old standalone CvEditor) ----
   // A JSON snapshot of the last-persisted state; the effect compares against it to detect real
   // edits (and skip the initial load), and persist() advances it on success.
@@ -275,6 +323,7 @@
       lastSnapshot = snap;
       saveState = 'saved';
       pdfVersion += 1;
+      void loadRevisions();
       // Chained off the SAVE, not off the effect that schedules it: read any earlier and the
       // score would describe the document as it was before this edit landed.
       void refreshJobMatch();
@@ -311,6 +360,7 @@
     try {
       await loadCv();
       pdfVersion += 1;
+      void loadRevisions(true);
       void refreshAtsDelta();
       void refreshJobMatch();
     } catch {
@@ -325,32 +375,6 @@
     clearTimeout(saveTimer);
     saveTimer = null;
     if (snapshot() !== lastSnapshot) await persist();
-  }
-
-  // Undo a whole run. The ordering (flush → undo → re-read) is the unit-tested undoRun; doing
-  // it any other way lets the pending autosave resurrect the tailored text a second later.
-  async function undoAutopilot() {
-    if (undoing || runActive) return;
-    undoing = true;
-    try {
-      await undoRun({
-        flush: flushPendingSave,
-        undo: async () => {
-          await api.undoAutopilotRun(cvId);
-        },
-        refetch: async () => {
-          await loadCv();
-          pdfVersion += 1;
-          void refreshAtsDelta();
-          void refreshJobMatch();
-        },
-      });
-    } catch (e) {
-      saveState = 'error';
-      saveError = e instanceof ApiError ? e.message : 'Could not undo the run.';
-    } finally {
-      undoing = false;
-    }
   }
 
   // A template switch is persisted by the gallery via setCvTemplate; mirror the new id into the
@@ -580,7 +604,7 @@
           </a>
         </div>
         <div class="min-h-0 flex-1 overflow-auto p-6">
-          <CvHtmlPreview {doc} {templateId} {zoom} {fonts} {photoSrc} />
+          <CvHtmlPreview {doc} {templateId} {zoom} {fonts} {photoSrc} highlightPaths={pinnedRevision?.paths ?? []} />
         </div>
       </div>
 
@@ -591,12 +615,14 @@
         job={job!}
         {analysis}
         {autopilotReport}
-        autopilotRevertable={autopilotRevertable}
-        autopilotBusy={turnActive || runActive || undoing}
+        autopilotBusy={turnActive || runActive}
         {atsDelta}
         {jobMatch}
         onRerunAutopilot={() => chatRef?.startRun()}
-        onUndoAutopilot={undoAutopilot}
+        {revisions}
+        onPreviewRevision={(r) => (pinnedRevision = r)}
+        onUndoRevision={undoRevision}
+        onUndoRevisionRun={undoRevisionRun}
         {onTemplateSelected}
         bind:tab={artifactTab}
         mobileVisible={mobileView === 'templates' ||

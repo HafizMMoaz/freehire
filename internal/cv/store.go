@@ -50,9 +50,6 @@ type Record struct {
 	// AutopilotReport is the last unattended run's account of itself, one entry per
 	// requirement it considered. Empty when no run has happened (or the last was reverted).
 	AutopilotReport []AutopilotEntry
-	// AutopilotRevertable says whether a pre-run snapshot is still held, i.e. whether
-	// "undo the run" has anything to restore.
-	AutopilotRevertable bool
 }
 
 // TailoredItem is a tailored CV in the re-open list: metadata plus the vacancy (slug, title,
@@ -77,11 +74,8 @@ type Repository interface {
 	GetBase(ctx context.Context, userID int64) (db.GetBaseCVByUserRow, error)
 	CreateTailored(ctx context.Context, userID, jobID int64, title, templateID string, data []byte) (db.CreateTailoredCVRow, error)
 	SetSession(ctx context.Context, id uuid.UUID, userID int64, sessionID string) (int64, error)
-	SetTemplate(ctx context.Context, id uuid.UUID, userID int64, templateID string) (int64, error)
 	ListTailored(ctx context.Context, userID int64) ([]db.ListTailoredCVsByUserRow, error)
-	SnapshotForAutopilot(ctx context.Context, id uuid.UUID, userID int64) (int64, error)
 	SetAutopilotReport(ctx context.Context, id uuid.UUID, userID int64, report []byte) (int64, error)
-	RevertAutopilot(ctx context.Context, id uuid.UUID, userID int64) (db.RevertCVAutopilotRow, error)
 	GetTailoredForJob(ctx context.Context, userID, jobID int64) (db.GetTailoredCVForJobRow, error)
 }
 
@@ -139,13 +133,12 @@ func (s *Store) Get(ctx context.Context, id uuid.UUID, userID int64) (Record, er
 		return Record{}, err
 	}
 	return Record{
-		Meta:                Meta{ID: row.ID, Title: row.Title, TemplateID: row.TemplateID, CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time},
-		JobID:               int8Value(row.JobID),
-		IsTailored:          row.IsTailored,
-		AgentSessionID:      textValue(row.AgentSessionID),
-		Document:            doc,
-		AutopilotReport:     decodeAutopilotReport(row.AutopilotReport),
-		AutopilotRevertable: row.AutopilotRevertable,
+		Meta:            Meta{ID: row.ID, Title: row.Title, TemplateID: row.TemplateID, CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time},
+		JobID:           int8Value(row.JobID),
+		IsTailored:      row.IsTailored,
+		AgentSessionID:  textValue(row.AgentSessionID),
+		Document:        doc,
+		AutopilotReport: decodeAutopilotReport(row.AutopilotReport),
 	}, nil
 }
 
@@ -196,19 +189,6 @@ func (s *Store) SetSession(ctx context.Context, id uuid.UUID, userID int64, sess
 	return nil
 }
 
-// SetTemplate changes only the template of an owned CV, or returns ErrNotFound. Title and
-// document are left untouched.
-func (s *Store) SetTemplate(ctx context.Context, id uuid.UUID, userID int64, templateID string) error {
-	n, err := s.repo.SetTemplate(ctx, id, userID, templateID)
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
 // ListTailored returns the user's tailored CVs (the re-open list): metadata plus the vacancy
 // slug and the bound agent session, newest edit first.
 func (s *Store) ListTailored(ctx context.Context, userID int64) ([]TailoredItem, error) {
@@ -230,18 +210,6 @@ func (s *Store) ListTailored(ctx context.Context, userID int64) ([]TailoredItem,
 }
 
 // Update sanitizes and replaces an owned CV's editable fields, or returns ErrNotFound.
-func (s *Store) Update(ctx context.Context, id uuid.UUID, userID int64, title, templateID string, doc Document) (Meta, error) {
-	data, err := marshalSanitized(doc)
-	if err != nil {
-		return Meta{}, err
-	}
-	row, err := s.repo.Update(ctx, id, userID, title, templateID, data)
-	if err != nil {
-		return Meta{}, mapNotFound(err)
-	}
-	return Meta{ID: row.ID, Title: row.Title, TemplateID: row.TemplateID,
-		CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time}, nil
-}
 
 // Delete removes an owned CV, or returns ErrNotFound when nothing matched.
 func (s *Store) Delete(ctx context.Context, id uuid.UUID, userID int64) error {
@@ -253,21 +221,6 @@ func (s *Store) Delete(ctx context.Context, id uuid.UUID, userID int64) error {
 		return ErrNotFound
 	}
 	return nil
-}
-
-// Patch loads an owned CV, applies one field-level edit, and persists the sanitized result.
-// It returns ErrInvalidPatch (leaving the stored CV untouched) when the patch addresses a
-// field or index that does not exist, or ErrNotFound for a foreign/missing id.
-func (s *Store) Patch(ctx context.Context, id uuid.UUID, userID int64, p Patch) (Meta, error) {
-	rec, err := s.Get(ctx, id, userID)
-	if err != nil {
-		return Meta{}, err
-	}
-	doc, err := Apply(rec.Document, p)
-	if err != nil {
-		return Meta{}, err
-	}
-	return s.Update(ctx, id, userID, rec.Title, rec.TemplateID, doc)
 }
 
 // BaseCV returns the user's base CV (job_id IS NULL) with its document; ok is false when the
@@ -424,24 +377,12 @@ func (r queriesRepository) SetSession(ctx context.Context, id uuid.UUID, userID 
 	})
 }
 
-func (r queriesRepository) SetTemplate(ctx context.Context, id uuid.UUID, userID int64, templateID string) (int64, error) {
-	return r.q.SetCVTemplate(ctx, db.SetCVTemplateParams{ID: id, UserID: userID, TemplateID: templateID})
-}
-
 func (r queriesRepository) ListTailored(ctx context.Context, userID int64) ([]db.ListTailoredCVsByUserRow, error) {
 	return r.q.ListTailoredCVsByUser(ctx, userID)
 }
 
-func (r queriesRepository) SnapshotForAutopilot(ctx context.Context, id uuid.UUID, userID int64) (int64, error) {
-	return r.q.SnapshotCVForAutopilot(ctx, db.SnapshotCVForAutopilotParams{ID: id, UserID: userID})
-}
-
 func (r queriesRepository) SetAutopilotReport(ctx context.Context, id uuid.UUID, userID int64, report []byte) (int64, error) {
 	return r.q.SetCVAutopilotReport(ctx, db.SetCVAutopilotReportParams{ID: id, UserID: userID, AutopilotReport: report})
-}
-
-func (r queriesRepository) RevertAutopilot(ctx context.Context, id uuid.UUID, userID int64) (db.RevertCVAutopilotRow, error) {
-	return r.q.RevertCVAutopilot(ctx, db.RevertCVAutopilotParams{ID: id, UserID: userID})
 }
 
 func (r queriesRepository) GetTailoredForJob(ctx context.Context, userID, jobID int64) (db.GetTailoredCVForJobRow, error) {

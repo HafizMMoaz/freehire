@@ -63,7 +63,7 @@ func (f *fakeRepo) Get(_ context.Context, id uuid.UUID, userID int64) (db.GetCVB
 	if !ok || r.userID != userID {
 		return db.GetCVByIDRow{}, pgx.ErrNoRows
 	}
-	return db.GetCVByIDRow{ID: id, Title: r.title, TemplateID: r.templateID, Data: r.data, JobID: pgtype.Int8{Int64: r.jobID, Valid: r.jobID != 0}, AgentSessionID: pgtype.Text{String: r.sessionID, Valid: r.sessionID != ""}, AutopilotReport: r.report, AutopilotRevertable: r.undo != nil, CreatedAt: stamp(), UpdatedAt: stamp()}, nil
+	return db.GetCVByIDRow{ID: id, Title: r.title, TemplateID: r.templateID, Data: r.data, JobID: pgtype.Int8{Int64: r.jobID, Valid: r.jobID != 0}, AgentSessionID: pgtype.Text{String: r.sessionID, Valid: r.sessionID != ""}, AutopilotReport: r.report, CreatedAt: stamp(), UpdatedAt: stamp()}, nil
 }
 
 func (f *fakeRepo) SetSession(_ context.Context, id uuid.UUID, userID int64, sessionID string) (int64, error) {
@@ -72,16 +72,6 @@ func (f *fakeRepo) SetSession(_ context.Context, id uuid.UUID, userID int64, ses
 		return 0, nil
 	}
 	r.sessionID = sessionID
-	f.rows[id] = r
-	return 1, nil
-}
-
-func (f *fakeRepo) SetTemplate(_ context.Context, id uuid.UUID, userID int64, templateID string) (int64, error) {
-	r, ok := f.rows[id]
-	if !ok || r.userID != userID {
-		return 0, nil
-	}
-	r.templateID = templateID
 	f.rows[id] = r
 	return 1, nil
 }
@@ -234,9 +224,6 @@ func TestStoreGetForeignUserIsNotFound(t *testing.T) {
 	if _, err := s.Get(ctx, meta.ID, 2); !errors.Is(err, ErrNotFound) {
 		t.Errorf("foreign Get err = %v, want ErrNotFound", err)
 	}
-	if _, err := s.Update(ctx, meta.ID, 2, "x", "classic-ats", Document{}); !errors.Is(err, ErrNotFound) {
-		t.Errorf("foreign Update err = %v, want ErrNotFound", err)
-	}
 	if err := s.Delete(ctx, meta.ID, 2); !errors.Is(err, ErrNotFound) {
 		t.Errorf("foreign Delete err = %v, want ErrNotFound", err)
 	}
@@ -255,16 +242,6 @@ func TestStoreDeleteThenGetIsNotFound(t *testing.T) {
 	}
 }
 
-func (f *fakeRepo) SnapshotForAutopilot(_ context.Context, id uuid.UUID, userID int64) (int64, error) {
-	r, ok := f.rows[id]
-	if !ok || r.userID != userID {
-		return 0, nil
-	}
-	r.undo = r.data
-	f.rows[id] = r
-	return 1, nil
-}
-
 func (f *fakeRepo) SetAutopilotReport(_ context.Context, id uuid.UUID, userID int64, report []byte) (int64, error) {
 	r, ok := f.rows[id]
 	if !ok || r.userID != userID {
@@ -273,17 +250,6 @@ func (f *fakeRepo) SetAutopilotReport(_ context.Context, id uuid.UUID, userID in
 	r.report = report
 	f.rows[id] = r
 	return 1, nil
-}
-
-func (f *fakeRepo) RevertAutopilot(_ context.Context, id uuid.UUID, userID int64) (db.RevertCVAutopilotRow, error) {
-	r, ok := f.rows[id]
-	// The real statement is owner-scoped AND snapshot-scoped: no snapshot matches no row.
-	if !ok || r.userID != userID || r.undo == nil {
-		return db.RevertCVAutopilotRow{}, pgx.ErrNoRows
-	}
-	r.data, r.undo, r.report = r.undo, nil, nil
-	f.rows[id] = r
-	return db.RevertCVAutopilotRow{ID: id, Title: r.title, TemplateID: r.templateID, CreatedAt: stamp(), UpdatedAt: stamp()}, nil
 }
 
 func (f *fakeRepo) GetTailoredForJob(_ context.Context, userID, jobID int64) (db.GetTailoredCVForJobRow, error) {

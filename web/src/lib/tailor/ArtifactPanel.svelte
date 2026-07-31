@@ -18,14 +18,15 @@
   import MatchAnalysisFull from '$lib/components/MatchAnalysisFull.svelte';
   import CompanyLogo from '$lib/components/CompanyLogo.svelte';
   import TemplateGallery from './TemplateGallery.svelte';
+  import RevisionHistory from './RevisionHistory.svelte';
   import AutopilotReport from './AutopilotReport.svelte';
   import AtsDelta from './AtsDelta.svelte';
   import JobMatch from './JobMatch.svelte';
-  import type { Analysis, AutopilotEntry } from '$lib/generated/contracts';
+  import type { Analysis, AutopilotEntry, RevisionView } from '$lib/generated/contracts';
   import type { Job, MatchAnalysisResponse } from '$lib/types';
   import type { CvAtsDelta, CvJobMatch } from '$lib/cv';
 
-  type Tab = 'templates' | 'jd' | 'jobmatch' | 'score';
+  type Tab = 'templates' | 'jd' | 'jobmatch' | 'score' | 'history';
 
   let {
     cvId,
@@ -38,12 +39,14 @@
     tab = $bindable('jobmatch'),
     mobileVisible = false,
     autopilotReport = undefined,
-    autopilotRevertable = false,
     autopilotBusy = false,
     atsDelta = null,
     jobMatch = null,
     onRerunAutopilot,
-    onUndoAutopilot,
+    revisions = [],
+    onPreviewRevision,
+    onUndoRevision,
+    onUndoRevisionRun,
   }: {
     cvId: string;
     job: Job;
@@ -54,7 +57,6 @@
     /** The last unattended run's log, shown in the Score tab. The fit analysis is untouched
      *  by a run — it measures the base profile, not this tailored copy. */
     autopilotReport?: AutopilotEntry[];
-    autopilotRevertable?: boolean;
     autopilotBusy?: boolean;
     /** What tailoring did to the CV's ATS readiness. Null renders nothing — an unavailable
      *  delta is an absence, not an error state. */
@@ -62,12 +64,21 @@
     /** How well the current document matches this vacancy. Same absence rule as the delta. */
     jobMatch?: CvJobMatch | null;
     onRerunAutopilot: () => void;
-    onUndoAutopilot: () => void;
+    /** The CV's history, newest first. */
+    revisions?: RevisionView[];
+    /** Which entry's edits the preview should underline. The highlight belongs to the
+     *  document, so it travels through to the page rather than living in this panel. */
+    onPreviewRevision: (revision: RevisionView | null) => void;
+    /** Undoing is the page's to run: it owns the debounced save that has to be flushed
+     *  first, and the re-read that follows. */
+    onUndoRevision: (revision: RevisionView) => Promise<void>;
+    onUndoRevisionRun: (batchId: string) => Promise<void>;
   } = $props();
 
   const tabs: [Tab, string][] = [
     ['jobmatch', 'Job Match'],
     ['score', 'Score'],
+    ['history', 'History'],
     ['jd', 'Job'],
     ['templates', 'Templates'],
   ];
@@ -186,6 +197,8 @@
       <div class="p-4">
         <TemplateGallery {cvId} onSelected={onTemplateSelected} />
       </div>
+    {:else if tab === 'history'}
+      <RevisionHistory {revisions} onPreview={onPreviewRevision} onUndo={onUndoRevision} onUndoRun={onUndoRevisionRun} />
     {:else if tab === 'jd'}
       <div class="p-4">
         {#if job.description}
@@ -200,13 +213,7 @@
              tab: the two answer different questions against different baselines, and stacking
              them under one heading is what made the previous Verdict tab unreadable. -->
         <AtsDelta data={atsDelta} />
-        <AutopilotReport
-          report={autopilotReport}
-          revertable={autopilotRevertable}
-          busy={autopilotBusy}
-          onRerun={onRerunAutopilot}
-          onUndo={onUndoAutopilot}
-        />
+        <AutopilotReport report={autopilotReport} busy={autopilotBusy} onRerun={onRerunAutopilot} />
       </div>
     {:else}
       <div class="p-4">

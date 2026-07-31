@@ -3,16 +3,19 @@ package handler
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/strelov1/freehire/internal/assistant"
 	"github.com/strelov1/freehire/internal/auth"
 	"github.com/strelov1/freehire/internal/credits"
 	"github.com/strelov1/freehire/internal/cv"
+	"github.com/strelov1/freehire/internal/cvedit"
 	"github.com/strelov1/freehire/internal/db"
 	"github.com/strelov1/freehire/internal/headshot"
 	"github.com/strelov1/freehire/internal/resume"
@@ -53,6 +56,10 @@ type cvHandlers struct {
 	// extractPDFText reads a rendered CV's text layer the way an ATS parser would. A field
 	// rather than a direct call so a test can state the text layer without a poppler binary.
 	extractPDFText func([]byte) (string, error)
+	// editor is the only path that writes a stored CV. Every entry point — the editor's
+	// autosave, the template picker, the CLI's patch, an agent tool, seeding a tailored
+	// copy — commits through it, so no change happens without a revision recording it.
+	editor *cvedit.Editor
 }
 
 // jobReader is the one vacancy read the tailoring context needs.
@@ -60,9 +67,12 @@ type jobReader interface {
 	GetJob(ctx context.Context, id int64) (db.Job, error)
 }
 
-func newCVHandlers(queries *db.Queries, typstBin string, resumeStore *resume.Store, photoStore *headshot.Store, creditsStore *credits.Store, match *matchHandlers) *cvHandlers {
+func newCVHandlers(pool *pgxpool.Pool, queries *db.Queries, typstBin string, resumeStore *resume.Store, photoStore *headshot.Store, creditsStore *credits.Store, match *matchHandlers) *cvHandlers {
 	h := &cvHandlers{
-		cvStore:            cv.NewStore(cv.NewQueriesRepository(queries)),
+		cvStore: cv.NewStore(cv.NewQueriesRepository(queries)),
+		// The editor is the only thing that writes a stored CV. The evidence gate is
+		// attached later (withExperienceBank) because the bank is wired after this.
+		editor:             cvedit.NewEditor(cvedit.NewRepository(pool, queries), nil),
 		jobReader:          queries,
 		resume:             resumeStore,
 		photos:             photoStore,
@@ -125,9 +135,13 @@ func (h *cvHandlers) register(api fiber.Router, mw middleware) {
 	api.Patch("/me/cvs/:id", mw.key, h.PatchCV)
 	api.Put("/me/cvs/:id/session", mw.key, h.SetCVSession)
 	api.Get("/me/cvs/:id/tailor-context", mw.key, h.TailorContext)
-	// Undo a whole autopilot run. Cookie-only: it rewrites the document, and the browser
-	// is where the candidate saw the run happen.
-	api.Post("/me/cvs/:id/autopilot/undo", mw.cookie, h.UndoAutopilotRun)
+	// The history of what changed the CV, and the two ways to undo an entry: on its own, or
+	// as the run it belonged to. Cookie-only for the same reason as every other mutation —
+	// the browser is where the candidate is watching this happen, and the tailoring agent
+	// must not be able to undo the work it is being measured on.
+	api.Get("/me/cvs/:id/revisions", mw.cookie, h.ListCVRevisions)
+	api.Post("/me/cvs/:id/revisions/:rid/undo", mw.cookie, h.UndoCVRevision)
+	api.Post("/me/cvs/:id/revisions/batch/:bid/undo", mw.cookie, h.UndoCVRevisionBatch)
 	// What tailoring did to the CV's ATS readiness. Cookie-only, and deliberately so: the
 	// tailoring agent authenticates with a CLI credential, so this gate is what keeps the
 	// score out of the reach of the thing being measured.
@@ -158,9 +172,6 @@ type cvResponse struct {
 	// requirement. The workspace panel renders it from this read rather than by parsing
 	// the conversation, so it survives a reload. Empty when no run has happened.
 	AutopilotReport []cv.AutopilotEntry `json:"autopilot_report,omitempty"`
-	// AutopilotRevertable says whether the pre-run snapshot is still held — whether
-	// "undo the run" has anything to restore.
-	AutopilotRevertable bool `json:"autopilot_revertable"`
 }
 
 // cvTailoredResponse is a tailored CV in the /my/cvs re-open list: metadata plus the vacancy
@@ -193,11 +204,10 @@ func metaResponse(m cv.Meta) cvMetaResponse {
 
 func recordResponse(rec cv.Record) cvResponse {
 	return cvResponse{
-		cvMetaResponse:      metaResponse(rec.Meta),
-		AgentSessionID:      rec.AgentSessionID,
-		Document:            rec.Document,
-		AutopilotReport:     rec.AutopilotReport,
-		AutopilotRevertable: rec.AutopilotRevertable,
+		cvMetaResponse:  metaResponse(rec.Meta),
+		AgentSessionID:  rec.AgentSessionID,
+		Document:        rec.Document,
+		AutopilotReport: rec.AutopilotReport,
 	}
 }
 
@@ -320,34 +330,14 @@ func (h *cvHandlers) UpdateCV(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	meta, err := h.cvStore.Update(c.Context(), id, userID, cvTitle(in.Title), tmplID, in.Document)
+	// A whole-document save is an input format, not a second way to write the document: the
+	// differ derives the operations, and from the editor's point of view this is
+	// indistinguishable from an agent's batch. The actor is decided here, by the entry point
+	// that authenticated the caller, and never read from the body.
+	meta, _, err := h.editor.CommitDocument(c.Context(), id, userID,
+		cvedit.ActorCandidate, cvedit.OriginEditor,
+		cvedit.State{Title: cvTitle(in.Title), TemplateID: tmplID, Document: in.Document})
 	if err != nil {
-		return mapCVError(err)
-	}
-	return c.JSON(fiber.Map{"data": metaResponse(meta)})
-}
-
-// UndoAutopilotRun restores the document an autopilot run started from and clears the run's
-// report along with it.
-//
-// The report goes with the document deliberately: it describes edits that the undo has just
-// removed, so keeping it would leave the panel claiming work that is no longer on the page.
-// A CV with no snapshot is a 409 rather than a silent no-op — nothing to undo is an answer,
-// not a success.
-func (h *cvHandlers) UndoAutopilotRun(c *fiber.Ctx) error {
-	userID, err := requireUserID(c)
-	if err != nil {
-		return err
-	}
-	id, err := cvPathID(c)
-	if err != nil {
-		return err
-	}
-	meta, err := h.cvStore.RevertAutopilot(c.Context(), id, userID)
-	if err != nil {
-		if errors.Is(err, cv.ErrNoAutopilotRun) {
-			return fiber.NewError(fiber.StatusConflict, "there is no autopilot run to undo")
-		}
 		return mapCVError(err)
 	}
 	return c.JSON(fiber.Map{"data": metaResponse(meta)})
@@ -418,7 +408,18 @@ func (h *cvHandlers) SetCVTemplate(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if err := h.cvStore.SetTemplate(c.Context(), id, userID, tmplID); err != nil {
+	// Through the editor like every other change: "switched to the Sidebar template" is a
+	// legitimate line in the history, and one the candidate may want to undo.
+	path, err := cvedit.ParsePath("template_id")
+	if err != nil {
+		return err
+	}
+	_, _, err = h.editor.Commit(c.Context(), id, userID, cvedit.Change{
+		Actor:  cvedit.ActorCandidate,
+		Origin: cvedit.OriginTemplate,
+		Ops:    []cvedit.Op{{Kind: cvedit.OpSet, Path: path, Value: tmplID}},
+	})
+	if err != nil {
 		return mapCVError(err)
 	}
 	return c.SendStatus(fiber.StatusNoContent)
@@ -485,11 +486,21 @@ func mapCVError(err error) error {
 		return fiber.NewError(fiber.StatusNotFound, "not found")
 	case errors.Is(err, cv.ErrUnknownTemplate):
 		return fiber.NewError(fiber.StatusBadRequest, "unknown template")
-	case errors.Is(err, cv.ErrInvalidPatch):
-		// Surface the specific reason (unknown field, wrong type, out-of-range index)
-		// so an LLM caller can fix the patch instead of retrying against a generic 422.
-		reason := strings.TrimPrefix(err.Error(), cv.ErrInvalidPatch.Error()+": ")
-		return fiber.NewError(fiber.StatusUnprocessableEntity, reason)
+	case errors.Is(err, cvedit.ErrInvalidOp):
+		// Surface the specific reason (unknown path, wrong type, out-of-range index) rather
+		// than a generic 422: the reason IS the remedy, and a caller that cannot see it can
+		// only retry the same mistake.
+		return fiber.NewError(fiber.StatusUnprocessableEntity,
+			strings.TrimPrefix(err.Error(), cvedit.ErrInvalidOp.Error()+": "))
+	case errors.Is(err, cvedit.ErrForbiddenPath), errors.Is(err, cvedit.ErrEvidenceRequired):
+		return fiber.NewError(fiber.StatusForbidden, err.Error())
+	case errors.Is(err, cvedit.ErrNothingToUndo):
+		return fiber.NewError(fiber.StatusConflict, "there is nothing to undo")
+	case errors.Is(err, cvedit.ErrCannotUndo):
+		// A fact about the document as it stands, not a malformed request: the place this
+		// edit changed is gone, so its inverse has nowhere to land.
+		return fiber.NewError(fiber.StatusConflict,
+			"this edit can no longer be undone — the part of the CV it changed is gone")
 	default:
 		return err
 	}
@@ -505,4 +516,85 @@ func cvPathID(c *fiber.Ctx) (uuid.UUID, error) {
 		return uuid.Nil, fiber.NewError(fiber.StatusNotFound, "cv not found")
 	}
 	return id, nil
+}
+
+// ListCVRevisions serves the history of what changed this CV, newest first.
+//
+// The feed carries the addresses each revision touched but not the operations themselves:
+// the preview needs the places to underline, and the inverses hold the candidate's own
+// earlier text, which has no business travelling out for a list view.
+func (h *cvHandlers) ListCVRevisions(c *fiber.Ctx) error {
+	userID, err := requireUserID(c)
+	if err != nil {
+		return err
+	}
+	id, err := cvPathID(c)
+	if err != nil {
+		return err
+	}
+	// Owner-scoped read first, so a foreign CV is a 404 rather than an empty feed — the
+	// same answer "no such CV" and "not yours" have everywhere else here.
+	if _, err := h.cvStore.Get(c.Context(), id, userID); err != nil {
+		return mapCVError(err)
+	}
+	revisions, err := h.editor.History(c.Context(), id, userID)
+	if err != nil {
+		return mapCVError(err)
+	}
+	return c.JSON(fiber.Map{"data": cvedit.Views(revisions)})
+}
+
+// UndoCVRevision reverses one entry, leaving later edits in place. The undo is itself
+// recorded, so the feed keeps describing what actually happened to the document.
+func (h *cvHandlers) UndoCVRevision(c *fiber.Ctx) error {
+	userID, err := requireUserID(c)
+	if err != nil {
+		return err
+	}
+	id, err := cvPathID(c)
+	if err != nil {
+		return err
+	}
+	revisionID, err := uuid.Parse(c.Params("rid"))
+	if err != nil {
+		// A malformed id names no revision, so it is reported as missing rather than as a
+		// bad request — keeping "no such revision" and "not yours" the same answer.
+		return fiber.NewError(fiber.StatusNotFound, "revision not found")
+	}
+	meta, undo, err := h.editor.Revert(c.Context(), id, userID, revisionID)
+	if err != nil {
+		return mapCVError(err)
+	}
+	return c.JSON(fiber.Map{"data": fiber.Map{"cv": metaResponse(meta), "revision": undo.View()}})
+}
+
+// UndoCVRevisionBatch reverses every standing edit of one agent turn, newest first.
+//
+// The batch id comes from the feed rather than from a column on the CV: the run's own
+// revisions carry it, which is what let the pre-run snapshot be retired along with the edge
+// two concurrent runs used to create.
+func (h *cvHandlers) UndoCVRevisionBatch(c *fiber.Ctx) error {
+	userID, err := requireUserID(c)
+	if err != nil {
+		return err
+	}
+	id, err := cvPathID(c)
+	if err != nil {
+		return err
+	}
+	batchID, err := uuid.Parse(c.Params("bid"))
+	if err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "run not found")
+	}
+	meta, err := h.editor.RevertBatch(c.Context(), id, userID, batchID)
+	if err != nil {
+		return mapCVError(err)
+	}
+	// The run report goes with the run: it describes what the run made of each requirement,
+	// and those edits have just been reversed. Best-effort — the document is already back,
+	// and failing the request now would tell the candidate nothing was undone.
+	if err := h.cvStore.SetAutopilotReport(c.Context(), id, userID, nil); err != nil {
+		log.Printf("cv: clearing the run report after a batch revert: %v", err)
+	}
+	return c.JSON(fiber.Map{"data": metaResponse(meta)})
 }
