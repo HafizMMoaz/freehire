@@ -33,6 +33,13 @@ export interface FacetOption {
   count?: number;
   /** ISO 3166-1 alpha-2 code for country options, so the pill shows a flag icon. */
   flag?: string;
+  /** Sub-heading this option renders under, for a facet whose options are not all
+   *  the same sort of thing. Used by the collections facet to keep credentials
+   *  (verifiable licences) visually apart from editorial collections while both
+   *  stay on one `collections` query param — the facet machinery keys state and URL
+   *  serialization by param, so two facet entries sharing one param would double
+   *  every value in the URL and in the active-filter count. */
+  group?: string;
 }
 
 export type FacetControl = 'pills' | 'select' | 'tokens' | 'remote';
@@ -399,9 +406,22 @@ const CURRENCY: FacetOption[] = [
 // aligns with the filter's currency facet.
 export const CURRENCY_OPTIONS: FacetOption[] = CURRENCY;
 
-// Curated collections (yc, bigtech, …) as pill options, sourced from the same
-// registry the /collections hub renders so the label/slug pairs never drift.
-const COLLECTION: FacetOption[] = COLLECTIONS.map((c) => ({ value: c.slug, label: c.title }));
+// The company-tag registry as pill options, from the generated registry the
+// /collections hub also renders, so the label/slug pairs cannot drift.
+// Editorial collections first, then credentials, each under its own sub-heading.
+// A credential is a verifiable licence drawn from a public register, not one of our
+// curated picks, and running them together would read as though we vouched for both
+// the same way. They stay on one `collections` param regardless: facet state and URL
+// serialization are keyed by param, so a second facet entry sharing it would append
+// every value twice.
+const COLLECTION: FacetOption[] = [
+  ...COLLECTIONS.filter((c) => c.kind === 'editorial').map((c) => ({ value: c.slug, label: c.title })),
+  ...COLLECTIONS.filter((c) => c.kind === 'credential').map((c) => ({
+    value: c.slug,
+    label: c.title,
+    group: 'Employer credentials',
+  })),
+];
 
 // Company-size buckets — the vocab.CompanySizeValues vocabulary. Not exported as
 // a generated values array (it's a scalar enrichment field, not a search facet on

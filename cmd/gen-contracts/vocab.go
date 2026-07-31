@@ -3,6 +3,8 @@ package main
 import (
 	"sort"
 	"strings"
+
+	"github.com/strelov1/freehire/internal/collections"
 )
 
 // emitVocab renders one closed vocabulary as a frozen value array plus a string-union
@@ -87,4 +89,36 @@ func emitMapOfSlices(typeName, constName string, m map[string][]string) string {
 // single quotes so a value like "N'Djamena" can't break the generated file.
 func quoteTS(s string) string {
 	return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(s) + "'"
+}
+
+// emitCollections renders the company-tag registry as a frozen array of objects
+// plus the two types the frontend reads off it:
+//
+//	export const COLLECTIONS = [
+//	  { slug: 'yc', title: 'Y Combinator', description: '…', kind: 'editorial' },
+//	  …
+//	] as const;
+//	export type Collection = (typeof COLLECTIONS)[number];
+//	export type CollectionKind = Collection['kind'];
+//
+// Emitted in registry order, not sorted: that order is the display order on the
+// /collections hub and in the job-search facet.
+//
+// This replaces a hand-kept mirror in web/src/lib/collections.ts. `kind` decides
+// which filter group a tag renders in, so a slug missing from the frontend copy
+// meant a tag that filters but has no pill — a correctness bug rather than stale
+// copy, which is what makes it worth generating.
+func emitCollections(all []collections.Collection) string {
+	var b strings.Builder
+	b.WriteString("export const COLLECTIONS = [\n")
+	for _, c := range all {
+		b.WriteString("  { slug: " + quoteTS(c.Slug) +
+			", title: " + quoteTS(c.Title) +
+			", description: " + quoteTS(c.Description) +
+			", kind: " + quoteTS(string(c.Kind)) + " },\n")
+	}
+	b.WriteString("] as const;\n")
+	b.WriteString("export type Collection = (typeof COLLECTIONS)[number];\n")
+	b.WriteString("export type CollectionKind = Collection['kind'];\n")
+	return b.String()
 }

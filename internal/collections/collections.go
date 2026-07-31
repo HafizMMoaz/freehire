@@ -1,45 +1,141 @@
-// Package collections defines the fixed, code-owned set of curated job
-// collections — editorial themes about a company (e.g. Y Combinator, Big Tech)
-// that are not derivable from a job's text or its ATS source. The registry here is
-// the single source of truth for which collections exist and how their members are
-// resolved; cmd/import-collections populates the membership, and the search facet
-// (jobs.collections) serves it.
+// Package collections defines the fixed, code-owned set of curated company tags —
+// facts about a company that are not derivable from a job's text or its ATS
+// source. A tag is one of two Kinds: an editorial theme we curate (Y Combinator,
+// Big Tech) or a credential drawn from an authoritative public register. The
+// registry here is the single source of truth for which tags exist and how their
+// members are resolved; cmd/import-collections populates the membership, and the
+// search facet (jobs.collections) serves it.
 package collections
 
 import (
+	"context"
 	_ "embed"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 
 	"github.com/strelov1/freehire/internal/normalize"
 )
 
-// Dataset is a source of member company names for a collection, resolved by the
-// import worker into a name list its pure Parse extracts (matching to our catalogue
-// happens via normalize.Slug in Match). The payload is either fetched from URL (an
-// external dataset we control) or supplied inline via Data (a file embedded in the
-// binary, for a list that is our own curated fact rather than a third-party feed) —
-// exactly one is set.
-type Dataset struct {
-	URL   string
-	Data  []byte
-	Parse func([]byte) ([]string, error)
+// Record is one member of a dataset: the company's name as the source publishes
+// it, plus whatever per-member attributes that source carries (a sponsorship
+// route, a locality, a registry number). Meta is untyped on purpose — every
+// register has its own columns, and only that entry's own Gate reads its own keys,
+// so a typed union across sources would grow a field per source and be read by
+// nobody else.
+type Record struct {
+	Name string
+	Meta map[string]string
 }
 
-// Collection is one curated theme: a URL slug, the display copy rendered on the
-// /collections hub and the job-search facet, and its membership source — exactly
-// one of Slugs (a static hand list of canonical company slugs) or Dataset (a
-// remote list of company names). The import worker resolves the source to a set of
+// Dataset is a source of member records for a collection, resolved by the import
+// worker via its pure Parse (matching to our catalogue happens via normalize.Slug
+// in Match). The payload is either fetched from URL (an external dataset we
+// control) or supplied inline via Data (a file embedded in the binary, for a list
+// that is our own curated fact rather than a third-party feed) — exactly one is set.
+// ResolveURL is set instead of URL by a source that republishes at a new address
+// per snapshot (the GOV.UK sponsor register embeds the snapshot date in its CSV
+// path), so the address has to be discovered at fetch time rather than pinned.
+type Dataset struct {
+	URL        string
+	Data       []byte
+	ResolveURL func(context.Context, *http.Client) (string, error)
+	Parse      func([]byte) ([]Record, error)
+	// IdentityKey names the Record.Meta field that tells two same-named
+	// organisations apart in this source — the UK register's town, the Dutch
+	// register's KvK number. Read by the import worker's ambiguity guard (see
+	// DropAmbiguous); empty when the source publishes no such field.
+	IdentityKey string
+}
+
+// Valid reports whether the dataset declares exactly one payload source. Declaring
+// none leaves the collection unresolvable; declaring two leaves which one wins to
+// the reader of the import worker, so both are rejected here and by a registry test.
+func (d Dataset) Valid() bool {
+	n := 0
+	if d.URL != "" {
+		n++
+	}
+	if len(d.Data) > 0 {
+		n++
+	}
+	if d.ResolveURL != nil {
+		n++
+	}
+	return n == 1
+}
+
+// names adapts a name-only parser to the record shape. The editorial datasets
+// publish nothing but a name, so their parsers stay as they are and are wrapped
+// here; only a register that carries per-member attributes writes a Record parser
+// of its own.
+func names(parse func([]byte) ([]string, error)) func([]byte) ([]Record, error) {
+	return func(data []byte) ([]Record, error) {
+		parsed, err := parse(data)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]Record, len(parsed))
+		for i, n := range parsed {
+			out[i] = Record{Name: n}
+		}
+		return out, nil
+	}
+}
+
+// Kind separates the two sorts of company tag the registry carries. An editorial
+// collection is our own curated theme (Big Tech, Unicorns) — a judgement call. A
+// credential is a verifiable fact drawn from an authoritative public register (a
+// visa-sponsor licence), which carries an issuing body and a snapshot date and is
+// presented differently because a user may act on it.
+//
+// The zero value is deliberately invalid: Kind decides which group a tag renders
+// in, so a forgotten one must fail the registry test rather than default silently.
+type Kind string
+
+const (
+	KindEditorial  Kind = "editorial"
+	KindCredential Kind = "credential"
+)
+
+// Collection is one curated company tag: a URL slug, the display copy rendered on
+// the /collections hub and the job-search facet, its Kind, and its membership
+// source — exactly one of Slugs (a static hand list of canonical company slugs) or
+// Dataset (a remote member list). The import worker resolves the source to a set of
 // member companies.
 type Collection struct {
 	Slug        string
 	Title       string
 	Description string
+	Kind        Kind
 	Slugs       []string // static hand list (e.g. bigtech)
-	Dataset     *Dataset // remote company-name dataset (e.g. yc, unicorn)
+	Dataset     *Dataset // remote member dataset (e.g. yc, unicorn)
+	// Gate, when set, must hold before a name-matched company is tagged. It is what
+	// separates "this register lists a company by this name" from "this is that
+	// company" — the register's own metadata and the company's geography decide.
+	// A nil Gate admits every name match, which is what every editorial collection
+	// wants and has always done.
+	Gate func(Company, Record) bool
+}
+
+// Company is the subset of a catalogue company a Gate may consult: its canonical
+// slug, the countries it has open jobs in (job-derived, maintained by
+// RefreshCompanyFacets), and its headquarters country. Deliberately narrow — a gate
+// is a pure decision over facts already loaded by the import worker, not a hook
+// with database access.
+type Company struct {
+	Slug      string
+	Countries []string
+	HQCountry string
+}
+
+// Admits reports whether this collection accepts a name-matched company/record
+// pair. A collection with no Gate admits every match.
+func (c Collection) Admits(company Company, r Record) bool {
+	return c.Gate == nil || c.Gate(company, r)
 }
 
 // All is the fixed registry, in display order. Adding a collection is one entry
@@ -50,61 +146,88 @@ var All = []Collection{
 		Slug:        "yc",
 		Title:       "Y Combinator",
 		Description: "Open roles at Y Combinator–backed companies, from current batches to graduated unicorns.",
-		Dataset:     &Dataset{URL: ycDatasetURL, Parse: ParseYC},
+		Kind:        KindEditorial,
+		Dataset:     &Dataset{URL: ycDatasetURL, Parse: names(ParseYC)},
 	},
 	{
 		Slug:        "techstars",
 		Title:       "Techstars",
 		Description: "Open roles at Techstars-backed companies.",
-		Dataset:     &Dataset{URL: techstarsDatasetURL, Parse: ParseTechstarsCSV},
+		Kind:        KindEditorial,
+		Dataset:     &Dataset{URL: techstarsDatasetURL, Parse: names(ParseTechstarsCSV)},
 	},
 	{
 		Slug:        "european",
 		Title:       "European Startups",
 		Description: "Open roles at European startups across the continent's tech hubs.",
-		Dataset:     &Dataset{URL: europeanDatasetURL, Parse: ParseEUStartups},
+		Kind:        KindEditorial,
+		Dataset:     &Dataset{URL: europeanDatasetURL, Parse: names(ParseEUStartups)},
 	},
 	{
 		Slug:        "ai",
 		Title:       "AI Companies",
 		Description: "Open roles at AI-native companies — foundation-model labs, ML platforms and applied-AI products.",
+		Kind:        KindEditorial,
 		Slugs:       AICompanySlugs,
 	},
 	{
 		Slug:        "mag7",
 		Title:       "Magnificent Seven",
 		Description: "Open roles at the Magnificent Seven — Apple, Microsoft, Alphabet, Amazon, Meta, Nvidia and Tesla.",
+		Kind:        KindEditorial,
 		Slugs:       Mag7Slugs,
 	},
 	{
 		Slug:        "bigtech",
 		Title:       "Big Tech",
 		Description: "Open roles at the largest, most established technology companies.",
+		Kind:        KindEditorial,
 		Slugs:       BigTechSlugs,
 	},
 	{
 		Slug:        "unicorn",
 		Title:       "Unicorns",
 		Description: "Open roles at unicorns — private companies valued at over $1 billion.",
-		Dataset:     &Dataset{URL: unicornDatasetURL, Parse: ParseCompanyCSV},
+		Kind:        KindEditorial,
+		Dataset:     &Dataset{URL: unicornDatasetURL, Parse: names(ParseCompanyCSV)},
 	},
 	{
 		Slug:        "fortune500",
 		Title:       "Fortune 500",
 		Description: "Open roles at Fortune 500 companies — the largest US corporations by revenue.",
-		Dataset:     &Dataset{URL: fortune500DatasetURL, Parse: ParseCompanyCSV},
+		Kind:        KindEditorial,
+		Dataset:     &Dataset{URL: fortune500DatasetURL, Parse: names(ParseCompanyCSV)},
 	},
 	{
 		Slug:        "eastern-roots",
 		Title:       "Eastern Roots",
 		Description: "Open roles at globally distributed companies founded by Eastern European (incl. Russian-speaking) founders or with Eastern European engineering roots.",
-		Dataset:     &Dataset{Data: easternRootsData, Parse: ParseSlugList},
+		Kind:        KindEditorial,
+		Dataset:     &Dataset{Data: easternRootsData, Parse: names(ParseSlugList)},
 	},
 	{
 		Slug:        "ai-native",
 		Title:       "AI-Native",
 		Description: "Open roles at AI-native companies building AI-first products and infrastructure — model and inference APIs, vector databases, and agent/dev tooling.",
+		Kind:        KindEditorial,
 		Slugs:       AINativeSlugs,
+	},
+	{
+		Slug:        "uk-skilled-worker-sponsor",
+		Title:       "Licensed UK sponsor",
+		Description: "Open roles at employers on the GOV.UK register of licensed sponsors for the Skilled Worker and related work routes. The licence belongs to the employer — it is not a commitment to sponsor any particular role.",
+		Kind:        KindCredential,
+		Dataset:     &Dataset{ResolveURL: ResolveUKSponsorCSV, Parse: ParseUKSponsors, IdentityKey: "town"},
+		Gate:        AllOf(RequireCountry("GB"), RequireRoute(ukWorkRoutes...)),
+	},
+	{
+		Slug:        "nl-recognised-sponsor",
+		Title:       "Licensed NL sponsor",
+		Description: "Open roles at employers on the IND public register of recognised sponsors for work and highly skilled migrants. The recognition belongs to the employer — it is not a commitment to sponsor any particular role.",
+		Kind:        KindCredential,
+		Dataset:     &Dataset{URL: nlSponsorURL, Parse: ParseNLSponsors, IdentityKey: "kvk"},
+		// No route gate: the IND register publishes recognition, not routes.
+		Gate: RequireCountry("NL"),
 	},
 }
 
@@ -265,26 +388,83 @@ func Slugs() []string {
 // An entry is safe to drop once a production import has run and cleared the tag.
 var RetiredSlugs = []string{"russian-roots"}
 
-// Match maps each candidate (a company name or slug) to a canonical company slug
-// via normalize.Slug and splits the candidates into those whose slug is present in
-// `existing` and those whose original value is not. Matched slugs are deduplicated
-// and sorted; unmatched values are returned verbatim (for logging) in input order.
-// A candidate that normalizes to an empty slug is treated as unmatched.
-func Match(candidates []string, existing map[string]struct{}) (matched, unmatched []string) {
-	seen := make(map[string]struct{}, len(candidates))
-	for _, c := range candidates {
-		slug := normalize.Slug(c)
-		if _, ok := existing[slug]; slug != "" && ok {
-			if _, dup := seen[slug]; !dup {
-				seen[slug] = struct{}{}
-				matched = append(matched, slug)
-			}
+// MaxLoggedUnmatched bounds the unmatched entries a hand list reports by name, so a
+// mis-edited list cannot flood a run's output.
+const MaxLoggedUnmatched = 50
+
+// MatchStat is how one collection's candidates fell out: how many companies earned
+// the tag, how many candidates matched no company at all, how many matched a company
+// but failed the gate, and how many register rows the ambiguity guard dropped.
+// Gated and Ambiguous are zero for a gateless editorial collection — they are what a
+// dry run is read for.
+type MatchStat struct {
+	Matched, Unmatched int
+	Gated, Ambiguous   int
+	UnmatchedNames     []string
+}
+
+// Members resolves this collection's candidate records to the company slugs that
+// earn its tag, and reports how the candidates fell out. Matched slugs are
+// deduplicated and sorted; unmatched names are returned verbatim, in input order,
+// for logging.
+//
+// Two things differ by kind. An editorial collection matches on normalize.Slug —
+// unchanged, because every existing collection reconciles through this path and a
+// changed match rule would silently rewrite its membership. A credential matches on
+// RegisterSlug, which strips the legal form a public register appends to a name, and
+// first drops rows whose name identifies more than one organisation.
+//
+// A company is tagged when ANY of its records passes the gate: a register lists an
+// organisation once per route it holds, so a work-route row must win even when a
+// temporary-route row for the same body is listed first.
+func (c Collection) Members(records []Record, companies map[string]Company) ([]string, MatchStat) {
+	var stat MatchStat
+	slugOf := normalize.Slug
+	if c.Kind == KindCredential {
+		before := len(records)
+		records = DropAmbiguous(records, c.identityKey())
+		stat.Ambiguous = before - len(records)
+		slugOf = RegisterSlug
+	}
+
+	admitted := make(map[string]struct{}, len(records))
+	gatedOut := make(map[string]struct{}, len(records))
+	for _, r := range records {
+		slug := slugOf(r.Name)
+		company, known := companies[slug]
+		if slug == "" || !known {
+			stat.Unmatched++
+			stat.UnmatchedNames = append(stat.UnmatchedNames, r.Name)
 			continue
 		}
-		unmatched = append(unmatched, c)
+		if !c.Admits(company, r) {
+			gatedOut[slug] = struct{}{}
+			continue
+		}
+		admitted[slug] = struct{}{}
+	}
+
+	matched := make([]string, 0, len(admitted))
+	for slug := range admitted {
+		matched = append(matched, slug)
 	}
 	sort.Strings(matched)
-	return matched, unmatched
+	stat.Matched = len(matched)
+	for slug := range gatedOut {
+		// A company with both an admitted and a rejected row is not gated out.
+		if _, ok := admitted[slug]; !ok {
+			stat.Gated++
+		}
+	}
+	return matched, stat
+}
+
+// identityKey is this collection's dataset organisation discriminator, if any.
+func (c Collection) identityKey() string {
+	if c.Dataset == nil {
+		return ""
+	}
+	return c.Dataset.IdentityKey
 }
 
 // Reconcile computes a company's new collection set: it removes every tag in
@@ -375,6 +555,25 @@ func ParseTechstarsCSV(data []byte) ([]string, error) {
 // locates the column by header (not a fixed index, so an upstream column reorder
 // doesn't silently read the wrong field) and returns each non-empty value.
 func parseCSVColumn(data []byte, delim rune, colName string) ([]string, error) {
+	rows, err := csvColumns(data, delim, colName)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if row[0] != "" {
+			names = append(names, row[0])
+		}
+	}
+	return names, nil
+}
+
+// csvColumns extracts the named columns from a CSV with the given delimiter,
+// returning one trimmed slice per data row in the order the columns were asked for.
+// Columns are located by header rather than by index, so an upstream reorder cannot
+// silently read the wrong field, and a missing column is an error rather than a
+// column of blanks.
+func csvColumns(data []byte, delim rune, colNames ...string) ([][]string, error) {
 	r := csv.NewReader(strings.NewReader(string(data)))
 	r.Comma = delim
 	r.FieldsPerRecord = -1 // tolerate ragged rows rather than aborting the whole parse
@@ -382,27 +581,34 @@ func parseCSVColumn(data []byte, delim rune, colName string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("collections: read csv header: %w", err)
 	}
-	col := -1
-	for i, h := range header {
-		if strings.EqualFold(strings.TrimSpace(h), colName) {
-			col = i
-			break
+
+	idx := make([]int, len(colNames))
+	for n, want := range colNames {
+		idx[n] = -1
+		for i, h := range header {
+			if strings.EqualFold(strings.TrimSpace(h), want) {
+				idx[n] = i
+				break
+			}
+		}
+		if idx[n] < 0 {
+			return nil, fmt.Errorf("collections: csv has no %q column", want)
 		}
 	}
-	if col < 0 {
-		return nil, fmt.Errorf("collections: csv has no %q column", colName)
-	}
+
 	rows, err := r.ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("collections: read csv: %w", err)
 	}
-	names := make([]string, 0, len(rows))
+	out := make([][]string, 0, len(rows))
 	for _, row := range rows {
-		if col < len(row) {
-			if name := strings.TrimSpace(row[col]); name != "" {
-				names = append(names, name)
+		vals := make([]string, len(idx))
+		for n, i := range idx {
+			if i < len(row) {
+				vals[n] = strings.TrimSpace(row[i])
 			}
 		}
+		out = append(out, vals)
 	}
-	return names, nil
+	return out, nil
 }

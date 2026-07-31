@@ -1,15 +1,3 @@
-// Curated collections shown on /collections. This mirrors the Go registry in
-// internal/collections (the source of truth for membership + the search facet).
-// It is a hand-kept mirror for now — only the display copy lives here; if the set
-// grows, fold it into the generated contracts (gen-contracts) so the two can't
-// drift. Keep `slug` identical to the Go registry slugs and the `collections`
-// search-facet values.
-export type Collection = {
-  slug: string;
-  title: string;
-  description: string;
-};
-
 // A filter collection is the second kind of collection: a curated card that maps
 // to an arbitrary /jobs facet filter rather than company membership. Unlike
 // COLLECTIONS it is frontend-only — no Go registry, no `collections` search-facet
@@ -454,63 +442,14 @@ export function toQuery(params: Record<string, string | string[]>): string {
   return q.toString();
 }
 
-export const COLLECTIONS: Collection[] = [
-  {
-    slug: 'yc',
-    title: 'Y Combinator',
-    description:
-      'Open roles at Y Combinator–backed companies, from current batches to graduated unicorns.',
-  },
-  {
-    slug: 'techstars',
-    title: 'Techstars',
-    description: 'Open roles at Techstars-backed companies.',
-  },
-  {
-    slug: 'european',
-    title: 'European Startups',
-    description: "Open roles at European startups across the continent's tech hubs.",
-  },
-  {
-    slug: 'ai',
-    title: 'AI Companies',
-    description:
-      'Open roles at AI-native companies — foundation-model labs, ML platforms and applied-AI products.',
-  },
-  {
-    slug: 'mag7',
-    title: 'Magnificent Seven',
-    description:
-      'Open roles at the Magnificent Seven — Apple, Microsoft, Alphabet, Amazon, Meta, Nvidia and Tesla.',
-  },
-  {
-    slug: 'bigtech',
-    title: 'Big Tech',
-    description: 'Open roles at the largest, most established technology companies.',
-  },
-  {
-    slug: 'unicorn',
-    title: 'Unicorns',
-    description: 'Open roles at unicorns — private companies valued at over $1 billion.',
-  },
-  {
-    slug: 'fortune500',
-    title: 'Fortune 500',
-    description: 'Open roles at Fortune 500 companies — the largest US corporations by revenue.',
-  },
-  {
-    slug: 'eastern-roots',
-    title: 'Eastern Roots',
-    description:
-      'Open roles at globally distributed companies founded by Eastern European (incl. Russian-speaking) founders or with Eastern European engineering roots.',
-  },
-  {
-    slug: 'ai-native',
-    title: 'AI-Native',
-    description:
-      'Open roles at AI-native companies building AI-first products and infrastructure — model and inference APIs, vector databases, and agent/dev tooling.',
-  },
-];
+// The company-tag registry is generated from the Go source of truth
+// (internal/collections) by cmd/gen-contracts and re-exported here so every import
+// site keeps its `$lib/collections` path. It carries `kind`, which decides whether
+// a tag renders as an editorial collection or as a credential — a field a hand-kept
+// mirror could get wrong silently, which is why this stopped being hand-kept.
+export { COLLECTIONS } from './generated/contracts';
+import { COLLECTIONS as COMPANY_COLLECTIONS } from './generated/contracts';
+export type { Collection, CollectionKind } from './generated/contracts';
 
 // A resolved collection: the display copy plus the fixed job-search facet params
 // that scope its feed. `params` is single-valued (the shape JobsView's `scope`
@@ -547,7 +486,7 @@ export function collectionBySlug(slug: string): ResolvedCollection | undefined {
   if (filter) {
     return { title: filter.title, description: filter.description, params: scopeParams(filter.params) };
   }
-  const company = COLLECTIONS.find((c) => c.slug === slug);
+  const company = COMPANY_COLLECTIONS.find((c) => c.slug === slug);
   if (company) {
     return { title: company.title, description: company.description, params: { collections: company.slug } };
   }
@@ -557,5 +496,5 @@ export function collectionBySlug(slug: string): ResolvedCollection | undefined {
 // Every collection slug across both registries — the sitemap's source for the
 // collection landing URLs. Slugs are unique across the two sets.
 export function collectionSlugs(): string[] {
-  return [...FILTER_COLLECTIONS.map((c) => c.slug), ...COLLECTIONS.map((c) => c.slug)];
+  return [...FILTER_COLLECTIONS.map((c) => c.slug), ...COMPANY_COLLECTIONS.map((c) => c.slug)];
 }

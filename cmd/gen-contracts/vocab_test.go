@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/strelov1/freehire/internal/collections"
 )
 
 func TestGenVocabEmitsRoleLabels(t *testing.T) {
@@ -55,5 +57,37 @@ func TestEmitMapEmpty(t *testing.T) {
 		"export type X = typeof X_MAP;\n"
 	if got != want {
 		t.Errorf("emitMap(empty) = %q, want %q", got, want)
+	}
+}
+
+func TestEmitCollections_RendersTheRegistryWithItsKinds(t *testing.T) {
+	got := emitCollections([]collections.Collection{
+		{Slug: "yc", Title: "Y Combinator", Description: "Open roles at YC companies.", Kind: collections.KindEditorial},
+		{Slug: "uk-skilled-worker-sponsor", Title: "Licensed UK sponsor", Description: "It's a licence.", Kind: collections.KindCredential},
+	})
+
+	for _, want := range []string{
+		"export const COLLECTIONS = [",
+		"{ slug: 'yc', title: 'Y Combinator', description: 'Open roles at YC companies.', kind: 'editorial' },",
+		"{ slug: 'uk-skilled-worker-sponsor', title: 'Licensed UK sponsor', description: 'It\\'s a licence.', kind: 'credential' },",
+		"] as const;",
+		"export type Collection = (typeof COLLECTIONS)[number];",
+		"export type CollectionKind = Collection['kind'];",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("emitCollections output missing %q\ngot:\n%s", want, got)
+		}
+	}
+}
+
+func TestEmitCollections_KeepsRegistryOrder(t *testing.T) {
+	// Display order is the registry's, not alphabetical — the hub and the facet
+	// render in it.
+	got := emitCollections([]collections.Collection{
+		{Slug: "zeta", Kind: collections.KindEditorial},
+		{Slug: "alpha", Kind: collections.KindEditorial},
+	})
+	if strings.Index(got, "'zeta'") > strings.Index(got, "'alpha'") {
+		t.Error("emitCollections reordered the registry")
 	}
 }

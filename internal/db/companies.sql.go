@@ -444,20 +444,28 @@ func (q *Queries) ListCompaniesForReindex(ctx context.Context, arg ListCompanies
 }
 
 const listCompanyCollections = `-- name: ListCompanyCollections :many
-SELECT slug, collections
+SELECT slug, collections, countries, hq_country
 FROM companies
 ORDER BY slug
 `
 
 type ListCompanyCollectionsRow struct {
-	Slug        string   `json:"slug"`
-	Collections []string `json:"collections"`
+	Slug        string      `json:"slug"`
+	Collections []string    `json:"collections"`
+	Countries   []string    `json:"countries"`
+	HqCountry   pgtype.Text `json:"hq_country"`
 }
 
 // All companies with their current collection membership. cmd/import-collections
 // reads this to know the existing company slugs (the match target) and each
 // company's current tags (so it can reconcile only the tags it manages, leaving any
 // others untouched).
+//
+// countries and hq_country ride along for the credential gates: a register entry is
+// only granted to a company demonstrably present in that register's country, and a
+// single-token name additionally needs its headquarters there. Both are already
+// maintained (countries by RefreshCompanyFacets, hq_country by the company-info
+// importers), so this widens the read rather than adding a source of truth.
 func (q *Queries) ListCompanyCollections(ctx context.Context) ([]ListCompanyCollectionsRow, error) {
 	rows, err := q.db.Query(ctx, listCompanyCollections)
 	if err != nil {
@@ -467,7 +475,12 @@ func (q *Queries) ListCompanyCollections(ctx context.Context) ([]ListCompanyColl
 	items := []ListCompanyCollectionsRow{}
 	for rows.Next() {
 		var i ListCompanyCollectionsRow
-		if err := rows.Scan(&i.Slug, &i.Collections); err != nil {
+		if err := rows.Scan(
+			&i.Slug,
+			&i.Collections,
+			&i.Countries,
+			&i.HqCountry,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

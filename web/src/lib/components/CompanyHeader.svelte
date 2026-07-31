@@ -4,6 +4,7 @@
   import { api } from '$lib/api';
   import type { Company } from '$lib/types';
   import CompanyLogo from './CompanyLogo.svelte';
+  import CredentialBadge from './CredentialBadge.svelte';
   import CompanyFollowButton from './CompanyFollowButton.svelte';
   import VoteControl from './VoteControl.svelte';
 
@@ -48,6 +49,14 @@
       <h1 class="break-words text-xl font-semibold tracking-tight sm:text-2xl">{company.name}</h1>
       {#if company.tagline}
         <p class="mt-1 text-sm text-muted-foreground">{company.tagline}</p>
+      {/if}
+      <!-- Register-backed credentials (visa-sponsor licences) sit under the identity,
+           where a fact about the employer belongs. Each carries its issuing body and
+           the disclaimer that the licence is not a promise about any given role. -->
+      {#if company.collections?.length}
+        <div class="mt-2 flex flex-wrap gap-1.5">
+          <CredentialBadge collections={company.collections} />
+        </div>
       {/if}
     </div>
     <!-- flex-1 above lets the name/tagline use the full width; the follow CTA stays

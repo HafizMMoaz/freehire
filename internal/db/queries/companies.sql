@@ -142,7 +142,13 @@ WHERE slug = $1;
 -- reads this to know the existing company slugs (the match target) and each
 -- company's current tags (so it can reconcile only the tags it manages, leaving any
 -- others untouched).
-SELECT slug, collections
+--
+-- countries and hq_country ride along for the credential gates: a register entry is
+-- only granted to a company demonstrably present in that register's country, and a
+-- single-token name additionally needs its headquarters there. Both are already
+-- maintained (countries by RefreshCompanyFacets, hq_country by the company-info
+-- importers), so this widens the read rather than adding a source of truth.
+SELECT slug, collections, countries, hq_country
 FROM companies
 ORDER BY slug;
 

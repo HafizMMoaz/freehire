@@ -52,3 +52,50 @@ describe('FILTER_COLLECTIONS invariants', () => {
     }
   });
 });
+
+describe('credential collections in the job-search facet', () => {
+  const collectionFacets = FACETS.filter((f) => f.param === 'collections');
+
+  it('occupies exactly one facet entry', () => {
+    // Two entries sharing a query param would break the facet machinery, not just
+    // the layout: filtersToParams iterates FACETS and would append every selected
+    // value to the URL twice, and activeFilterCount would double the badge. The
+    // credential/collection split is therefore a grouping inside one facet, not a
+    // second facet — this test is what stops someone splitting it later.
+    expect(collectionFacets).toHaveLength(1);
+  });
+
+  it('offers both sponsor credentials, grouped apart from editorial collections', () => {
+    const options = collectionFacets[0]?.options ?? [];
+    const credentials = options.filter((o) => o.group);
+    expect(credentials.map((o) => o.value)).toEqual([
+      'uk-skilled-worker-sponsor',
+      'nl-recognised-sponsor',
+    ]);
+    for (const c of credentials) {
+      expect(c.group).toBe('Employer credentials');
+    }
+  });
+
+  it('keeps editorial collections ungrouped and ahead of the credentials', () => {
+    const options = collectionFacets[0]?.options ?? [];
+    const firstGrouped = options.findIndex((o) => o.group);
+    expect(firstGrouped).toBeGreaterThan(0);
+    expect(options.slice(0, firstGrouped).every((o) => !o.group)).toBe(true);
+    expect(options.slice(firstGrouped).every((o) => o.group)).toBe(true);
+  });
+
+  it('resolves a credential slug to a landing page scoped by the collections facet', () => {
+    const resolved = collectionBySlug('uk-skilled-worker-sponsor');
+    expect(resolved?.params).toEqual({ collections: 'uk-skilled-worker-sponsor' });
+    expect(resolved?.title).toBe('Licensed UK sponsor');
+    // The disclaimer travels with the copy: a landing page must not read as a
+    // promise that any listed role is sponsored.
+    expect(resolved?.description).toMatch(/not a commitment to sponsor/i);
+  });
+
+  it('lists credential slugs in the sitemap alongside every other collection', () => {
+    expect(collectionSlugs()).toContain('uk-skilled-worker-sponsor');
+    expect(collectionSlugs()).toContain('nl-recognised-sponsor');
+  });
+});

@@ -15,6 +15,7 @@ import (
 	"github.com/gzuidhof/tygo/tygo"
 
 	"github.com/strelov1/freehire/internal/classify"
+	"github.com/strelov1/freehire/internal/collections"
 	"github.com/strelov1/freehire/internal/location"
 	"github.com/strelov1/freehire/internal/mailclassify"
 	"github.com/strelov1/freehire/internal/roletag"
@@ -291,6 +292,10 @@ func genVocab() string {
 	// Role slug→shorthand-aliases for the picker's search: the same curated terms
 	// used to tag titles, so typing "swe"/"sre"/"devrel" finds the role.
 	b.WriteString(emitMapOfSlices("RoleAliases", "ROLE_ALIASES", roleAliases()))
+	// The company-tag registry (slug, display copy, kind) — the source of truth for
+	// the /collections hub and the job-search facet, generated so the frontend copy
+	// cannot drift from the Go registry that decides membership.
+	b.WriteString(emitCollections(collections.All))
 	return b.String()
 }
 
