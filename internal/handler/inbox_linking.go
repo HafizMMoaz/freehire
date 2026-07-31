@@ -26,13 +26,16 @@ type applicationEmail struct {
 // applicationDetail is the wire shape for GET /me/tracking/:slug — the job in the
 // shared jobview shape, the caller's interaction, and the emails linked to it.
 type applicationDetail struct {
-	Job       jobview.Job        `json:"job"`
-	ViewedAt  *time.Time         `json:"viewed_at"`
-	SavedAt   *time.Time         `json:"saved_at"`
-	AppliedAt *time.Time         `json:"applied_at"`
-	Stage     string             `json:"stage,omitempty"`
-	Notes     string             `json:"notes,omitempty"`
-	Emails    []applicationEmail `json:"emails"`
+	Job       jobview.Job `json:"job"`
+	ViewedAt  *time.Time  `json:"viewed_at"`
+	SavedAt   *time.Time  `json:"saved_at"`
+	AppliedAt *time.Time  `json:"applied_at"`
+	Stage     string      `json:"stage,omitempty"`
+	Notes     string      `json:"notes,omitempty"`
+	// FollowedUpAt is when the caller last recorded chasing this application, or null
+	// for never. It says nothing about whether anybody replied.
+	FollowedUpAt *time.Time         `json:"followed_up_at"`
+	Emails       []applicationEmail `json:"emails"`
 }
 
 // GetTrackedApplication returns the caller's application for a job slug together
@@ -70,13 +73,14 @@ func (h *inboxHandlers) GetTrackedApplication(c *fiber.Ctx) error {
 		})
 	}
 	return c.JSON(fiber.Map{"data": applicationDetail{
-		Job:       jv,
-		ViewedAt:  tsPtr(app.ViewedAt),
-		SavedAt:   tsPtr(app.SavedAt),
-		AppliedAt: tsPtr(app.AppliedAt),
-		Stage:     pgStr(app.Stage),
-		Notes:     pgStr(app.Notes),
-		Emails:    emails,
+		Job:          jv,
+		ViewedAt:     tsPtr(app.ViewedAt),
+		SavedAt:      tsPtr(app.SavedAt),
+		AppliedAt:    tsPtr(app.AppliedAt),
+		Stage:        pgStr(app.Stage),
+		Notes:        pgStr(app.Notes),
+		FollowedUpAt: tsPtr(app.FollowedUpAt),
+		Emails:       emails,
 	}})
 }
 
