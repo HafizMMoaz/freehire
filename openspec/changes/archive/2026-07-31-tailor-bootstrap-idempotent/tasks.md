@@ -17,4 +17,11 @@
 ## 4. Verification
 
 - [x] 4.1 `go build ./...`, `go vet ./...`, `gofmt -l .`, `go test ./...`, integration suites, `svelte-check`, web tests
-- [ ] 4.2 Confirm on production: open the workspace, reload, and see the same conversation — and that `/my/cvs` stops gaining a row per refresh
+- [x] 4.2 Confirm on production: open the workspace, reload, and see the same conversation — and that `/my/cvs` stops gaining a row per refresh
+
+**Verified on production 2026-07-31, from the data rather than by clicking.** The fix
+landed at 2026-07-29 20:32 UTC (#1258); the newest duplicate pair predates it at 20:05
+UTC. Ten tailored CVs have been created since, across ten distinct (user, vacancy) pairs —
+zero duplicates — so the absence is a result and not merely an absence of traffic. Before
+the fix, eleven pairs carried duplicates, one of them eight copies deep. No CV has more
+than one assistant session, which is the conversation half of the same claim.

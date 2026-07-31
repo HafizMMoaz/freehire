@@ -62,14 +62,22 @@ trailing `/apply` segment, and any trailing slash — and store the canonical fo
 
 ### Requirement: Reject a board already in the catalogue
 
-The system SHALL reject a contribution whose board is already crawled — any job exists whose
-identity is under that board namespace — with a distinct "board already in catalogue" error,
-and SHALL NOT record it or award AI credits.
+The system SHALL NOT record a contribution for a board it already crawls, and SHALL NOT
+award AI credits for one, because the board needs no onboarding. The submitted link SHALL
+still be served by the intake sequence — the vacancy is imported if it can be read — and
+the caller SHALL be told which company is already tracked.
 
 #### Scenario: A board we already crawl is rejected
 
 - **WHEN** a user submits a link for a board that already has jobs in the catalogue
-- **THEN** the system responds 409 with a "board already in catalogue" error and awards no credits
+- **THEN** no contribution row is recorded, no credits are awarded, and the answer names
+  the company already being crawled
+
+#### Scenario: A vacancy on a crawled board is still imported
+
+- **WHEN** the submitted link is a readable vacancy on an already-crawled board that the
+  catalogue does not yet carry
+- **THEN** the vacancy is imported and its posting is returned to the caller
 
 ### Requirement: Reject a board already contributed
 
@@ -108,37 +116,47 @@ separate per-user "points" counter.
 
 ### Requirement: My contributions view
 
-The system SHALL let an authenticated user list their own contributions, newest first, each
-carrying its canonical URL, status, and — for a recognized board — its source and board slug;
-a review-queue row carries no source or board. The list SHALL be scoped to the caller and
-never reveal another user's contributions.
+The system SHALL let an authenticated user list their own contributions, newest first,
+each carrying its canonical URL, status, the surface it was submitted from, and — for a
+recognized board — its source and board slug; a review-queue row carries no source or
+board. The list SHALL be scoped to the caller and never reveal another user's
+contributions.
 
 #### Scenario: User lists their own contributions
 
 - **WHEN** an authenticated user requests their contributions
-- **THEN** the response contains only that user's contributions, newest first, each with its status
+- **THEN** the response contains only that user's contributions, newest first, each with
+  its status and originating surface
 
 #### Scenario: A review-queue submission is listed without a board
 
-- **WHEN** an authenticated user who submitted an unrecognized link requests their contributions
+- **WHEN** an authenticated user who submitted an unrecognized link requests their
+  contributions
 - **THEN** that row appears with status `review` and no source or board
 
 ### Requirement: Contribute a board from Telegram
 
-The system SHALL let a user who has linked their Telegram chat contribute a board by sending a
-board link to the bot: the webhook resolves the chat to its user and runs the same contribution
-flow, replying with the outcome. A message with no link SHALL draw no reply; a link from a chat
+The system SHALL let a user who has linked their Telegram chat submit a link by sending it
+to the bot: the webhook resolves the chat to its user and runs the same intake sequence as
+every other surface, replying with the outcome — including a link to the posting when the
+vacancy could be imported. A message with no link SHALL draw no reply; a link from a chat
 not linked to any user SHALL prompt the user to link their account first.
 
-#### Scenario: Linked user's board link is recorded and rewarded
+#### Scenario: A readable vacancy is imported and linked back
 
-- **WHEN** a linked user sends a supported board link to the bot chat
-- **THEN** the board is recorded, the user's AI-credits reward is credited, and the bot replies confirming the new board
+- **WHEN** a linked user sends a link to a vacancy that can be imported
+- **THEN** the vacancy is imported and the bot replies with a link to the posting
+
+#### Scenario: Novel board is recorded and rewarded
+
+- **WHEN** a linked user sends a supported board link for a board we do not crawl
+- **THEN** the board is recorded, the user's AI-credits reward is credited, and the bot
+  confirms the new board
 
 #### Scenario: Second link on the same board earns no reward
 
 - **WHEN** a linked user sends another link for a board they already contributed
-- **THEN** no AI credits are credited and the bot replies that the board was already contributed
+- **THEN** no AI credits are credited and the bot says the board is already known
 
 #### Scenario: Ordinary chatter is ignored
 
@@ -147,8 +165,13 @@ not linked to any user SHALL prompt the user to link their account first.
 
 #### Scenario: Unlinked chat is prompted to link
 
-- **WHEN** a board link arrives from a chat not linked to any user
+- **WHEN** a link arrives from a chat not linked to any user
 - **THEN** the bot replies prompting the user to link their account on the site first
+
+#### Scenario: Linked user's board link is recorded and rewarded
+
+- **WHEN** a linked user sends a supported board link to the bot chat
+- **THEN** the board is recorded, the user's AI-credits reward is credited, and the bot replies confirming the new board
 
 ### Requirement: Record an unrecognized link for manual review
 
@@ -173,31 +196,4 @@ ingestable and promotes the row.
 
 - **WHEN** a review-queue row is created
 - **THEN** no AI-credits reward is applied — credit remains exclusive to recognized novel boards
-
-### Requirement: Contribution submissions are rate-limited per user
-
-The system SHALL bound how often one user can submit board contributions, because an
-unrecognized link makes the server fetch an attacker-chosen URL — so an unbounded endpoint is
-an outbound-fetch amplifier and a timing oracle for public hosts.
-
-- The limit SHALL be keyed on the authenticated user, not the client IP, so rotating IPs does
-  not lift it.
-- A caller over the limit SHALL receive `429` and no fetch SHALL be performed.
-- The limit SHALL apply to the HTTP endpoint and SHALL NOT change the Telegram contribution
-  path's own behaviour.
-
-#### Scenario: Submissions within the limit are served
-
-- **WHEN** an authenticated user submits fewer contributions than the limit within the window
-- **THEN** every submission is processed as it is today
-
-#### Scenario: Over the limit is refused before any fetch
-
-- **WHEN** an authenticated user exceeds the limit within the window
-- **THEN** the system responds `429`, performs no outbound fetch, and records nothing
-
-#### Scenario: The limit is per user, not per address
-
-- **WHEN** the same user submits from several client IP addresses within one window
-- **THEN** all their submissions count against one shared limit
 

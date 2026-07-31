@@ -17,4 +17,6 @@
 ## 3. Rollout
 
 - [x] 3.1 `0056` applied to prod by `release.sh` during the release of the change that introduced it (`migrate: 72 file(s) on disk, 0 baselined, 1 applied`).
-- [ ] 3.2 `0057` applies on the next release — `release.sh` runs the migration runner before starting the new colour, and widening a bound cannot fail on existing data.
+- [x] 3.2 `0057` applies on the next release — `release.sh` runs the migration runner before starting the new colour, and widening a bound cannot fail on existing data.
+
+**Verified on production 2026-07-31:** `schema_migrations` holds `0057_user_profile_skills_cap_200.sql`.

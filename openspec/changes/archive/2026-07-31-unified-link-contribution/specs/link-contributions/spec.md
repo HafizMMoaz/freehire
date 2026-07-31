@@ -7,7 +7,7 @@ award AI credits for one, because the board needs no onboarding. The submitted l
 still be served by the intake sequence — the vacancy is imported if it can be read — and
 the caller SHALL be told which company is already tracked.
 
-#### Scenario: A board we already crawl is not queued
+#### Scenario: A board we already crawl is rejected
 
 - **WHEN** a user submits a link for a board that already has jobs in the catalogue
 - **THEN** no contribution row is recorded, no credits are awarded, and the answer names
@@ -53,6 +53,11 @@ not linked to any user SHALL prompt the user to link their account first.
 - **WHEN** a link arrives from a chat not linked to any user
 - **THEN** the bot replies prompting the user to link their account on the site first
 
+#### Scenario: Linked user's board link is recorded and rewarded
+
+- **WHEN** a linked user sends a supported board link to the bot chat
+- **THEN** the board is recorded, the user's AI-credits reward is credited, and the bot replies confirming the new board
+
 ### Requirement: My contributions view
 
 The system SHALL let an authenticated user list their own contributions, newest first,
@@ -85,3 +90,18 @@ second, separately-worded limit for the same budget would let the two drift.
 **Migration**: The per-user hourly budget, its `429` response, and its "no fetch before
 refusing" guarantee are unchanged in behaviour; they are now specified once, on the intake
 endpoint.
+
+#### Scenario: Submissions within the limit are served
+
+- **WHEN** an authenticated user submits fewer contributions than the limit within the window
+- **THEN** every submission is processed as it is today
+
+#### Scenario: Over the limit is refused before any fetch
+
+- **WHEN** an authenticated user exceeds the limit within the window
+- **THEN** the system responds `429`, performs no outbound fetch, and records nothing
+
+#### Scenario: The limit is per user, not per address
+
+- **WHEN** the same user submits from several client IP addresses within one window
+- **THEN** all their submissions count against one shared limit

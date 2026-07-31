@@ -38,3 +38,13 @@ conversation counts as none, and a fresh one is minted.
 
 - **WHEN** the bootstrap responds
 - **THEN** `tailor_cv_id` and `base_cv_id` are random ids, and neither can be derived from the other or from any previously issued id
+
+#### Scenario: The newest non-tailored CV wins
+
+- **WHEN** a user owns several non-tailored CVs
+- **THEN** the bootstrap copies the most recently edited one
+
+#### Scenario: An orphaned tailored copy is not a candidate base
+
+- **WHEN** the user's most recently edited vacancy-less CV is an orphaned tailored copy
+- **THEN** the bootstrap copies a non-tailored CV instead

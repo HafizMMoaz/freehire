@@ -5,20 +5,32 @@ TBD - created by archiving change add-cv-tailoring. Update Purpose after archive
 ## Requirements
 ### Requirement: Tailoring starts a job-bound copy of the base CV
 
-The system SHALL, on a tailoring bootstrap request for a vacancy, create a new CV row bound to
-that vacancy (`cvs.job_id` set) whose document is copied from the user's base CV, and SHALL return
-the tailored CV id, the base CV id, and the cached fit analysis. Both ids SHALL be the CVs'
-unguessable ids. The base CV MUST remain unchanged by the bootstrap, and the tailored CV MUST be
-owner-scoped to the requesting user.
+The system SHALL, on a tailoring bootstrap request for a vacancy, reach exactly ONE tailored CV per
+(user, vacancy): it returns the caller's existing copy for that vacancy when one exists, and
+otherwise creates a new CV row bound to it (`cvs.job_id` set) whose document is copied from the
+user's base CV (`job_id = NULL`). It SHALL return the tailored CV id, the base CV id, and the
+cached fit analysis. Both ids SHALL be the CVs' unguessable ids. The base CV MUST remain unchanged
+by the bootstrap, and the tailored CV MUST be owner-scoped to the requesting user.
 
-The base CV SHALL be the user's most recently edited **non-tailored** CV. A user may own several
-non-tailored CVs, so "the base" is a derived choice among them rather than a unique row; what it
-MUST NOT include is a tailored copy that merely lost its vacancy link.
+Repeating the request MUST also reach the SAME conversation: the workspace is addressed by vacancy,
+not by CV, so a reload re-runs this request, and minting a second conversation would rebind the CV
+and orphan everything already said in the first. A bound session id that no longer resolves to a
+conversation counts as none, and a fresh one is minted.
 
 #### Scenario: Bootstrap creates a tailored copy bound to the vacancy
 
 - **WHEN** a signed-in beta user requests tailoring for a vacancy and already has a base CV
 - **THEN** a new CV is created with `job_id` set to that vacancy, its document equals the base CV's document, and the response returns both ids plus the cached analysis
+
+#### Scenario: Repeating the bootstrap reaches the same CV and conversation
+
+- **WHEN** the bootstrap is requested a second time for the same vacancy
+- **THEN** it returns the CV and the conversation the first request produced, and no second CV, conversation or debit is created
+
+#### Scenario: Another vacancy gets its own copy
+
+- **WHEN** the bootstrap is requested for a different vacancy
+- **THEN** a separate tailored CV is created for it
 
 #### Scenario: The base CV is untouched by bootstrap
 
@@ -295,4 +307,66 @@ different syntax.
 
 - **WHEN** an operation cites evidence recorded as the model's own inference
 - **THEN** the commit is refused and the message says to have the candidate confirm it first
+
+### Requirement: The agent's tailoring context carries the bank's answer per requirement
+
+The tailoring agent's context tool SHALL attach, to every requirement it reports, the evidence the
+candidate's experience bank already holds for it — each piece named by the id a CV edit must cite,
+so the agent knows before it acts which requirements it can evidence and which it must ask about.
+Retrieval MUST be the same scoring the search tool uses, and MUST NOT call a model: it is a scan
+over the caller's own atoms, so attaching it costs a round nobody has to spend.
+
+A requirement the bank has nothing for MUST say so explicitly rather than omit the field, because
+"no evidence" is the answer that decides whether to ask the candidate, and an absent field reads
+as "not looked at".
+
+#### Scenario: A requirement the bank can evidence arrives with its evidence
+
+- **WHEN** the agent reads the tailoring context for a vacancy whose requirement the bank holds evidence for
+- **THEN** that requirement carries the evidence's id and claim, ready to be cited in an edit
+
+#### Scenario: A requirement the bank cannot evidence says so
+
+- **WHEN** a reported requirement has nothing scoring against it in the bank
+- **THEN** it is reported with an empty evidence list rather than with the field left out
+
+#### Scenario: Reading the context calls no model
+
+- **WHEN** the agent reads the tailoring context
+- **THEN** the evidence attached to each requirement comes from local scoring, with no LLM call
+
+### Requirement: The agent's context carries what it can act on, not the narrative
+
+The tailoring context served to the AGENT SHALL carry the vacancy, the verdict and score, and the
+requirements with their evidence — and SHALL NOT carry the per-dimension comments, strengths, gaps
+or recommendation the endpoint serves the page. None of them is something a CV edit can be made
+from, all of them are on the candidate's screen already, and on a measured session they were 3 KB
+of an 11.4 KB result the agent had to carry for the rest of the turn.
+
+#### Scenario: The narrative sections stay with the page
+
+- **WHEN** the agent reads the tailoring context
+- **THEN** the result carries the vacancy, verdict, score and the evidenced requirements, and none of the dimension comments, strengths, gaps or recommendation
+
+#### Scenario: The endpoint is unchanged
+
+- **WHEN** a client reads the tailoring context over HTTP
+- **THEN** it receives the full projection it received before, narrative sections included
+
+### Requirement: The agent reads the posting as text, not as markup
+
+The tailoring context served to the agent SHALL render the vacancy description from stored HTML to
+plain text, and SHALL bound its length, exactly as the vacancy-reading tool already does. The
+posting is the least trusted text in the conversation and the largest; sending it as markup spends
+the turn's context on tags and widens what the model is asked to interpret.
+
+#### Scenario: The description reaches the model without markup
+
+- **WHEN** the agent reads the tailoring context for a vacancy whose stored description is HTML
+- **THEN** the description it receives carries the posting's words and none of its tags
+
+#### Scenario: A very long posting is bounded
+
+- **WHEN** the stored description is longer than the context allows
+- **THEN** it is truncated to the bound rather than sent whole
 
