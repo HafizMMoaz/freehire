@@ -119,17 +119,22 @@ type middleware struct {
 }
 
 // pageParams reads and clamps the shared limit/offset pagination query params.
-// The offset is clamped into int32 range because the column binds as a Postgres
-// int4, and an unbounded query value would otherwise overflow on the conversion.
 func pageParams(c *fiber.Ctx) (limit, offset int) {
-	return pageParamsMax(c, maxLimit)
+	return pageParamsBounded(c, defaultLimit, maxLimit)
 }
 
-// pageParamsMax is pageParams with a caller-supplied limit ceiling, for endpoints
-// whose page is bounded differently than the shared list cap (e.g. the tracking
-// board, which is unpaginated and needs the whole set).
-func pageParamsMax(c *fiber.Ctx, ceiling int) (limit, offset int) {
-	limit = min(max(c.QueryInt("limit", defaultLimit), 1), ceiling)
+// pageParamsBounded is pageParams with caller-supplied bounds, for endpoints whose page is
+// sized differently from the shared list cap (the tracking board, which is unpaginated and
+// needs the whole set; the role-cluster copies list, which pages a handful of city openings).
+//
+// It is the ONLY place the offset query param is read, and a test enforces that. The clamp to
+// MaxInt32 is the reason: every paginated column binds as a Postgres int4, Fiber's QueryInt is
+// a plain strconv.Atoi that happily accepts a 64-bit value, and the int32 conversion then wraps
+// it NEGATIVE — which Postgres rejects, turning ?offset=3000000000 into a 500 rather than an
+// empty page. Naming that in a comment did not stop a second call site re-implementing the
+// parse without it.
+func pageParamsBounded(c *fiber.Ctx, fallback, ceiling int) (limit, offset int) {
+	limit = min(max(c.QueryInt("limit", fallback), 1), ceiling)
 	offset = min(max(c.QueryInt("offset", 0), 0), math.MaxInt32)
 	return limit, offset
 }

@@ -134,7 +134,7 @@ func (h *inboxHandlers) GetInbox(c *fiber.Ctx) error {
 	if q.WithBody {
 		ceiling = harnessPageMax
 	}
-	limit, offset := pageParamsMax(c, ceiling)
+	limit, offset := pageParamsBounded(c, defaultLimit, ceiling)
 	q.Limit, q.Offset = limit, offset
 
 	page, err := h.inbox.Search(c.Context(), userID, q)

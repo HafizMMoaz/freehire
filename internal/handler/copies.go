@@ -36,8 +36,7 @@ func (h *jobsHandlers) JobCopies(c *fiber.Ctx) error {
 		return err
 	}
 
-	limit := min(max(c.QueryInt("limit", defaultCopiesLimit), 1), maxCopiesLimit)
-	offset := max(c.QueryInt("offset", 0), 0)
+	limit, offset := pageParamsBounded(c, defaultCopiesLimit, maxCopiesLimit)
 	rows, err := h.queries.ListRoleClusterCopies(c.Context(), db.ListRoleClusterCopiesParams{
 		JobID:     id,
 		RowLimit:  int32(limit),
