@@ -147,6 +147,12 @@ func (s *dbStore) Save(ctx context.Context, j job.Job) error {
 		// The job-reality signal needs this role's cluster counts; a lookup failure
 		// degrades to a unique role (counts 1) rather than failing the index push.
 		repost, mass := int64(1), int64(1)
+		// Whether to ask for the cluster's geography below. It defaults to true because a
+		// FAILED count must not also suppress the merge: skipping the merge is destructive
+		// (the push replaces the stored union), not conservative, so an unknown cluster
+		// size is a reason to ask rather than a reason to skip. A known singleton is the
+		// only case that can safely skip — its union is its own geography.
+		askGeo := true
 		if c, err := s.q.RoleClusterCount(ctx, db.RoleClusterCountParams{
 			CompanySlug:     saved.Job.CompanySlug,
 			RoleFingerprint: saved.Job.RoleFingerprint,
@@ -154,6 +160,7 @@ func (s *dbStore) Save(ctx context.Context, j job.Job) error {
 			log.Printf("ingest: role-cluster count for job %d: %v", saved.Job.ID, err)
 		} else {
 			repost, mass = c.RepostCount, c.MassCount
+			askGeo = mass > 1
 		}
 		doc, err := search.FromJob(saved.Job)
 		if err != nil {
@@ -161,6 +168,22 @@ func (s *dbStore) Save(ctx context.Context, j job.Job) error {
 		} else {
 			reality := jobview.ClassifyReality(saved.Job, time.Now(), int(repost), int(mass))
 			doc.Reality = &reality
+			// Widen the canon with its cluster's geography. The push is a field-level
+			// document update and the geography facets are always present in the payload,
+			// so skipping this would REPLACE the reindex's union with the canon's own
+			// narrow set and the role would stop being findable by the cities its reposts
+			// hold. mass counts the cluster's open rows: at a known 1 the canon is the only
+			// one, so the union is its own geography and there is nothing to ask for.
+			if askGeo {
+				if g, err := s.q.RoleClusterGeo(ctx, db.RoleClusterGeoParams{
+					CompanySlug:     saved.Job.CompanySlug,
+					RoleFingerprint: saved.Job.RoleFingerprint,
+				}); err != nil {
+					log.Printf("ingest: role-cluster geography for job %d: %v", saved.Job.ID, err)
+				} else {
+					doc.MergeClusterGeography(g.Countries, g.Regions, g.Cities)
+				}
+			}
 			s.indexer.Add(ctx, doc)
 		}
 	}
