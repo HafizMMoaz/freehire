@@ -12,16 +12,12 @@ func TestChooseCompany(t *testing.T) {
 	if got := chooseCompany("Acme Inc", "Role Co", "acme"); got != "Acme Inc" {
 		t.Errorf("api name should win, got %q", got)
 	}
-	// When the prober only echoed the board id back, a seed-provided name is preferred.
-	if got := chooseCompany("acme", "Acme From Role", "acme"); got != "Acme From Role" {
-		t.Errorf("seed name should fill, got %q", got)
-	}
-	// Empty prober name with a seed name uses the seed name.
+	// A platform that publishes no employer name reports "", and the seed's name fills in.
 	if got := chooseCompany("", "Acme From Role", "acme"); got != "Acme From Role" {
 		t.Errorf("seed name should fill empty, got %q", got)
 	}
 	// No usable name anywhere falls back to the board id.
-	if got := chooseCompany("acme", "", "acme"); got != "acme" {
+	if got := chooseCompany("", "", "acme"); got != "acme" {
 		t.Errorf("should fall back to board, got %q", got)
 	}
 }

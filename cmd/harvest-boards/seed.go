@@ -37,11 +37,12 @@ func loadSeedItems(path string) ([]seedItem, error) {
 	return items, nil
 }
 
-// chooseCompany picks the board entry's company label. The prober's API-reported name wins
-// when it is a real name (not just the board id echoed back by the slug fallback); otherwise
-// a seed-supplied company fills in, and the board id is the last resort.
+// chooseCompany picks the board entry's company label. A prober returns "" when the platform
+// publishes no employer name of its own (the contract every prober follows), so a non-empty
+// name is always the platform's own and wins; otherwise a seed-supplied company fills in, and
+// the board id is the last resort.
 func chooseCompany(proberName, seedCompany, board string) string {
-	if proberName != "" && proberName != board {
+	if proberName != "" {
 		return proberName
 	}
 	if seedCompany != "" {
