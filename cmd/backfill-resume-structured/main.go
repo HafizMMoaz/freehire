@@ -24,13 +24,12 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/strelov1/freehire/internal/blobstore"
-	"github.com/strelov1/freehire/internal/config"
-	"github.com/strelov1/freehire/internal/database"
 	"github.com/strelov1/freehire/internal/db"
 	"github.com/strelov1/freehire/internal/llm"
 	"github.com/strelov1/freehire/internal/pii"
 	"github.com/strelov1/freehire/internal/resume"
 	"github.com/strelov1/freehire/internal/resumeextract"
+	"github.com/strelov1/freehire/internal/worker"
 )
 
 // extractTimeout bounds a single structured-extraction LLM call, matching the on-upload
@@ -38,20 +37,25 @@ import (
 const extractTimeout = 120 * time.Second
 
 func main() {
+	worker.Main(run)
+}
+
+// run holds the whole worker so every exit is a return value rather than a log.Fatal:
+// os.Exit runs no deferred function, so a fatal after the Langfuse flush is registered
+// would drop the traces for the run that failed.
+func run() int {
 	var userID int64
 	var dryRun bool
 	flag.Int64Var(&userID, "user", 0, "backfill a single user id (0 = every eligible user)")
 	flag.BoolVar(&dryRun, "dry-run", false, "list eligible users without extracting or persisting")
 	flag.Parse()
 
-	cfg := config.Load()
-	ctx := context.Background()
-
-	pool, err := database.Connect(ctx, cfg.DatabaseURL)
+	ctx, cfg, pool, cleanup, err := worker.Bootstrap(context.Background())
 	if err != nil {
-		log.Fatalf("database: %v", err)
+		log.Printf("database: %v", err)
+		return 1
 	}
-	defer pool.Close()
+	defer cleanup()
 	queries := db.New(pool)
 
 	blobStore, err := blobstore.New(blobstore.Config{
@@ -61,10 +65,12 @@ func main() {
 		SecretKey: cfg.S3SecretKey,
 	})
 	if err != nil {
-		log.Fatalf("blobstore: %v", err)
+		log.Printf("blobstore: %v", err)
+		return 1
 	}
 	if blobStore == nil {
-		log.Fatal("backfill-resume-structured: résumé storage (S3_*) is not configured")
+		log.Print("backfill-resume-structured: résumé storage (S3_*) is not configured")
+		return 1
 	}
 
 	llmClient, llmFlush, err := llm.NewClient(llm.Settings{
@@ -76,17 +82,20 @@ func main() {
 		LangfuseSecretKey: cfg.LangfuseSecretKey,
 	}, "resume-structured")
 	if err != nil {
-		log.Fatalf("llm: %v", err)
+		log.Printf("llm: %v", err)
+		return 1
 	}
 	defer llmFlush()
 	if llmClient == nil {
-		log.Fatal("backfill-resume-structured: LLM (LLM_*) is not configured")
+		log.Print("backfill-resume-structured: LLM (LLM_*) is not configured")
+		return 1
 	}
 
 	// The extractor de-identifies each CV before it reaches the LLM; without the detector it
 	// would be fail-closed (a no-op), so a backfill run without it is pointless — require it.
 	if cfg.PIIFilterURL == "" {
-		log.Fatal("backfill-resume-structured: PII_FILTER_URL is not configured")
+		log.Print("backfill-resume-structured: PII_FILTER_URL is not configured")
+		return 1
 	}
 	piiDetector := pii.NewHTTPDetector(cfg.PIIFilterURL, nil)
 
@@ -105,7 +114,8 @@ func main() {
 		       OR resume_structured_uploaded_at IS DISTINCT FROM resume_uploaded_at)
 		ORDER BY id`, userID)
 	if err != nil {
-		log.Fatalf("query eligible users: %v", err)
+		log.Printf("query eligible users: %v", err)
+		return 1
 	}
 	type target struct {
 		id         int64
@@ -117,19 +127,31 @@ func main() {
 		var uploadedAt pgtype.Timestamptz
 		if err := rows.Scan(&id, &uploadedAt); err != nil {
 			rows.Close()
-			log.Fatalf("scan: %v", err)
+			log.Printf("scan: %v", err)
+			return 1
 		}
 		targets = append(targets, target{id: id, uploadedAt: uploadedAt.Time})
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		log.Fatalf("iterate: %v", err)
+		log.Printf("iterate: %v", err)
+		return 1
 	}
 
 	log.Printf("backfill-resume-structured: %d eligible user(s)%s", len(targets), dryRunSuffix(dryRun))
 
 	var ok, failed int
-	for _, t := range targets {
+	var cancelled bool
+	for i, t := range targets {
+		// The root context is signal-bound, so a redeploy's SIGTERM cancels it mid-run.
+		// Without this the loop would run to the end of the list turning every remaining
+		// user into a logged failure, reporting one cancellation as a fleet of them.
+		if ctx.Err() != nil {
+			log.Printf("backfill-resume-structured: cancelled — %d user(s) left unprocessed; the worker "+
+				"is idempotent, so re-running finishes them", len(targets)-i)
+			cancelled = true
+			break
+		}
 		text, err := store.Text(ctx, t.id)
 		if err != nil {
 			log.Printf("user %d: read CV text: %v", t.id, err)
@@ -159,6 +181,10 @@ func main() {
 		ok++
 	}
 	log.Printf("backfill-resume-structured: done — %d succeeded, %d failed", ok, failed)
+	if cancelled {
+		return 1
+	}
+	return worker.ExitCode(failed, 0)
 }
 
 func dryRunSuffix(dry bool) string {
