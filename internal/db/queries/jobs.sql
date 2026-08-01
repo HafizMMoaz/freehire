@@ -611,6 +611,7 @@ INSERT INTO jobs (
     public_slug, countries, regions, cities, work_mode, skills, seniority, category, is_tech,
     posting_language, employment_type, education_level, english_level, experience_years_min,
     salary_min_manual, salary_max_manual, salary_currency_manual, salary_period_manual, enrichment,
+    content_hash, role_fingerprint,
     created_by
 ) VALUES (
     sqlc.arg(source), sqlc.arg(external_id), sqlc.arg(url), sqlc.arg(title),
@@ -634,6 +635,7 @@ INSERT INTO jobs (
         ))
         ELSE '{}'::jsonb
     END,
+    sqlc.arg(content_hash), sqlc.arg(role_fingerprint),
     sqlc.arg(created_by)::bigint
 )
 ON CONFLICT (source, external_id) DO UPDATE SET
@@ -662,6 +664,11 @@ ON CONFLICT (source, external_id) DO UPDATE SET
     salary_max_manual      = EXCLUDED.salary_max_manual,
     salary_currency_manual = EXCLUDED.salary_currency_manual,
     salary_period_manual   = EXCLUDED.salary_period_manual,
+    -- A re-create rewrites the content, so both derived columns move with it (see
+    -- UpsertJob): content_hash is what makes a later edit re-embed, role_fingerprint
+    -- what lets a hand-curated posting cluster with the crawled copy of its role.
+    content_hash     = EXCLUDED.content_hash,
+    role_fingerprint = EXCLUDED.role_fingerprint,
     -- Overlay the (possibly changed) manual salary onto the existing enrichment so a
     -- re-create reflects it immediately while preserving any prior LLM enrichment.
     enrichment = CASE
@@ -724,6 +731,12 @@ SET title        = sqlc.arg(title),
     education_level      = sqlc.arg(education_level),
     english_level        = sqlc.arg(english_level),
     experience_years_min = sqlc.arg(experience_years_min),
+    -- The edit re-derives the facets from the edited content, so both derived columns
+    -- move with it. content_hash is what makes the edit re-embed at all: the trigger is
+    -- `semantic_embedded_hash IS DISTINCT FROM content_hash`, so leaving the stored hash
+    -- behind would freeze the vector on the pre-edit text.
+    content_hash     = sqlc.arg(content_hash),
+    role_fingerprint = sqlc.arg(role_fingerprint),
     updated_by   = sqlc.arg(updated_by)::bigint,
     updated_at   = now()
 WHERE public_slug = sqlc.arg(public_slug) AND created_by IS NOT NULL

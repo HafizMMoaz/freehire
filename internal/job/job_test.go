@@ -3,6 +3,7 @@ package job_test
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/strelov1/freehire/internal/job"
 	"github.com/strelov1/freehire/internal/jobderive"
@@ -175,5 +176,157 @@ func TestNew_NoManualSalaryByDefault(t *testing.T) {
 	}
 	if j.Fields().ManualSalary != nil {
 		t.Errorf("ManualSalary = %v, want nil (none supplied)", j.Fields().ManualSalary)
+	}
+}
+
+// The write mapping owns every derived column a persisted posting carries. A write
+// path cannot omit the content fingerprint or the role fingerprint by forgetting a
+// step, because there is no step to forget.
+func TestUpsertParams_FillsDerivedColumns(t *testing.T) {
+	j, err := job.New(job.Draft{Input: jobderive.Input{
+		Source:      "manual",
+		ExternalID:  "https://acme.example/jobs/1",
+		Title:       "Senior Go Developer",
+		Company:     "Acme",
+		Description: "We use Golang.",
+	}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	params := j.Fields().UpsertParams()
+
+	if !params.ContentHash.Valid || params.ContentHash.String == "" {
+		t.Errorf("ContentHash = %v, want a fingerprint", params.ContentHash)
+	}
+	if !params.RoleFingerprint.Valid || params.RoleFingerprint.String == "" {
+		t.Errorf("RoleFingerprint = %v, want a fingerprint", params.RoleFingerprint)
+	}
+}
+
+// The two derived columns answer different questions, and posted_at is what separates
+// them: content_hash fingerprints the indexed content (posted_at included, so a
+// re-ingest with a bumped date counts as changed), while role_fingerprint is the role
+// IDENTITY and deliberately excludes it, so a repost still clusters with its original.
+func TestUpsertParams_PostedAtMovesContentHashButNotRoleFingerprint(t *testing.T) {
+	draft := func(postedAt *time.Time) job.Draft {
+		return job.Draft{
+			Input: jobderive.Input{
+				Source:      "manual",
+				ExternalID:  "https://acme.example/jobs/1",
+				Title:       "Senior Go Developer",
+				Company:     "Acme",
+				Description: "We use Golang.",
+			},
+			PostedAt: postedAt,
+		}
+	}
+	earlier := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	later := time.Date(2026, 4, 5, 6, 7, 8, 0, time.UTC)
+
+	first, err := job.New(draft(&earlier))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	second, err := job.New(draft(&later))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	a, b := first.Fields().UpsertParams(), second.Fields().UpsertParams()
+
+	if a.ContentHash.String == b.ContentHash.String {
+		t.Errorf("ContentHash unchanged across posted_at = %q; the hash does not cover the posted time actually written", a.ContentHash.String)
+	}
+	if a.RoleFingerprint.String != b.RoleFingerprint.String {
+		t.Errorf("RoleFingerprint = %q and %q; the role identity must not move with posted_at", a.RoleFingerprint.String, b.RoleFingerprint.String)
+	}
+}
+
+// A posting carries the same two fingerprints for the same content whatever wrote it:
+// the moderator mapping and the automated one share one computation, so a hand-curated
+// vacancy is comparable with the crawled copy of the same role rather than sitting
+// outside clustering with NULL columns.
+func TestUpsertManualParams_DerivedColumnsMatchTheAutomatedMapping(t *testing.T) {
+	j, err := job.New(job.Draft{Input: jobderive.Input{
+		Source:      "workatastartup",
+		ExternalID:  "https://acme.example/jobs/1",
+		Title:       "Senior Go Developer",
+		Company:     "Acme",
+		Location:    "Berlin",
+		Description: "We use Golang.",
+	}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	f := j.Fields()
+
+	automated := f.UpsertParams()
+	moderator := f.UpsertManualParams(7)
+
+	if moderator.ContentHash != automated.ContentHash {
+		t.Errorf("ContentHash = %v, want %v", moderator.ContentHash, automated.ContentHash)
+	}
+	if moderator.RoleFingerprint != automated.RoleFingerprint {
+		t.Errorf("RoleFingerprint = %v, want %v", moderator.RoleFingerprint, automated.RoleFingerprint)
+	}
+}
+
+// The moderator edit is the write that MUST move the fingerprints: re-deriving facets
+// from edited content is exactly when they change. A stale content_hash would leave
+// `semantic_embedded_hash IS DISTINCT FROM content_hash` false, freezing the vector on
+// the pre-edit text.
+func TestUpdateManualParams_EditedContentMovesTheContentHash(t *testing.T) {
+	fields := func(description string) job.Fields {
+		j, err := job.New(job.Draft{Input: jobderive.Input{
+			Source:      "manual",
+			ExternalID:  "https://acme.example/jobs/1",
+			Title:       "Senior Go Developer",
+			Company:     "Acme",
+			Description: description,
+		}})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		return j.Fields()
+	}
+
+	before := fields("We use Golang.").UpdateManualParams("acme-senior-go-developer", 7)
+	after := fields("We use Golang and PostgreSQL.").UpdateManualParams("acme-senior-go-developer", 7)
+
+	if before.ContentHash == after.ContentHash {
+		t.Errorf("ContentHash unchanged across an edited description = %q", before.ContentHash.String)
+	}
+}
+
+// The edit mapping addresses the row by public slug and stamps the acting moderator,
+// and its derived columns agree with every other write path's for the same content.
+func TestUpdateManualParams_CarriesSlugActorAndDerivedColumns(t *testing.T) {
+	j, err := job.New(job.Draft{Input: jobderive.Input{
+		Source:      "manual",
+		ExternalID:  "https://acme.example/jobs/1",
+		Title:       "Senior Go Developer",
+		Company:     "Acme",
+		Description: "We use Golang.",
+	}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	f := j.Fields()
+
+	params := f.UpdateManualParams("acme-senior-go-developer", 7)
+	automated := f.UpsertParams()
+
+	if params.PublicSlug != "acme-senior-go-developer" {
+		t.Errorf("PublicSlug = %q", params.PublicSlug)
+	}
+	if params.UpdatedBy != 7 {
+		t.Errorf("UpdatedBy = %d, want 7", params.UpdatedBy)
+	}
+	if params.Title != f.Title || params.Description != f.Description {
+		t.Errorf("content = %q/%q", params.Title, params.Description)
+	}
+	if params.ContentHash != automated.ContentHash || params.RoleFingerprint != automated.RoleFingerprint {
+		t.Errorf("derived = %v/%v, want %v/%v", params.ContentHash, params.RoleFingerprint, automated.ContentHash, automated.RoleFingerprint)
 	}
 }

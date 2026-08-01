@@ -14,7 +14,7 @@ import (
 	"github.com/strelov1/freehire/internal/enrich"
 	"github.com/strelov1/freehire/internal/job"
 	"github.com/strelov1/freehire/internal/jobderive"
-	"github.com/strelov1/freehire/internal/jobhash"
+	"github.com/strelov1/freehire/internal/pgconv"
 	"github.com/strelov1/freehire/internal/telegram"
 	"github.com/strelov1/freehire/internal/vocab"
 )
@@ -38,16 +38,15 @@ func buildParams(source, externalID, url, title, company, loc string, remote boo
 		},
 		URL:    url,
 		Remote: remote,
+		// The Telegram post's timestamp is the posting's source posted time. It rides
+		// the draft rather than being written over the mapped params, so the derived
+		// columns fingerprint the posted_at that is actually stored.
+		PostedAt: pgconv.TimePtr(postedAt),
 	})
 	if err != nil {
 		return db.UpsertJobParams{}, err
 	}
-	params := j.Fields().UpsertParams()
-	// posted_at is supplied by the caller (the Telegram post's timestamp), not carried
-	// on the job draft, so it is set over the aggregate-derived (NULL) value here.
-	params.PostedAt = postedAt
-	params.RoleFingerprint = pgtype.Text{String: jobhash.RoleFingerprint(params), Valid: true}
-	return params, nil
+	return j.Fields().UpsertParams(), nil
 }
 
 // maxAttempts is the retry budget per post: the first failure leaves the post

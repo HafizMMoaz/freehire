@@ -2263,9 +2263,15 @@ SET title        = $1,
     education_level      = $18,
     english_level        = $19,
     experience_years_min = $20,
-    updated_by   = $21::bigint,
+    -- The edit re-derives the facets from the edited content, so both derived columns
+    -- move with it. content_hash is what makes the edit re-embed at all: the trigger is
+    -- ` + "`" + `semantic_embedded_hash IS DISTINCT FROM content_hash` + "`" + `, so leaving the stored hash
+    -- behind would freeze the vector on the pre-edit text.
+    content_hash     = $21,
+    role_fingerprint = $22,
+    updated_by   = $23::bigint,
     updated_at   = now()
-WHERE public_slug = $22 AND created_by IS NOT NULL
+WHERE public_slug = $24 AND created_by IS NOT NULL
 RETURNING id, source, external_id, url, title, company, location, remote, description, posted_at, created_at, updated_at, company_slug, enrichment, enriched_at, enrichment_version, public_slug, last_seen_at, closed_at, countries, regions, work_mode, liveness_strikes, skills, seniority, category, created_by, updated_by, posting_language, employment_type, education_level, experience_years_min, collections, content_hash, english_level, cities, view_count, applied_count, role_fingerprint, semantic_embedded_model, semantic_embedded_hash, duplicate_of, is_tech, semantic_embedding, salary_min_manual, salary_max_manual, salary_currency_manual, salary_period_manual, upvote_count, downvote_count, ats_absent_at
 `
 
@@ -2290,6 +2296,8 @@ type UpdateManualJobParams struct {
 	EducationLevel     string             `json:"education_level"`
 	EnglishLevel       string             `json:"english_level"`
 	ExperienceYearsMin pgtype.Int4        `json:"experience_years_min"`
+	ContentHash        pgtype.Text        `json:"content_hash"`
+	RoleFingerprint    pgtype.Text        `json:"role_fingerprint"`
 	UpdatedBy          int64              `json:"updated_by"`
 	PublicSlug         string             `json:"public_slug"`
 }
@@ -2328,6 +2336,8 @@ func (q *Queries) UpdateManualJob(ctx context.Context, arg UpdateManualJobParams
 		arg.EducationLevel,
 		arg.EnglishLevel,
 		arg.ExperienceYearsMin,
+		arg.ContentHash,
+		arg.RoleFingerprint,
 		arg.UpdatedBy,
 		arg.PublicSlug,
 	)
@@ -2619,6 +2629,7 @@ INSERT INTO jobs (
     public_slug, countries, regions, cities, work_mode, skills, seniority, category, is_tech,
     posting_language, employment_type, education_level, english_level, experience_years_min,
     salary_min_manual, salary_max_manual, salary_currency_manual, salary_period_manual, enrichment,
+    content_hash, role_fingerprint,
     created_by
 ) VALUES (
     $1, $2, $3, $4,
@@ -2642,7 +2653,8 @@ INSERT INTO jobs (
         ))
         ELSE '{}'::jsonb
     END,
-    $29::bigint
+    $29, $30,
+    $31::bigint
 )
 ON CONFLICT (source, external_id) DO UPDATE SET
     url          = EXCLUDED.url,
@@ -2670,6 +2682,11 @@ ON CONFLICT (source, external_id) DO UPDATE SET
     salary_max_manual      = EXCLUDED.salary_max_manual,
     salary_currency_manual = EXCLUDED.salary_currency_manual,
     salary_period_manual   = EXCLUDED.salary_period_manual,
+    -- A re-create rewrites the content, so both derived columns move with it (see
+    -- UpsertJob): content_hash is what makes a later edit re-embed, role_fingerprint
+    -- what lets a hand-curated posting cluster with the crawled copy of its role.
+    content_hash     = EXCLUDED.content_hash,
+    role_fingerprint = EXCLUDED.role_fingerprint,
     -- Overlay the (possibly changed) manual salary onto the existing enrichment so a
     -- re-create reflects it immediately while preserving any prior LLM enrichment.
     enrichment = CASE
@@ -2682,7 +2699,7 @@ ON CONFLICT (source, external_id) DO UPDATE SET
         ))
         ELSE jobs.enrichment
     END,
-    updated_by   = $30::bigint,
+    updated_by   = $32::bigint,
     -- A moderator re-create reopens the job; reset the strike count too so the
     -- two-strike liveness grace survives a reopen (see UpsertJob).
     closed_at    = NULL,
@@ -2720,6 +2737,8 @@ type UpsertManualJobParams struct {
 	SalaryMaxManual      pgtype.Int4        `json:"salary_max_manual"`
 	SalaryCurrencyManual string             `json:"salary_currency_manual"`
 	SalaryPeriodManual   string             `json:"salary_period_manual"`
+	ContentHash          pgtype.Text        `json:"content_hash"`
+	RoleFingerprint      pgtype.Text        `json:"role_fingerprint"`
 	CreatedBy            int64              `json:"created_by"`
 	UpdatedBy            int64              `json:"updated_by"`
 }
@@ -2767,6 +2786,8 @@ func (q *Queries) UpsertManualJob(ctx context.Context, arg UpsertManualJobParams
 		arg.SalaryMaxManual,
 		arg.SalaryCurrencyManual,
 		arg.SalaryPeriodManual,
+		arg.ContentHash,
+		arg.RoleFingerprint,
 		arg.CreatedBy,
 		arg.UpdatedBy,
 	)
