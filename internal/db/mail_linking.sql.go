@@ -123,6 +123,102 @@ func (q *Queries) LinkEmailToJob(ctx context.Context, arg LinkEmailToJobParams) 
 	return result.RowsAffected(), nil
 }
 
+const listEmailsForRecall = `-- name: ListEmailsForRecall :many
+SELECT id, from_addr, from_name, subject, body_text, body_html, received_at, ical_uid
+FROM emails
+WHERE user_id = $1
+  AND deleted_at IS NULL
+  AND job_id IS NULL
+  AND application_id IS NULL
+  AND received_at >= $2
+  AND received_at < $3
+ORDER BY received_at ASC, id ASC
+LIMIT $4
+`
+
+type ListEmailsForRecallParams struct {
+	UserID int64              `json:"user_id"`
+	Since  pgtype.Timestamptz `json:"since"`
+	Until  pgtype.Timestamptz `json:"until"`
+	Lim    int32              `json:"lim"`
+}
+
+type ListEmailsForRecallRow struct {
+	ID         int64              `json:"id"`
+	FromAddr   string             `json:"from_addr"`
+	FromName   string             `json:"from_name"`
+	Subject    string             `json:"subject"`
+	BodyText   string             `json:"body_text"`
+	BodyHtml   string             `json:"body_html"`
+	ReceivedAt pgtype.Timestamptz `json:"received_at"`
+	IcalUid    string             `json:"ical_uid"`
+}
+
+// The net for the pull direction: from an application, the caller's mail that might
+// belong to it. Mail attached to nothing, inside a window around the application's
+// recorded date, OLDEST first, bounded.
+//
+// The order and the closing edge are one decision with the cap, not three. Newest-first
+// over an open-ended window spends the forty candidates on a busy mailbox's most recent
+// mail, so a three-month-old application never shows the model the acknowledgement that
+// proves it — the button answers "nothing found" on exactly the applications people press
+// it for. Oldest-first inside a closed window makes the cap trim the far tail instead.
+//
+// It filters on attachment state and time and NOT on the employer's name, which is the
+// one thing a reader expects to find here. Two measurements say not to. The name is
+// absent from the message body in 16 of 99 confirmed-correct links on a live mailbox —
+// recruiters routinely write without naming the employer — and body_text is EMPTY for
+// HTML-only senders (Gem, Ashby, Greenhouse), so an ILIKE over it is blind exactly where
+// the recruiting mail is. The narrowing is the caller's to do with the readable body.
+//
+// Unattached means BOTH columns are null, and it takes both to say it. A message can
+// hold job_id with application_id still NULL: the matcher is offered saved-only jobs
+// (ListUserApplicationsForMatch admits uj.saved_at), SetEmailClassification then derives
+// an application that does not exist yet and leaves it NULL, and MarkJobApplied never
+// goes back to repair the mail — only cmd/backfill-applications does, and it is a
+// one-shot. Testing application_id alone would let that message into the net and end in a
+// confirm that RE-LINKS it, which this change declared out of scope.
+//
+// What remains admitted is the mail nothing has claimed and the mail carrying an
+// unconfirmed suggestion — the second being the very case the button exists to fix.
+//
+// A query of its own rather than new parameters on ListEmails, which serves the web
+// inbox and seven assistant tools: one shared statement grown for one reader is how the
+// two drift.
+func (q *Queries) ListEmailsForRecall(ctx context.Context, arg ListEmailsForRecallParams) ([]ListEmailsForRecallRow, error) {
+	rows, err := q.db.Query(ctx, listEmailsForRecall,
+		arg.UserID,
+		arg.Since,
+		arg.Until,
+		arg.Lim,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListEmailsForRecallRow{}
+	for rows.Next() {
+		var i ListEmailsForRecallRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.FromAddr,
+			&i.FromName,
+			&i.Subject,
+			&i.BodyText,
+			&i.BodyHtml,
+			&i.ReceivedAt,
+			&i.IcalUid,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listJobEmails = `-- name: ListJobEmails :many
 SELECT id, source, from_addr, from_name, subject, status_signal, link_source,
     received_at, (read_at IS NOT NULL)::boolean AS read
@@ -194,6 +290,55 @@ type RejectEmailLinkParams struct {
 // Dismiss a suggestion without linking.
 func (q *Queries) RejectEmailLink(ctx context.Context, arg RejectEmailLinkParams) (int64, error) {
 	result, err := q.db.Exec(ctx, rejectEmailLink, arg.ID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const suggestJobForEmail = `-- name: SuggestJobForEmail :execrows
+UPDATE emails
+SET suggested_job_id = $1::bigint,
+    match_confidence = $2::real
+WHERE id = $3 AND user_id = $4
+  AND job_id IS NULL AND application_id IS NULL AND deleted_at IS NULL
+`
+
+type SuggestJobForEmailParams struct {
+	SuggestedJobID int64   `json:"suggested_job_id"`
+	Confidence     float32 `json:"confidence"`
+	ID             int64   `json:"id"`
+	UserID         int64   `json:"user_id"`
+}
+
+// Record one message as belonging to a job the caller named, as a SUGGESTION they still
+// confirm. It is the only write the recall path makes.
+//
+// It names a JOB, like LinkEmailToJob and like the column it writes: the application is
+// what ConfirmEmailLink derives when the caller accepts.
+//
+// The two IS NULL predicates are the guard, not an optimisation: a linked message stays
+// unreachable from here even if the net, the model and the service layer went wrong at
+// once. Keep them in the statement — a check in Go is a check the next caller can skip —
+// and keep BOTH, for the reason ListEmailsForRecall spells out above. Clobbering
+// match_confidence is the concrete harm: it belongs to the LINK, so writing it here
+// would restate how sure somebody was about a link this statement did not make.
+//
+// The cast is load-bearing. suggested_job_id is nullable, so sqlc.arg alone yields a
+// nullable parameter, and a zero-value one would CLEAR the suggestion while reporting a
+// row changed. This statement never clears — that is RejectEmailLink — so the mistake is
+// made unrepresentable rather than documented.
+//
+// An unconfirmed suggestion naming a different job is overwritten. The caller asked
+// about this application explicitly, suggested_job_id holds one value, and a proposal
+// nobody has confirmed costs nothing to lose.
+func (q *Queries) SuggestJobForEmail(ctx context.Context, arg SuggestJobForEmailParams) (int64, error) {
+	result, err := q.db.Exec(ctx, suggestJobForEmail,
+		arg.SuggestedJobID,
+		arg.Confidence,
+		arg.ID,
+		arg.UserID,
+	)
 	if err != nil {
 		return 0, err
 	}

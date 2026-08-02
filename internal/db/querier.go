@@ -1350,6 +1350,38 @@ type Querier interface {
 	// snippet already detoasts body_text, so the extra column costs no extra read;
 	// it is guarded only to keep the web inbox's payload small.
 	ListEmails(ctx context.Context, arg ListEmailsParams) ([]ListEmailsRow, error)
+	// The net for the pull direction: from an application, the caller's mail that might
+	// belong to it. Mail attached to nothing, inside a window around the application's
+	// recorded date, OLDEST first, bounded.
+	//
+	// The order and the closing edge are one decision with the cap, not three. Newest-first
+	// over an open-ended window spends the forty candidates on a busy mailbox's most recent
+	// mail, so a three-month-old application never shows the model the acknowledgement that
+	// proves it — the button answers "nothing found" on exactly the applications people press
+	// it for. Oldest-first inside a closed window makes the cap trim the far tail instead.
+	//
+	// It filters on attachment state and time and NOT on the employer's name, which is the
+	// one thing a reader expects to find here. Two measurements say not to. The name is
+	// absent from the message body in 16 of 99 confirmed-correct links on a live mailbox —
+	// recruiters routinely write without naming the employer — and body_text is EMPTY for
+	// HTML-only senders (Gem, Ashby, Greenhouse), so an ILIKE over it is blind exactly where
+	// the recruiting mail is. The narrowing is the caller's to do with the readable body.
+	//
+	// Unattached means BOTH columns are null, and it takes both to say it. A message can
+	// hold job_id with application_id still NULL: the matcher is offered saved-only jobs
+	// (ListUserApplicationsForMatch admits uj.saved_at), SetEmailClassification then derives
+	// an application that does not exist yet and leaves it NULL, and MarkJobApplied never
+	// goes back to repair the mail — only cmd/backfill-applications does, and it is a
+	// one-shot. Testing application_id alone would let that message into the net and end in a
+	// confirm that RE-LINKS it, which this change declared out of scope.
+	//
+	// What remains admitted is the mail nothing has claimed and the mail carrying an
+	// unconfirmed suggestion — the second being the very case the button exists to fix.
+	//
+	// A query of its own rather than new parameters on ListEmails, which serves the web
+	// inbox and seven assistant tools: one shared statement grown for one reader is how the
+	// two drift.
+	ListEmailsForRecall(ctx context.Context, arg ListEmailsForRecallParams) ([]ListEmailsForRecallRow, error)
 	// Every atom the caller owns. Retrieval reads the whole set and scores it in Go: a
 	// requirement can match on skills OR on text alone, so there is no prefilter that would not
 	// drop real evidence. Ordered by employment so a consumer can group without a second pass.
@@ -2405,6 +2437,28 @@ type Querier interface {
 	// self-corrects on the next real change, so this is accepted over threading the exact
 	// embedded hash through a nullable text[] per batch.
 	StampSemanticEmbeddedBatch(ctx context.Context, arg StampSemanticEmbeddedBatchParams) error
+	// Record one message as belonging to a job the caller named, as a SUGGESTION they still
+	// confirm. It is the only write the recall path makes.
+	//
+	// It names a JOB, like LinkEmailToJob and like the column it writes: the application is
+	// what ConfirmEmailLink derives when the caller accepts.
+	//
+	// The two IS NULL predicates are the guard, not an optimisation: a linked message stays
+	// unreachable from here even if the net, the model and the service layer went wrong at
+	// once. Keep them in the statement — a check in Go is a check the next caller can skip —
+	// and keep BOTH, for the reason ListEmailsForRecall spells out above. Clobbering
+	// match_confidence is the concrete harm: it belongs to the LINK, so writing it here
+	// would restate how sure somebody was about a link this statement did not make.
+	//
+	// The cast is load-bearing. suggested_job_id is nullable, so sqlc.arg alone yields a
+	// nullable parameter, and a zero-value one would CLEAR the suggestion while reporting a
+	// row changed. This statement never clears — that is RejectEmailLink — so the mistake is
+	// made unrepresentable rather than documented.
+	//
+	// An unconfirmed suggestion naming a different job is overwritten. The caller asked
+	// about this application explicitly, suggested_job_id holds one value, and a proposal
+	// nobody has confirmed costs nothing to lose.
+	SuggestJobForEmail(ctx context.Context, arg SuggestJobForEmailParams) (int64, error)
 	// The per-company slice of the cross-source aggregator suppression. An open aggregator
 	// posting is marked duplicate_of an open CANONICAL ATS (non-aggregator) posting of the
 	// same company, equal normalized title, and compatible country (countries overlap, or
