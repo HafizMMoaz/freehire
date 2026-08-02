@@ -61,7 +61,7 @@
 {#if visible}
   <div
     role="complementary"
-    aria-label="Support freehire"
+    aria-label="Support freehire.me"
     class={cn(
       'fixed inset-x-4 bottom-4 z-30 rounded-lg border border-border bg-background/95 px-4 py-3 shadow-lg backdrop-blur sm:inset-x-auto sm:right-4 sm:max-w-md',
       // The job page anchors its Apply button to the same corner on the same layer below
@@ -71,10 +71,14 @@
     )}
   >
     <div class="flex items-start gap-3">
-      <p class="min-w-0 flex-1 text-sm text-muted-foreground">
-        <span class="font-medium text-foreground">freehire is open source.</span>
-        Stars are how people find it.
-      </p>
+      <!-- Two lines, not one wrapping paragraph. At phone width the single
+           paragraph broke after "find", leaving "it." alone on the second line;
+           stacking the sentences makes the break a layout decision instead of a
+           consequence of the string's length. -->
+      <div class="min-w-0 flex-1 text-sm">
+        <p class="font-medium text-foreground">freehire.me is open source.</p>
+        <p class="text-muted-foreground">Stars are how people find it.</p>
+      </div>
 
       <button
         type="button"
