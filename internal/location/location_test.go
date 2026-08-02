@@ -384,9 +384,39 @@ func TestParseCyrillic(t *testing.T) {
 			want:     Geo{Countries: []string{"ua"}, Regions: []string{"eu"}, Cities: []string{"Kyiv"}},
 		},
 		{
+			name:     "Ukrainian spelling Львів maps to Ukraine / eu",
+			location: "Львів",
+			want:     Geo{Countries: []string{"ua"}, Regions: []string{"eu"}, Cities: []string{"Lviv"}},
+		},
+		{
+			name:     "Russian spelling Харьков maps to Ukraine / eu",
+			location: "Харьков",
+			want:     Geo{Countries: []string{"ua"}, Regions: []string{"eu"}, Cities: []string{"Kharkiv"}},
+		},
+		{
+			name:     "Latin Lviv maps to Ukraine / eu without a country token",
+			location: "Lviv",
+			want:     Geo{Countries: []string{"ua"}, Regions: []string{"eu"}, Cities: []string{"Lviv"}},
+		},
+		{
+			name:     "Ukrainian spelling of the country yields the code without a city",
+			location: "Україна",
+			want:     Geo{Countries: []string{"ua"}, Regions: []string{"eu"}},
+		},
+		{
+			name:     "Ukrainian city marker м. is stripped like the Russian г.",
+			location: "м. Львів",
+			want:     Geo{Countries: []string{"ua"}, Regions: []string{"eu"}, Cities: []string{"Lviv"}},
+		},
+		{
 			name:     "city starting with г is not mistaken for the marker",
 			location: "Грозный",
 			want:     Geo{Cities: []string{"Grozny"}},
+		},
+		{
+			name:     "city starting with м is not mistaken for the marker",
+			location: "Мурманск",
+			want:     Geo{Countries: []string{"ru"}, Regions: []string{"cis"}, Cities: []string{"Murmansk"}},
 		},
 	}
 
