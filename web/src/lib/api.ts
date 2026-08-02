@@ -260,17 +260,41 @@ export function createApi(
   fetchImpl: typeof fetch = fetch,
   baseUrl = '',
   defaultHeaders: Record<string, string> = {},
+  /** Abort a call that has not answered within this many milliseconds. Set by the
+   *  SERVER client only (see `$lib/server/api`): a `load` that never finishes holds
+   *  its socket open forever, and enough of those fill the accept queue and take the
+   *  whole SSR process down. The browser client leaves this unset — it drives the
+   *  LLM-backed calls, which legitimately run for minutes. */
+  timeoutMs?: number,
 ) {
   /** The single place this module touches fetch. Always sends credentials so the
    *  auth cookie rides along, and turns a non-2xx into an ApiError. `defaultHeaders`
    *  lets a server caller forward the request's Cookie to an absolute API URL
    *  (where `event.fetch` would not). */
   async function call(path: string, init?: RequestInit): Promise<Response> {
-    const res = await fetchImpl(`${baseUrl}${path}`, {
+    const request: RequestInit = {
       credentials: 'include',
       ...init,
       headers: { ...defaultHeaders, ...init?.headers },
-    });
+    };
+    // Assigned after the spread, so a timeout is added to the init rather than
+    // substituted for it. A caller that brought its own signal keeps it.
+    const timeout = timeoutMs != null && request.signal == null ? AbortSignal.timeout(timeoutMs) : undefined;
+    if (timeout) {
+      request.signal = timeout;
+    }
+
+    let res: Response;
+    try {
+      res = await fetchImpl(`${baseUrl}${path}`, request);
+    } catch (err) {
+      // Report the timeout as the gateway timeout it is, so a `load` renders the
+      // error page for a slow backend instead of surfacing a bare DOMException.
+      if (timeout?.aborted) {
+        throw new ApiError(504, `The API did not answer within ${timeoutMs}ms: ${path}`);
+      }
+      throw err;
+    }
     if (!res.ok) {
       throw await toApiError(res);
     }
