@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -38,6 +40,7 @@ type dbStore struct {
 	targetVersion int32
 	indexer       jobIndexer
 	crawled       *crawledSet
+	tally         *writeTally
 }
 
 // dbStore is the only non-test implementation of pipeline.Store, and it is expected to carry
@@ -54,8 +57,78 @@ var (
 	_ pipeline.SeenLookup = (*dbStore)(nil)
 )
 
-func newDBStore(pool *pgxpool.Pool, targetVersion int, indexer jobIndexer, crawled *crawledSet) *dbStore {
-	return &dbStore{pool: pool, q: db.New(pool), targetVersion: int32(targetVersion), indexer: indexer, crawled: crawled}
+func newDBStore(pool *pgxpool.Pool, targetVersion int, indexer jobIndexer, crawled *crawledSet, tally *writeTally) *dbStore {
+	return &dbStore{
+		pool:          pool,
+		q:             db.New(pool),
+		targetVersion: int32(targetVersion),
+		indexer:       indexer,
+		crawled:       crawled,
+		tally:         tally,
+	}
+}
+
+// written is what save needs back from whichever of the two writes ran, so the rest of the
+// function does not care which did.
+//
+// row is the persisted job, and it is present ONLY when the full upsert ran. The cheap write
+// returns four narrow columns on purpose — embedding the row would detoast the description and
+// ship the semantic vector back for every re-seen posting, which is read amplification on the
+// path built to remove write amplification. Nothing on the cheap branch needs more: the fuller
+// row is read only to BUILD a search document, and needsIndex gates that to the full branch. A
+// pointer rather than a zeroed struct so a mistaken read panics instead of quietly serving "".
+type written struct {
+	id          int64
+	source      string
+	companySlug string
+	duplicateOf pgtype.Int8
+	inserted    bool
+	changed     bool
+	row         *db.Job
+}
+
+func fullWrite(r db.UpsertJobRow) written {
+	return written{
+		id:          r.Job.ID,
+		source:      r.Job.Source,
+		companySlug: r.Job.CompanySlug,
+		duplicateOf: r.Job.DuplicateOf,
+		inserted:    r.Inserted.Bool,
+		changed:     r.Changed,
+		row:         &r.Job,
+	}
+}
+
+// cheapWrite leaves inserted and changed false, which is what they mean: the row was neither
+// created nor edited. Every consumer downstream is already gated on those two.
+func cheapWrite(r db.RefreshUnchangedJobRow) written {
+	return written{id: r.ID, source: r.Source, companySlug: r.CompanySlug, duplicateOf: r.DuplicateOf}
+}
+
+// persist writes the posting the cheapest way that is correct. A re-crawl that matches the
+// stored row on RefreshUnchangedJob's key refreshes only last_seen_at, touching no index and
+// leaving updated_at alone; everything else — edited content, a closed row reappearing, a
+// posting the catalogue does not hold yet — takes the full upsert. Matching no row cannot
+// distinguish "changed" from "absent", and does not need to: both want the same statement.
+func persist(ctx context.Context, qtx *db.Queries, p db.UpsertJobParams) (written, error) {
+	cheap, err := qtx.RefreshUnchangedJob(ctx, db.RefreshUnchangedJobParams{
+		Source:      p.Source,
+		ExternalID:  p.ExternalID,
+		ContentHash: p.ContentHash,
+		Cities:      p.Cities,
+	})
+	if err == nil {
+		return cheapWrite(cheap), nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return written{}, fmt.Errorf("refresh unchanged job: %w", err)
+	}
+
+	full, err := qtx.UpsertJob(ctx, p)
+	if err != nil {
+		return written{}, fmt.Errorf("upsert job: %w", err)
+	}
+	return fullWrite(full), nil
 }
 
 // needsIndex reports whether a persisted write changed what search would show: a
@@ -63,9 +136,13 @@ func newDBStore(pool *pgxpool.Pool, targetVersion int, indexer jobIndexer, crawl
 // only refreshed bookkeeping (last_seen_at) reports neither and is skipped.
 // Changed is already true on insert (a NULL prior hash is DISTINCT FROM any value);
 // Inserted is OR-ed in to keep the "new or changed" intent explicit.
-func needsIndex(row db.UpsertJobRow) bool {
-	return row.Changed || row.Inserted.Bool
+func needsIndex(w written) bool {
+	return w.changed || w.inserted
 }
+
+// tookCheapWrite reports which of the two writes produced this. The narrow write is the only
+// one that carries no row, so this is exact rather than a heuristic.
+func (w written) tookCheapWrite() bool { return w.row == nil }
 
 // clustersByRole reports whether a persisted write is worth asking the role-cluster
 // question about — the gate in front of jobdedup.CanonicalForRole.
@@ -83,8 +160,8 @@ func needsIndex(row db.UpsertJobRow) bool {
 // rarer than the fan-out, and no worse off than before this existed.
 //
 // A row that already carries a marker knows its own answer and is not re-asked.
-func clustersByRole(row db.UpsertJobRow) bool {
-	return row.Inserted.Bool && !row.Job.DuplicateOf.Valid
+func clustersByRole(w written) bool {
+	return w.inserted && !w.duplicateOf.Valid
 }
 
 // Save persists a posting whose adapter yielded no application form — every provider but
@@ -117,9 +194,9 @@ func (s *dbStore) save(ctx context.Context, j job.Job, form *applyform.Form) err
 	params := j.Fields().UpsertParams()
 
 	qtx := s.q.WithTx(tx)
-	saved, err := qtx.UpsertJob(ctx, params)
+	saved, err := persist(ctx, qtx, params)
 	if err != nil {
-		return fmt.Errorf("upsert job: %w", err)
+		return err
 	}
 
 	// A company that posts one role once per city sends it as many board identities, all
@@ -130,12 +207,12 @@ func (s *dbStore) save(ctx context.Context, j job.Job, form *applyform.Form) err
 	// subscription digests, and the company's job count as a vacancy of its own.
 	deduped := false
 	if clustersByRole(saved) {
-		if canon, ok := jobdedup.CanonicalForRole(ctx, qtx, params, saved.Job.ID); ok {
+		if canon, ok := jobdedup.CanonicalForRole(ctx, qtx, params, saved.id); ok {
 			if _, err := qtx.MarkJobDuplicateOf(ctx, db.MarkJobDuplicateOfParams{
-				ID:          saved.Job.ID,
+				ID:          saved.id,
 				DuplicateOf: pgtype.Int8{Int64: canon.ID, Valid: true},
 			}); err != nil {
-				return fmt.Errorf("mark job %d duplicate of %d: %w", saved.Job.ID, canon.ID, err)
+				return fmt.Errorf("mark job %d duplicate of %d: %w", saved.id, canon.ID, err)
 			}
 			deduped = true
 		}
@@ -152,7 +229,7 @@ func (s *dbStore) save(ctx context.Context, j job.Job, form *applyform.Form) err
 			return fmt.Errorf("encode apply form: %w", err)
 		}
 		if err := qtx.UpsertApplyForm(ctx, db.UpsertApplyFormParams{
-			JobID:    saved.Job.ID,
+			JobID:    saved.id,
 			Provider: form.Provider,
 			Payload:  payload,
 		}); err != nil {
@@ -164,7 +241,7 @@ func (s *dbStore) save(ctx context.Context, j job.Job, form *applyform.Form) err
 	if !deduped {
 		if _, err := qtx.EnqueueJobEnrichment(ctx, db.EnqueueJobEnrichmentParams{
 			TargetVersion:     s.targetVersion,
-			JobID:             saved.Job.ID,
+			JobID:             saved.id,
 			ExcludeCategories: vocab.NonTechCategories,
 		}); err != nil {
 			return fmt.Errorf("enqueue enrichment: %w", err)
@@ -184,9 +261,9 @@ func (s *dbStore) save(ctx context.Context, j job.Job, form *applyform.Form) err
 	// commit and this line — closes by itself, because the enqueue is gated on the job
 	// having no stored form rather than on it being new: the next crawl of the board
 	// queues it again.
-	if applyform.NeedsRequestCapture(saved.Job.Source) {
-		if _, err := s.q.EnqueueApplyFormCapture(ctx, saved.Job.ID); err != nil {
-			log.Printf("ingest: queue apply-form capture for job %d: %v", saved.Job.ID, err)
+	if applyform.NeedsRequestCapture(saved.source) {
+		if _, err := s.q.EnqueueApplyFormCapture(ctx, saved.id); err != nil {
+			log.Printf("ingest: queue apply-form capture for job %d: %v", saved.id, err)
 		}
 	}
 
@@ -195,8 +272,13 @@ func (s *dbStore) save(ctx context.Context, j job.Job, form *applyform.Form) err
 	// catalogue when a run crawled only some of its boards. Uses the persisted row so
 	// aggregator sources (one board, per-job companies) scope by their real companies.
 	if s.crawled != nil {
-		s.crawled.record(saved.Job.Source, saved.Job.CompanySlug)
+		s.crawled.record(saved.source, saved.companySlug)
 	}
+
+	// Which write this posting took, counted after the commit so a rolled-back attempt is not
+	// reported as a saving. The run-end share is the only thing that would show a provider whose
+	// rows never match the cheap key — see writeTally.
+	s.tally.record(saved.source, saved.tookCheapWrite())
 
 	// Best-effort incremental indexing of the now-committed row: only when the
 	// write inserted or changed indexed content, and only if an indexer is wired.
@@ -209,7 +291,10 @@ func (s *dbStore) save(ctx context.Context, j job.Job, form *applyform.Form) err
 	// A non-canonical repost is not searchable, so it never reaches the live index —
 	// whether it was marked by a prior recompute or by the write above. What still falls
 	// to the reindex is a row that only became a repost after it was written.
-	if s.indexer != nil && needsIndex(saved) && !deduped && !saved.Job.DuplicateOf.Valid {
+	// saved.row != nil is implied by needsIndex — only the full write reports inserted or
+	// changed — but it is stated because the reads below dereference it, and nothing in this
+	// binary recovers a panic: a divergence would kill the crawl rather than skip a push.
+	if s.indexer != nil && saved.row != nil && needsIndex(saved) && !deduped && !saved.duplicateOf.Valid {
 		// The job-reality signal needs this role's cluster counts; a lookup failure
 		// degrades to a unique role (counts 1) rather than failing the index push.
 		repost, mass := int64(1), int64(1)
@@ -220,19 +305,19 @@ func (s *dbStore) save(ctx context.Context, j job.Job, form *applyform.Form) err
 		// only case that can safely skip — its union is its own geography.
 		askGeo := true
 		if c, err := s.q.RoleClusterCount(ctx, db.RoleClusterCountParams{
-			CompanySlug:     saved.Job.CompanySlug,
-			RoleFingerprint: saved.Job.RoleFingerprint,
+			CompanySlug:     saved.companySlug,
+			RoleFingerprint: saved.row.RoleFingerprint,
 		}); err != nil {
-			log.Printf("ingest: role-cluster count for job %d: %v", saved.Job.ID, err)
+			log.Printf("ingest: role-cluster count for job %d: %v", saved.id, err)
 		} else {
 			repost, mass = c.RepostCount, c.MassCount
 			askGeo = mass > 1
 		}
-		doc, err := search.FromJob(saved.Job)
+		doc, err := search.FromJob(*saved.row)
 		if err != nil {
-			log.Printf("ingest: build index doc for job %d: %v", saved.Job.ID, err)
+			log.Printf("ingest: build index doc for job %d: %v", saved.id, err)
 		} else {
-			reality := jobview.ClassifyReality(saved.Job, time.Now(), int(repost), int(mass))
+			reality := jobview.ClassifyReality(*saved.row, time.Now(), int(repost), int(mass))
 			doc.Reality = &reality
 			// Widen the canon with its cluster's geography. The push is a field-level
 			// document update and the geography facets are always present in the payload,
@@ -242,10 +327,10 @@ func (s *dbStore) save(ctx context.Context, j job.Job, form *applyform.Form) err
 			// one, so the union is its own geography and there is nothing to ask for.
 			if askGeo {
 				if g, err := s.q.RoleClusterGeo(ctx, db.RoleClusterGeoParams{
-					CompanySlug:     saved.Job.CompanySlug,
-					RoleFingerprint: saved.Job.RoleFingerprint,
+					CompanySlug:     saved.companySlug,
+					RoleFingerprint: saved.row.RoleFingerprint,
 				}); err != nil {
-					log.Printf("ingest: role-cluster geography for job %d: %v", saved.Job.ID, err)
+					log.Printf("ingest: role-cluster geography for job %d: %v", saved.id, err)
 				} else {
 					doc.MergeClusterGeography(g.Countries, g.Regions, g.Cities)
 				}
@@ -327,5 +412,11 @@ func (s *dbStore) Touch(ctx context.Context, source, externalID string) error {
 	if s.crawled != nil {
 		s.crawled.record(source, companySlug)
 	}
+	// A touch IS the cheap write for a hydrating source: TouchJob refreshes liveness and writes
+	// no content, the same bargain RefreshUnchangedJob makes on the board path. Counting it keeps
+	// the per-provider share meaning one thing for both source shapes. Leaving it out would be
+	// worse than a gap — a hydrating provider re-lists through here and only NEW offers reach
+	// save(), so the run would report 0% and read as the very churn the line exists to expose.
+	s.tally.record(source, true)
 	return nil
 }

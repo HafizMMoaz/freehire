@@ -48,7 +48,7 @@ func TestSave_IncrementalPushKeepsTheClusterGeography(t *testing.T) {
 	q := db.New(pool)
 
 	pusher := &fakePusher{}
-	store := newDBStore(pool, 1, newBatchIndexer(pusher.push, 1), nil)
+	store := newDBStore(pool, 1, newBatchIndexer(pusher.push, 1), nil, nil)
 
 	// The same role crawled once per city: the first is the canon, the second a repost
 	// that is kept as a row but never indexed.

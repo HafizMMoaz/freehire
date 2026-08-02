@@ -216,9 +216,19 @@ company_upsert AS (
     INSERT INTO companies (slug, name)
     SELECT sqlc.arg(company_slug), sqlc.arg(company)
     WHERE sqlc.arg(company_slug) <> ''
+    -- The WHERE is what keeps a crawl from rewriting one company row once per posting. Without
+    -- it a board of 5,000 vacancies updated its company 5,000 times per pass: measured on prod
+    -- 2026-08-02, 286M updates against 305k rows, leaving that table 32% dead tuples at 26 KB
+    -- per live row. The guard sits on the UPDATE branch only, so a new company is still created.
+    -- companies.updated_at is also served as a hiring company's sitemap <lastmod>, so this stops
+    -- it claiming every company changed on every crawl.
+    --
+    -- Only this copy is guarded. The same CTE in UpsertManualJob and UpdateManualJob fires once
+    -- per moderator action, where the write costs nothing worth guarding.
     ON CONFLICT (slug) DO UPDATE SET
         name       = EXCLUDED.name,
         updated_at = now()
+    WHERE companies.name IS DISTINCT FROM EXCLUDED.name
 )
 INSERT INTO jobs (
     source, external_id, url, title, company, company_slug, location, remote, description, posted_at,
@@ -284,6 +294,61 @@ ON CONFLICT (source, external_id) DO UPDATE SET
 RETURNING sqlc.embed(jobs),
     NOT COALESCE((SELECT existed FROM existing), false) AS inserted,
     ((SELECT old_hash FROM existing) IS DISTINCT FROM sqlc.arg(content_hash)) AS changed;
+
+-- name: RefreshUnchangedJob :one
+-- The cheap half of the ingest write path, tried before UpsertJob: a crawl that re-sees a
+-- posting identical to the stored row refreshes its liveness and writes NOTHING else. Matching
+-- nothing (pgx.ErrNoRows) is the signal to run the full upsert — which is also what a brand-new
+-- posting gets, since it too matches no row, and both want the same statement.
+--
+-- Why this exists: UpsertJob's DO UPDATE carries no WHERE, so a re-ingest rewrites the whole
+-- tuple — re-TOASTing a ~2.5KB description and touching every index on the table — to move a
+-- timestamp.
+--
+-- last_seen_at is the ONLY column written, and it is deliberately in no index, so the update is
+-- heap-only and maintains none of them.
+--
+-- updated_at is deliberately NOT stamped, so the column comes to mean "content last changed"
+-- rather than "last crawled". Two live readers see that: the jobs sitemap serves it as <lastmod>
+-- (ListJobSitemapFreshest -> internal/handler/sitemap.go), where a timestamp that stopped
+-- claiming every posting changed on every crawl is the honest signal rather than the one search
+-- engines learn to discount; and jobview puts it on the public wire. It also makes
+-- ListJobsUpdatedAfter viable for the first time — that query is currently dormant (no caller,
+-- and cmd/reindex has no --since flag despite what its comment says), because a column stamped
+-- on every crawl selects the whole catalogue and answers nothing.
+--
+-- The match key is (content_hash, cities), not the hash alone. cities is the one column the
+-- upsert writes that jobhash.Of does not read — a caller's structured city list overrides the
+-- location-derived one, so it can move while every hashed field stands still. Folding it into
+-- the hash instead would change every stored content_hash at once and make the first crawl after
+-- deploy rewrite and re-index the whole catalogue. Whether the key still covers every written
+-- column is enforced by TestUpsertParams_CheapWriteMatchKeyCoversEveryColumnItWrites
+-- (internal/job); add a derived column outside the hash and it fails there.
+--
+-- A NULL stored content_hash (a legacy row predating the column) compares unequal and so takes
+-- the full path, which is right: nothing is known about what it holds.
+--
+-- closed_at IS NULL is correctness, not economy. A closed posting that reappears with identical
+-- content must reach UpsertJob, which is what clears closed_at and resets the strike count.
+-- Refreshing its liveness here would leave it closed while the unseen sweep kept seeing it.
+--
+-- RETURNING is four narrow columns, NOT sqlc.embed(jobs), and that is the point rather than an
+-- economy: embedding the row would detoast the ~2.5KB description and ship semantic_embedding
+-- back for every re-seen posting, adding read amplification to the path built to remove write
+-- amplification. These four are everything the caller reads on this branch — the id for the
+-- enrichment enqueue and the apply-form capture queue, source and company_slug for the
+-- crawled-set that scopes the post-run sweep, and duplicate_of for the index-push gate. The
+-- fuller row is only ever needed to BUILD a search document, which by construction this branch
+-- never does. TouchJob, the hydrating-source sibling, returns company_slug alone for the same
+-- reason.
+UPDATE jobs
+SET last_seen_at = now()
+WHERE source = sqlc.arg(source)
+  AND external_id = sqlc.arg(external_id)
+  AND content_hash = sqlc.arg(content_hash)
+  AND cities = COALESCE(sqlc.arg(cities)::text[], '{}')
+  AND closed_at IS NULL
+RETURNING id, source, company_slug, duplicate_of;
 
 -- name: RoleClusterCount :one
 -- The job-reality repost/mass-posting counts for one role cluster: how many postings
@@ -869,7 +934,12 @@ SET last_seen_at = now(),
     -- A reopen resets the strike count so a single later expired probe can't immediately
     -- re-close it, mirroring UpsertJob.
     liveness_strikes = CASE WHEN closed_at IS NOT NULL THEN 0 ELSE liveness_strikes END,
-    updated_at   = now()
+    -- updated_at moves ONLY on a reopen. A re-listing that changed nothing is not a content
+    -- change, and stamping it would keep the column meaning "last crawled" — the same economy
+    -- RefreshUnchangedJob brings to the board path, applied to the hydrating one. A reopen IS a
+    -- change the search reconciler must see, so that case still stamps. The RHS reads the row's
+    -- pre-update closed_at, which is why one CASE serves both this and the strike reset above.
+    updated_at   = CASE WHEN closed_at IS NOT NULL THEN now() ELSE updated_at END
 WHERE source = sqlc.arg(source) AND external_id = sqlc.arg(external_id)
 RETURNING company_slug;
 

@@ -1,6 +1,8 @@
 package jobhash
 
 import (
+	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -242,4 +244,69 @@ func TestRoleFingerprint_FieldsAreDelimited(t *testing.T) {
 	if RoleFingerprint(a) == RoleFingerprint(b) {
 		t.Error("field boundary not delimited: content shifted across fields collides")
 	}
+}
+
+// TestRoleFingerprint_InputsAreCoveredByTheContentHash is what lets the ingest write path
+// skip a row whose content_hash matches: if the hash did not move, the fingerprint cannot
+// have moved either, so there is nothing to recompute. Break that and the cheap path serves
+// a stale role identity — the row stops clustering with its own reposts, silently, until a
+// backfill happens to rewrite it.
+//
+// The field walk is reflective, not the hand-written table TestOfRow_CarriesEveryFieldTheHashReads
+// uses: a field ADDED to UpsertJobParams must be covered the day it appears, and a table would
+// simply not list it. A field type mutateField cannot change fails the test rather than being
+// skipped — an unmutated field is an unchecked one that reads as checked.
+func TestRoleFingerprint_InputsAreCoveredByTheContentHash(t *testing.T) {
+	base := sample()
+	baseHash, baseFingerprint := Of(base), RoleFingerprint(base)
+
+	typ := reflect.TypeOf(base)
+	for i := range typ.NumField() {
+		field := typ.Field(i)
+		mutated, ok := mutateField(base, i)
+		if !ok {
+			t.Fatalf("no mutation for %s of type %s: extend mutateField — an unmutated field "+
+				"is an unchecked one that reads as checked", field.Name, field.Type)
+		}
+
+		t.Run(field.Name, func(t *testing.T) {
+			hashMoved := Of(mutated) != baseHash
+			fingerprintMoved := RoleFingerprint(mutated) != baseFingerprint
+
+			// One direction only. The converse — the hash moves while the fingerprint does
+			// not — is the normal case for every volatile field Of reads and RoleFingerprint
+			// deliberately ignores, and asserting it would contradict
+			// TestRoleFingerprint_IgnoresVolatileFields.
+			if fingerprintMoved && !hashMoved {
+				t.Errorf("changing %s moved the role fingerprint but not the content hash: an "+
+					"unchanged re-ingest skips such a row, leaving it clustered under the role "+
+					"identity of content it no longer has", field.Name)
+			}
+		})
+	}
+}
+
+// mutateField returns a copy of p with exactly field i changed to a value distinct from the
+// one it held, reporting false for a type it does not know how to change.
+func mutateField(p db.UpsertJobParams, i int) (db.UpsertJobParams, bool) {
+	f := reflect.ValueOf(&p).Elem().Field(i)
+	switch v := f.Interface().(type) {
+	case string:
+		f.SetString(v + " mutated")
+	case bool:
+		f.SetBool(!v)
+	case []string:
+		f.Set(reflect.ValueOf(append(slices.Clone(v), "mutated")))
+	case pgtype.Timestamptz:
+		f.Set(reflect.ValueOf(pgtype.Timestamptz{Time: v.Time.Add(time.Hour), Valid: true}))
+	case pgtype.Int4:
+		f.Set(reflect.ValueOf(pgtype.Int4{Int32: v.Int32 + 1, Valid: true}))
+	case pgtype.Bool:
+		f.Set(reflect.ValueOf(pgtype.Bool{Bool: !v.Bool, Valid: true}))
+	case pgtype.Text:
+		f.Set(reflect.ValueOf(pgtype.Text{String: v.String + " mutated", Valid: true}))
+	default:
+		return p, false
+	}
+	return p, true
 }

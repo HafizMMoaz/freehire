@@ -61,3 +61,76 @@ func TestTouchJobRefreshesLivenessAndPreservesContent(t *testing.T) {
 		t.Errorf("Skills = %v, want preserved [go typescript]", got.Skills)
 	}
 }
+
+// TouchJob is the hydrating-source half of the same economy RefreshUnchangedJob brings to the
+// board path: a re-listed offer that changed nothing must not drag updated_at forward, so the
+// column keeps meaning "content last changed". A reopen is the exception, and must stay one —
+// it is a change the search reconciler has to see.
+func TestTouchJobStampsUpdatedAtOnlyWhenItReopens(t *testing.T) {
+	pool := startPostgres(t)
+	q := New(pool)
+	ctx := context.Background()
+	truncate(t, pool)
+
+	seed := func(t *testing.T, externalID string, closed bool) Job {
+		t.Helper()
+		p := ingestParams(externalID, "Engineer")
+		p.Source = "justjoin"
+		if _, err := ingestUpsert(ctx, q, p); err != nil {
+			t.Fatalf("seed upsert: %v", err)
+		}
+		closeClause := ""
+		if closed {
+			closeClause = ", closed_at = now(), liveness_strikes = 2"
+		}
+		if _, err := pool.Exec(ctx,
+			`UPDATE jobs SET last_seen_at = now() - interval '10 days',
+			                 updated_at = now() - interval '10 days'`+closeClause+`
+			 WHERE source = 'justjoin' AND external_id = $1`, externalID,
+		); err != nil {
+			t.Fatalf("seed stamps: %v", err)
+		}
+		got, err := q.GetJobBySourceExternalID(ctx, GetJobBySourceExternalIDParams{Source: "justjoin", ExternalID: externalID})
+		if err != nil {
+			t.Fatalf("seed readback: %v", err)
+		}
+		return got
+	}
+
+	t.Run("open row keeps its change stamp", func(t *testing.T) {
+		before := seed(t, "justjoin:open", false)
+		if _, err := q.TouchJob(ctx, TouchJobParams{Source: "justjoin", ExternalID: "justjoin:open"}); err != nil {
+			t.Fatalf("TouchJob: %v", err)
+		}
+		after, err := q.GetJobBySourceExternalID(ctx, GetJobBySourceExternalIDParams{Source: "justjoin", ExternalID: "justjoin:open"})
+		if err != nil {
+			t.Fatalf("readback: %v", err)
+		}
+		if !after.LastSeenAt.Time.After(before.LastSeenAt.Time) {
+			t.Errorf("last_seen_at = %v, want advanced — the unseen sweep depends on it", after.LastSeenAt.Time)
+		}
+		if !after.UpdatedAt.Time.Equal(before.UpdatedAt.Time) {
+			t.Errorf("updated_at = %v, want unchanged %v — a re-listing is not a content change",
+				after.UpdatedAt.Time, before.UpdatedAt.Time)
+		}
+	})
+
+	t.Run("reopen stamps it", func(t *testing.T) {
+		before := seed(t, "justjoin:closed", true)
+		if _, err := q.TouchJob(ctx, TouchJobParams{Source: "justjoin", ExternalID: "justjoin:closed"}); err != nil {
+			t.Fatalf("TouchJob: %v", err)
+		}
+		after, err := q.GetJobBySourceExternalID(ctx, GetJobBySourceExternalIDParams{Source: "justjoin", ExternalID: "justjoin:closed"})
+		if err != nil {
+			t.Fatalf("readback: %v", err)
+		}
+		if after.ClosedAt.Valid || after.LivenessStrikes != 0 {
+			t.Errorf("closed_at = %v, strikes = %d; want reopened and reset",
+				after.ClosedAt.Time, after.LivenessStrikes)
+		}
+		if !after.UpdatedAt.Time.After(before.UpdatedAt.Time) {
+			t.Errorf("updated_at = %v, want stamped %v — a reopen is a change the reindex must see",
+				after.UpdatedAt.Time, before.UpdatedAt.Time)
+		}
+	})
+}

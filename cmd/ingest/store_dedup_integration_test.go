@@ -58,7 +58,7 @@ func TestSave_CollapsesPerCityCopiesOfOneRole(t *testing.T) {
 
 	pusher := &fakePusher{}
 	// chunkSize 1 flushes on every Add, so the pushed set is observable without a Flush.
-	store := newDBStore(pool, 1, newBatchIndexer(pusher.push, 1), nil)
+	store := newDBStore(pool, 1, newBatchIndexer(pusher.push, 1), nil, nil)
 
 	if err := store.Save(ctx, cityPosting("248544000257794970", "Querétaro, Mexico")); err != nil {
 		t.Fatalf("save the first city: %v", err)

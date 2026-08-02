@@ -131,9 +131,12 @@ func run() int {
 	// crawled records the company slugs each provider actually wrote this run, so the
 	// post-run sweep scopes its closes to them (see the sweep below and crawledSet).
 	crawled := newCrawledSet()
+	// tally records which of the two writes each persisted posting took, so the run says how far
+	// the cheap path actually reached rather than leaving it to be assumed (see writeTally).
+	tally := newWriteTally()
 	runner := pipeline.Runner{
 		Registry:    registry,
-		Store:       newDBStore(pool, enrich.Version, storeIndexer, crawled),
+		Store:       newDBStore(pool, enrich.Version, storeIndexer, crawled, tally),
 		BoardHealth: newBoardHealth(pool),
 	}
 
@@ -158,6 +161,12 @@ func run() int {
 	total := runStats.Total()
 	log.Printf("ingest done: file=%s providers=%d ingested=%d failed=%d skipped=%d rejected=%d",
 		path, len(runStats), total.Ingested, total.Failed, total.Skipped, total.Rejected)
+
+	// A provider at 0% took the cheap write for nothing all run — a hashed field is churning
+	// between crawls, which costs a full row rewrite AND a pointless index push every pass.
+	if s := tally.summary(); s != "" {
+		log.Printf("ingest writes: file=%s %s", path, s)
+	}
 
 	// A failed board is counted in total.Failed; surface it (and any sweep failure
 	// below) through the exit code so cron alerts on a degraded run.

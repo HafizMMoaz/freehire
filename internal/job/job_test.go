@@ -2,9 +2,11 @@ package job_test
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/strelov1/freehire/internal/db"
 	"github.com/strelov1/freehire/internal/job"
 	"github.com/strelov1/freehire/internal/jobderive"
 	"github.com/strelov1/freehire/internal/normalize"
@@ -329,4 +331,139 @@ func TestUpdateManualParams_CarriesSlugActorAndDerivedColumns(t *testing.T) {
 	if params.ContentHash != automated.ContentHash || params.RoleFingerprint != automated.RoleFingerprint {
 		t.Errorf("derived = %v/%v, want %v/%v", params.ContentHash, params.RoleFingerprint, automated.ContentHash, automated.RoleFingerprint)
 	}
+}
+
+// TestUpsertParams_CheapWriteMatchKeyCoversEveryColumnItWrites is the soundness condition of
+// the cheap ingest write path (see the cut-ingest-write-amplification change): when a re-seen
+// posting matches the stored row on RefreshUnchangedJob's key, ingest issues a narrow
+// last_seen_at refresh instead of the full upsert, so every OTHER column keeps whatever the
+// row already holds. That is correct only while the key cannot stand still through a real
+// difference — a column that moves without moving the key is one the cheap path would
+// silently leave stale.
+//
+// The key is content_hash AND cities, and this test is the authority on why it needs both.
+// cities is the one column UpsertJob writes that jobhash.Of does not read: a caller's
+// structured city list overrides the location-derived one (jobderive.Derive), so it can move
+// while every hashed field stands still. Folding cities into Of instead would change every
+// stored hash at once and make the first crawl after deploy rewrite and re-index the whole
+// catalogue — the write storm this change exists to remove. So the predicate carries it.
+//
+// Adding another derived column Of does not read fails here, and the fix is the same choice:
+// hash it, or widen the key and say so.
+//
+// The walk is over jobderive.Input, the write path's actual entry point, and compares what
+// UpsertParams produces — the production composition (derivation, mapping, and withDerived's
+// stamp together) rather than a reconstruction of it. The Draft fields outside Input (URL,
+// Remote, PostedAt) reach params without derivation and are all read by Of, which
+// TestOf_ChangesWhenAnyIndexedFieldChanges already guards.
+func TestUpsertParams_CheapWriteMatchKeyCoversEveryColumnItWrites(t *testing.T) {
+	base := fullDraft()
+	baseParams := mustParams(t, base)
+
+	typ := reflect.TypeOf(base.Input)
+	for i := range typ.NumField() {
+		field := typ.Field(i)
+		mutated, ok := mutateInput(base, i)
+		if !ok {
+			t.Fatalf("no mutation for Input.%s of type %s: extend mutateInput — an unmutated "+
+				"field is an unchecked one that reads as checked", field.Name, field.Type)
+		}
+
+		t.Run(field.Name, func(t *testing.T) {
+			got := mustParams(t, mutated)
+			moved := movedColumns(baseParams, got)
+			if len(moved) == 0 {
+				return // the field reaches no column; nothing for the key to cover
+			}
+			if matchKeyHeld(baseParams, got) {
+				t.Errorf("Input.%s moved %v but left RefreshUnchangedJob's match key "+
+					"(content_hash, cities) unchanged: an unchanged re-ingest would skip the "+
+					"row and leave those columns stale", field.Name, moved)
+			}
+		})
+	}
+}
+
+// matchKeyHeld reports whether two params agree on everything RefreshUnchangedJob matches on,
+// i.e. whether the cheap path would treat b as an unchanged re-ingest of a.
+func matchKeyHeld(a, b db.UpsertJobParams) bool {
+	return a.ContentHash == b.ContentHash && slices.Equal(a.Cities, b.Cities)
+}
+
+// fullDraft populates every jobderive.Input field, including the optional structured signals,
+// so a field is never exercised only as zero -> non-zero.
+func fullDraft() job.Draft {
+	posted := time.Unix(1_700_000_000, 0).UTC()
+	years := 5
+	return job.Draft{
+		Input: jobderive.Input{
+			Source:             "greenhouse",
+			ExternalID:         "acme:1",
+			Title:              "Senior Go Developer",
+			Company:            "Acme",
+			Location:           "Berlin, Germany",
+			Description:        "We use Golang and PostgreSQL.",
+			WorkMode:           "remote",
+			Regions:            []string{"eu"},
+			Cities:             []string{"Berlin"},
+			Seniority:          "senior",
+			Category:           "backend",
+			EmploymentType:     "full_time",
+			Skills:             []string{"go"},
+			ExperienceYearsMin: &years,
+		},
+		URL:      "https://acme.example/jobs/1",
+		Remote:   true,
+		PostedAt: &posted,
+	}
+}
+
+func mustParams(t *testing.T, d job.Draft) db.UpsertJobParams {
+	t.Helper()
+	j, err := job.New(d)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return j.Fields().UpsertParams()
+}
+
+// mutateInput returns a copy of d with exactly field i of its embedded Input changed to a
+// value distinct from the one it held, reporting false for a type it cannot change.
+func mutateInput(d job.Draft, i int) (job.Draft, bool) {
+	f := reflect.ValueOf(&d.Input).Elem().Field(i)
+	switch v := f.Interface().(type) {
+	case string:
+		f.SetString(v + " mutated")
+	case []string:
+		f.Set(reflect.ValueOf(append(slices.Clone(v), "mutated")))
+	case *int:
+		n := 1
+		if v != nil {
+			n = *v + 1
+		}
+		f.Set(reflect.ValueOf(&n))
+	default:
+		return d, false
+	}
+	return d, true
+}
+
+// movedColumns names the UpsertJobParams columns that differ between two params structs,
+// content_hash and role_fingerprint excluded — they are signals about the row's content, not
+// columns whose staleness a reader would ever see. cities is NOT excluded: it is half the
+// match key and also a column in its own right, so a move must still be reported.
+func movedColumns(a, b db.UpsertJobParams) []string {
+	var moved []string
+	typ := reflect.TypeOf(a)
+	va, vb := reflect.ValueOf(a), reflect.ValueOf(b)
+	for i := range typ.NumField() {
+		name := typ.Field(i).Name
+		if name == "ContentHash" || name == "RoleFingerprint" {
+			continue
+		}
+		if !reflect.DeepEqual(va.Field(i).Interface(), vb.Field(i).Interface()) {
+			moved = append(moved, name)
+		}
+	}
+	return moved
 }

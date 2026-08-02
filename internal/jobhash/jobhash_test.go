@@ -13,23 +13,30 @@ import (
 // one field off this baseline and asserts the hash does or does not move.
 func sample() db.UpsertJobParams {
 	return db.UpsertJobParams{
-		Source:             "greenhouse",
-		ExternalID:         "cookunity:6619930003",
-		URL:                "https://example.com/jobs/1",
-		Title:              "Staff Full Stack Engineer",
-		Company:            "CookUnity",
-		CompanySlug:        "cookunity",
-		Location:           "Latam (Remote)",
-		Remote:             true,
-		Description:        "Build smart fridges.",
-		PostedAt:           pgtype.Timestamptz{Time: time.Unix(1_700_000_000, 0).UTC(), Valid: true},
-		PublicSlug:         "staff-full-stack-engineer-cookunity-abcd",
-		Countries:          []string{"ar", "br"},
-		Regions:            []string{"latam"},
+		Source:      "greenhouse",
+		ExternalID:  "cookunity:6619930003",
+		URL:         "https://example.com/jobs/1",
+		Title:       "Staff Full Stack Engineer",
+		Company:     "CookUnity",
+		CompanySlug: "cookunity",
+		Location:    "Latam (Remote)",
+		Remote:      true,
+		Description: "Build smart fridges.",
+		PostedAt:    pgtype.Timestamptz{Time: time.Unix(1_700_000_000, 0).UTC(), Valid: true},
+		PublicSlug:  "staff-full-stack-engineer-cookunity-abcd",
+		Countries:   []string{"ar", "br"},
+		Regions:     []string{"latam"},
+		// Cities, IsTech and EnglishLevel are columns UpsertJob writes but Of does not hash.
+		// They are populated so TestRoleFingerprint_InputsAreCoveredByTheContentHash exercises
+		// them as a value CHANGE rather than only as zero -> non-zero, which a value-dependent
+		// read would slip past.
+		Cities:             []string{"buenos aires"},
 		WorkMode:           "remote",
 		Skills:             []string{"go", "php"},
 		Seniority:          "staff",
 		Category:           "engineering",
+		IsTech:             pgtype.Bool{Bool: true, Valid: true},
+		EnglishLevel:       "b2",
 		PostingLanguage:    "en",
 		EmploymentType:     "full_time",
 		EducationLevel:     "bachelor",
