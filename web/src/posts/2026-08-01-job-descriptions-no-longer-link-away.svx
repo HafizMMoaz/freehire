@@ -1,0 +1,39 @@
+---
+title: Job descriptions no longer link away
+date: 2026-08-01
+summary: Every link inside a job description is now stripped to plain text — the aggregator backlinks, the "Find Jobs in Germany on X" footers, the bare apply-URLs pasted mid-paragraph. The words stay, the exits don't.
+type: changelog
+tags:
+  - catalogue
+  - job-seekers
+  - transparency
+---
+
+A job description arrives here from someone else's site, and plenty of those sites
+treat the body as advertising space. Aggregators that mirror a posting end it with a
+line back to themselves — *Find Jobs in Germany on Arbeitnow* — and rewrite each
+mention of the hiring company into a link to their own page for it. Other postings
+paste a raw apply-URL into the middle of a paragraph and leave it there.
+
+None of that is the employer's text. **Descriptions now carry no links at all.** The
+words survive; only the destinations are gone.
+
+The distinction matters more than it sounds. A link woven through a sentence — "we run
+**Kubernetes** in production" — keeps its word, because deleting the text along with
+the tag would leave a hole in the sentence. What does get removed entirely is the kind
+of link whose visible text was only ever its own address: strip the destination from
+`https://boards.example.com/apply/1` and what's left isn't a sentence, it's a dead
+string. Those go, along with the empty paragraph they were sitting in.
+
+You lose nothing you were using. The **Apply** button has always pointed at the
+employer's own posting, and it still does — the description was never the way out.
+What you get back is a body that reads as what it is: the role, the requirements, the
+team. Not a set of exits to somebody else's job board.
+
+There's a quieter reason too. The assistant and the fit analysis read these
+descriptions, and until now they read whatever a third-party posting chose to put in
+front of them, links included. Text that arrives from a stranger's server should stay
+text.
+
+This applies to every source in the catalogue, old postings included — not just the
+ones crawled from today on.
