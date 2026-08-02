@@ -1,0 +1,61 @@
+name: PR Welcome
+
+on:
+  pull_request_target:
+    types: [opened]
+
+jobs:
+  welcome:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Label and greet outside contributors
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const OUTSIDE = new Set(['NONE', 'FIRST_TIMER', 'FIRST_TIME_CONTRIBUTOR', 'CONTRIBUTOR']);
+            const FIRST_TIME = new Set(['NONE', 'FIRST_TIMER', 'FIRST_TIME_CONTRIBUTOR']);
+
+            const pr = context.payload.pull_request;
+            const author = pr.user.login;
+
+            if (author.endsWith('[bot]')) {
+              console.log(`Skipping bot: ${author}`);
+              return;
+            }
+
+            if (!OUTSIDE.has(pr.author_association)) {
+              console.log(`${author} is ${pr.author_association}, nothing to do`);
+              return;
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              labels: ['needs-triage'],
+            });
+
+            if (!FIRST_TIME.has(pr.author_association)) {
+              console.log(`${author} has contributed before, label only`);
+              return;
+            }
+
+            const message = [
+              `Thanks for the PR, @${author} — first contributions are genuinely welcome here.`,
+              '',
+              'A maintainer will read it. Two things that make that faster:',
+              '',
+              '- CI runs `go build`, `go vet`, `gofmt -l .` and `go test ./...`. Green is not required to open the PR, but it is required to merge.',
+              '- Tell us in the description what the change does and why. Using an agent to write it is fine; shipping code you cannot explain is not.',
+              '',
+              `Adding a source is the most welcome kind of change — see [CONTRIBUTING.md](https://github.com/${context.repo.owner}/${context.repo.repo}/blob/${context.payload.repository.default_branch}/CONTRIBUTING.md).`,
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body: message,
+            });
