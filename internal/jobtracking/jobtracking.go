@@ -176,6 +176,13 @@ type Repository interface {
 	// application is not a later application.
 	MarkAppliedAt(ctx context.Context, userID, jobID int64, at time.Time, source string) (Interaction, error)
 
+	// MarkAppliedOn records an application on a day the candidate states, and
+	// overwrites a date already recorded. It is the counterpart of MarkAppliedAt and
+	// differs from it in exactly that: mail supplies an upper bound, while a person
+	// supplies the answer, so theirs wins. The `applied` ledger event moves with the
+	// column, because every aggregate dates the application from the event.
+	MarkAppliedOn(ctx context.Context, userID, jobID int64, at time.Time, source string) (Interaction, error)
+
 	SaveJob(ctx context.Context, userID, jobID int64) (Interaction, error)
 
 	// UnsaveJob clears the saved mark. It returns ErrNoInteraction when no row
@@ -341,6 +348,28 @@ func (s *Service) MarkAppliedAt(ctx context.Context, userID int64, slug string, 
 		return Interaction{}, err
 	}
 	return s.repo.MarkAppliedAt(ctx, userID, jobID, at, source)
+}
+
+// MarkAppliedOn records an application on the day the candidate states, overwriting a date
+// already held. `now` is supplied rather than read here so the bound is testable and so the
+// caller's clock, not this package's, decides what "the future" means.
+//
+// The window is enforced at this level rather than at the HTTP door so that it holds for every
+// caller of the service, not only the one that arrives over HTTP: the in-app assistant calls
+// jobtracking directly and never passes through Fiber. Its apply tool takes no date today, so
+// this is a guard against the next caller rather than a fix for a current one.
+// `day` is the calendar day stated, and the window is checked against it — never against the
+// instant it is stored at. Those differ by the storage hour, and bounding the instant refuses
+// "today" for the whole UTC morning.
+func (s *Service) MarkAppliedOn(ctx context.Context, userID int64, slug string, day, now time.Time, source string) (Interaction, error) {
+	if err := userjob.ValidateAppliedOn(day, now); err != nil {
+		return Interaction{}, err
+	}
+	jobID, err := s.repo.JobIDBySlug(ctx, slug)
+	if err != nil {
+		return Interaction{}, err
+	}
+	return s.repo.MarkAppliedOn(ctx, userID, jobID, userjob.AppliedOnInstant(day), source)
 }
 
 // SaveJob resolves slug → jobID then delegates to the repository.
