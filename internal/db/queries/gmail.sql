@@ -1,5 +1,9 @@
 -- name: GetGmailConnection :one
-SELECT user_id, email, status, sync_cursor, connected_at, last_synced_at
+-- The grant row as the status endpoint reads it. `scopes` is included because the two
+-- consents are separate: a connected mailbox says nothing about the calendar, and a
+-- calendar grant may have no mailbox behind it, so the row's existence cannot answer
+-- either question on its own.
+SELECT user_id, email, status, sync_cursor, connected_at, last_synced_at, scopes
 FROM gmail_connections
 WHERE user_id = $1;
 
@@ -19,10 +23,21 @@ SET email = EXCLUDED.email,
     status = 'connected';
 
 -- name: ListConnectedGmailUsers :many
--- Drives the sync worker: every connection still authorized.
+-- Drives the sync worker: every connection still authorized AND holding a mailbox.
+--
+-- The address is the test, and it is not decoration. Since the calendar consent exists,
+-- a row here may be a Google grant with no mail scope at all — UpsertCalendarGrant
+-- inserts one with an empty address and never fills it. Syncing such a user calls the
+-- Gmail API with a token that cannot answer, takes the 403 as a revoked grant, and flips
+-- the SHARED status to needs_reconsent — killing the calendar sync they actually asked
+-- for, one cron tick after they connected it.
+--
+-- Checked on the address rather than on `scopes` for two reasons: every row that predates
+-- the scopes column has an empty list and would be excluded by a scope test, and the
+-- scope string then has to be spelled in SQL as well as in Go.
 SELECT user_id, email, sync_cursor
 FROM gmail_connections
-WHERE status = 'connected';
+WHERE status = 'connected' AND email <> '';
 
 -- name: SetGmailSynced :exec
 UPDATE gmail_connections
@@ -45,8 +60,8 @@ DELETE FROM emails WHERE user_id = $1 AND source = $2;
 -- source fixed to 'gmail'; the hosted path has its own insert (InsertHostedMessage).
 INSERT INTO emails (
     user_id, source, external_id, thread_id, from_addr, from_name,
-    subject, body_text, body_html, received_at
-) VALUES ($1, 'gmail', $2, $3, $4, $5, $6, $7, $8, $9)
+    subject, body_text, body_html, received_at, ical_uid
+) VALUES ($1, 'gmail', $2, $3, $4, $5, $6, $7, $8, $9, sqlc.arg(ical_uid))
 ON CONFLICT (user_id, source, external_id) DO NOTHING;
 
 -- name: UpsertExternalEmail :one
@@ -61,8 +76,8 @@ ON CONFLICT (user_id, source, external_id) DO NOTHING;
 -- agent's triage verdict.
 INSERT INTO emails (
     user_id, source, external_id, thread_id, from_addr, from_name,
-    subject, body_text, body_html, received_at
-) VALUES ($1, 'external', $2, $3, $4, $5, $6, $7, $8, $9)
+    subject, body_text, body_html, received_at, ical_uid
+) VALUES ($1, 'external', $2, $3, $4, $5, $6, $7, $8, $9, sqlc.arg(ical_uid))
 ON CONFLICT (user_id, source, external_id) DO UPDATE
 SET thread_id   = EXCLUDED.thread_id,
     from_addr   = EXCLUDED.from_addr,
@@ -70,7 +85,11 @@ SET thread_id   = EXCLUDED.thread_id,
     subject     = EXCLUDED.subject,
     body_text   = EXCLUDED.body_text,
     body_html   = EXCLUDED.body_html,
-    received_at = EXCLUDED.received_at
+    received_at = EXCLUDED.received_at,
+    -- A content column like the rest: the meeting identifier belongs to the message,
+    -- not to the reader, so a re-sync may refresh it. The reader's own state — read_at,
+    -- deleted_at, every classification column — still stays out of this list.
+    ical_uid    = EXCLUDED.ical_uid
 RETURNING id, (xmax = 0)::boolean AS inserted;
 
 -- name: ListEmails :many

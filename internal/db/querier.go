@@ -95,6 +95,14 @@ type Querier interface {
 	// Whether a builder CV is owned by a user — the authorization check before attaching a
 	// 'built' CV to a request, so a seeker cannot reference someone else's cv_id.
 	CVBelongsToUser(ctx context.Context, arg CVBelongsToUserParams) (bool, error)
+	// Mark a meeting cancelled. Deliberately not a delete: a candidate who remembers an
+	// interview on Thursday and finds an empty Thursday cannot tell a cancellation from a
+	// calendar that failed to load. The scheduling still happened, and the ledger's
+	// `interview_scheduled` stands.
+	// Matched on EITHER identifier, because a cancellation may carry only one. A live event
+	// names the meeting by its iCalUID; a deleted one is documented to carry just the
+	// provider's own `id`, which is why that is stored alongside.
+	CancelApplicationInterview(ctx context.Context, arg CancelApplicationInterviewParams) (int64, error)
 	// Cancel the pending reminder for one (user, job): the per-job "turn off" control,
 	// and the eager cleanup wired into apply and unsave. Idempotent — no pending row
 	// affects 0 rows and is never an error. Cancelled rows are retained as history.
@@ -813,6 +821,10 @@ type Querier interface {
 	// One employment owned by the caller. A foreign or missing id returns no row, which the
 	// handler maps to 404 — so a probe cannot tell the two apart.
 	GetExperienceEmployment(ctx context.Context, arg GetExperienceEmploymentParams) (ExperienceEmployment, error)
+	// The grant row as the status endpoint reads it. `scopes` is included because the two
+	// consents are separate: a connected mailbox says nothing about the calendar, and a
+	// calendar grant may have no mailbox behind it, so the row's existence cannot answer
+	// either question on its own.
 	GetGmailConnection(ctx context.Context, userID int64) (GetGmailConnectionRow, error)
 	GetGmailRefreshToken(ctx context.Context, userID int64) (GetGmailRefreshTokenRow, error)
 	// The employer's own description of an upcoming interview, for the rehearsal context:
@@ -1098,6 +1110,11 @@ type Querier interface {
 	// caption an interview with an unrelated rejection. The three names arrive as parameters
 	// rather than being written here, so the vocabulary stays in Go where a pin test guards it.
 	ListApplicationEventsInRange(ctx context.Context, arg ListApplicationEventsInRangeParams) ([]ListApplicationEventsInRangeRow, error)
+	// One caller's meetings over a date range, for the tracking calendar's second layer.
+	//
+	// Cancelled meetings are returned and marked rather than filtered: the view shows them
+	// struck through, because a silently missing interview reads as a fault.
+	ListApplicationInterviewsInRange(ctx context.Context, arg ListApplicationInterviewsInRangeParams) ([]ListApplicationInterviewsInRangeRow, error)
 	// The notify fan-out targets: every approved referrer of a company with their email and
 	// linked Telegram chat (NULL when unlinked). Email is always present; chat_id drives the
 	// optional Telegram ping.
@@ -1128,6 +1145,24 @@ type Querier interface {
 	ListCVRevisionsInBatch(ctx context.Context, arg ListCVRevisionsInBatchParams) ([]CvRevision, error)
 	// A user's CVs as metadata (no data blob), newest edit first.
 	ListCVsByUser(ctx context.Context, userID int64) ([]ListCVsByUserRow, error)
+	// The candidates whose grant actually covers the calendar. The scope check belongs in the
+	// query rather than in the worker's loop: a connection that cannot answer is not a
+	// connection to retry, and calling the API to find that out costs a quota unit per user
+	// per run for an answer we already hold.
+	ListCalendarConnections(ctx context.Context, calendarScope string) ([]int64, error)
+	// The caller's applications a meeting could belong to, each with the identifiers of the
+	// invitations already linked to it.
+	//
+	// One query per candidate rather than one lookup per calendar event: a sync window holds
+	// far more events than a person has applications, and internal/calmatch is pure over what
+	// it is handed. The UID array is what makes the deterministic tier possible — the mail
+	// matcher already tied those invitations to these applications, so a calendar entry
+	// carrying the same identifier is provably the same meeting.
+	//
+	// Deleted mail still contributes its identifier. Deletion hides the message; it does not
+	// un-schedule the meeting it announced, the same position the ledger takes on a deleted
+	// reply.
+	ListCalendarMatchCandidates(ctx context.Context, userID int64) ([]ListCalendarMatchCandidatesRow, error)
 	// Catalog page: companies with their job counts, most active first. The job count
 	// is read from the denormalized companies.job_count column (maintained by
 	// cmd/recount-companies), so this read does not join jobs. Ordered by job_count
@@ -1183,7 +1218,18 @@ type Querier interface {
 	// (0057), which covers the predicate, the order and updated_at — without it the
 	// predicate alone sends every candidate row to the heap.
 	ListCompanySitemap(ctx context.Context, arg ListCompanySitemapParams) ([]ListCompanySitemapRow, error)
-	// Drives the sync worker: every connection still authorized.
+	// Drives the sync worker: every connection still authorized AND holding a mailbox.
+	//
+	// The address is the test, and it is not decoration. Since the calendar consent exists,
+	// a row here may be a Google grant with no mail scope at all — UpsertCalendarGrant
+	// inserts one with an empty address and never fills it. Syncing such a user calls the
+	// Gmail API with a token that cannot answer, takes the 403 as a revoked grant, and flips
+	// the SHARED status to needs_reconsent — killing the calendar sync they actually asked
+	// for, one cron tick after they connected it.
+	//
+	// Checked on the address rather than on `scopes` for two reasons: every row that predates
+	// the scopes column has an empty list and would be excluded by a scope test, and the
+	// scope string then has to be spelled in SQL as well as in Go.
 	ListConnectedGmailUsers(ctx context.Context) ([]ListConnectedGmailUsersRow, error)
 	// The "my contributions" list: one user's contributions, newest first.
 	ListContributionsByUser(ctx context.Context, submittedBy int64) ([]LinkContribution, error)
@@ -1863,6 +1909,10 @@ type Querier interface {
 	// left in place — its expiry gates the retry to a later run and doubles as the
 	// crash reaper, so a failed entry is never reprocessed within the same run.
 	RecordEnrichmentFailure(ctx context.Context, arg RecordEnrichmentFailureParams) (RecordEnrichmentFailureRow, error)
+	// Record what a grant covers, as the provider reported it. Replacing rather than unioning,
+	// for the reason above: a list that only grows cannot express a scope the candidate took
+	// away. An empty list means the exchange did not say, and keeps what we held.
+	RecordGrantScopes(ctx context.Context, arg RecordGrantScopesParams) error
 	// Record (or refresh) a user's view of a job. Idempotent on (user_id, job_id):
 	// the first view creates the row, a repeat view touches viewed_at. Returns the
 	// row so the caller learns the current applied_at in the same round-trip. This
@@ -2382,6 +2432,54 @@ type Querier interface {
 	// query string is a real value (not NULL), so "save the unfiltered view" is honored.
 	// No matching owner-scoped row returns no row (the handler maps that to 404).
 	UpdateSavedSearch(ctx context.Context, arg UpdateSavedSearchParams) (SavedSearch, error)
+	// Record a meeting the sync attached to an application, or move the one already recorded,
+	// and note in the ledger that the scheduling was observed.
+	//
+	// The sync re-reads its whole window every run, so this must be idempotent: the unique
+	// index on (user_id, ical_uid) makes a second sighting an update rather than a second row.
+	// A meeting that moved carries a new time under the same identity, which is exactly what
+	// the ledger could not have expressed.
+	//
+	// The status is the matcher's tier rendered: `confirmed` when the invitation's identifier
+	// attached it, `suggested` when only the title did. A confirmed meeting never falls back
+	// to a suggestion; the identifier that linked it is a fact, and a later run that only
+	// recognises the title has learned nothing new.
+	//
+	// The ledger event rides in the same statement, the way MarkJobApplied's does, so the
+	// appointment and the record of it being made cannot drift apart. Two things about it:
+	//
+	//   * It is dated by the OBSERVATION, not by the meeting. occurred_at means "when this
+	//     happened" and every day calculation reads it; a row dated in the future would turn
+	//     the record of a search into a schedule.
+	//   * source_ref is the interview's own id, which makes it idempotent by the ledger's
+	//     partial unique index — a re-sync, and a reschedule, add no second event. The
+	//     scheduling happened once.
+	//   * It is written for a CONFIRMED meeting only. A row in this ledger carrying an
+	//     application id IS a link, into an append-only table with no retraction path for
+	//     this kind — and the rule is that only the invitation's own identifier may link. A
+	//     title match is a guess offered to the candidate; letting it write here would make
+	//     "Q3 ramp-up planning" a permanent, unremovable interview against an application to
+	//     an employer called Ramp.
+	UpsertApplicationInterview(ctx context.Context, arg UpsertApplicationInterviewParams) (int64, error)
+	// Store the grant a calendar consent produced, and record that it now covers the calendar.
+	//
+	// Three things this deliberately does not do. It does not touch `email`: a candidate who
+	// already connected a mailbox keeps its address, and one who granted only the calendar has
+	// none to record — the calendar flow never reads the Gmail profile, because that needs the
+	// mail scope they may not have given.
+	//
+	// It records what Google says the grant covers, verbatim. Unioning was the first attempt
+	// and can only ever grow: a candidate who revokes at Google and then reconnects mail alone
+	// would keep a calendar scope they no longer hold, cal-sync would take the resulting 403
+	// as a revoked grant, and the SHARED status would break the mailbox they had just
+	// reconnected — once per cron tick, forever. The consent is incremental, so the token from
+	// either flow already reports everything granted; the authoritative answer is the one to
+	// store. A caller that could not read the scopes passes the empty list and this keeps what
+	// it had, because absence of evidence is not evidence of revocation.
+	//
+	// And it does not distinguish insert from update, because both mean the same thing here:
+	// this person has granted us their calendar.
+	UpsertCalendarGrant(ctx context.Context, arg UpsertCalendarGrantParams) error
 	// Apply one external-dataset company-info record, matched by slug. A new slug is
 	// inserted as a reference row (is_reference = true) with no jobs; an existing slug
 	// (job-backed or a prior reference) has only its company-info columns refreshed —

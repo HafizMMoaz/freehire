@@ -11,7 +11,8 @@
     type CalendarDay,
   } from '$lib/calendarModel';
   import { boardRefFor } from '$lib/board';
-  import type { TimelineEvent } from '$lib/types';
+  import { isAuthenticated } from '$lib/auth.svelte';
+  import type { ScheduledInterview, TimelineEvent } from '$lib/types';
   import { Button } from '$lib/ui';
   import States from './States.svelte';
 
@@ -19,7 +20,11 @@
   // is fetched here, because only the browser knows the reader's. See calendarModel.
   let {
     prefetched,
-  }: { prefetched: { events: TimelineEvent[]; year: number; month: number } | undefined } = $props();
+  }: {
+    prefetched:
+      | { events: TimelineEvent[]; interviews: ScheduledInterview[]; year: number; month: number }
+      | undefined;
+  } = $props();
 
   const now = new Date();
   let year = $state(now.getFullYear());
@@ -28,8 +33,9 @@
   // The server payload is a fallback, not a seed: copying a prop into state freezes it at
   // its first value, and the two would then disagree after a navigation. Once the client
   // has fetched a month of its own, that is what the grid reads.
-  let fetched = $state<TimelineEvent[] | null>(null);
-  const series = $derived(fetched ?? prefetched?.events ?? []);
+  let fetched = $state<{ events: TimelineEvent[]; interviews: ScheduledInterview[] } | null>(null);
+  const series = $derived(fetched?.events ?? prefetched?.events ?? []);
+  const meetings = $derived(fetched?.interviews ?? prefetched?.interviews ?? []);
   // 'initial' means nothing has been asked for yet: usable if the server load succeeded
   // for the month on screen, waiting on the mount fetch otherwise. Reading the prop here
   // rather than in an initialiser is what keeps it live instead of frozen at first value.
@@ -58,9 +64,10 @@
     const generation = ++inFlight;
     const { from, to } = rangeForMonth(y, m);
     try {
-      const events = await api.myTimeline(from, to);
+      // Both layers together, so selecting a day still needs no request of its own.
+      const [events, interviews] = await Promise.all([api.myTimeline(from, to), api.myInterviews(from, to)]);
       if (generation !== inFlight) return;
-      fetched = events;
+      fetched = { events, interviews };
       phase = 'ready';
     } catch {
       if (generation !== inFlight) return;
@@ -68,13 +75,31 @@
     }
   }
 
+  // Whether this reader has given us their calendar, and whether the flow exists to give
+  // it. Undefined until asked, so the invitation below does not flash for someone who
+  // already connected one — or on a deployment that has no Google client configured,
+  // where the connect route is not registered at all and the button would navigate the
+  // browser to a JSON 404. The Gmail surface states that invariant for its own button;
+  // `available` is what carries it, and it is served already.
+  let calendarConnected = $state<boolean | undefined>(undefined);
+  let connectAvailable = $state(false);
+
   // One fetch on mount when the server load failed, or when it answered for a month other
   // than the reader's. Once, not reactively.
   onMount(() => {
     if (!serverMonthIsOurs) void show(year, month);
+    if (isAuthenticated()) {
+      void api
+        .gmailStatus()
+        .then((s) => {
+          calendarConnected = s.calendar_connected === true;
+          connectAvailable = s.available === true;
+        })
+        .catch(() => (calendarConnected = undefined));
+    }
   });
 
-  const grid = $derived(buildCalendarMonth(year, month, series));
+  const grid = $derived(buildCalendarMonth(year, month, series, meetings));
   const selected = $derived(grid.days.find((d) => d.key === selectedKey) ?? null);
   const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   const CELL_MARKS = 4;
@@ -130,18 +155,32 @@
   };
   const label = (e: TimelineEvent) => (KIND_LABEL[e.kind] ?? (() => humanKind(e.kind)))(e);
 
-  const timeOf = (e: TimelineEvent) =>
-    new Date(e.occurred_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  const timeOf = (e: TimelineEvent) => clockOf(e.occurred_at);
+  const clockOf = (instant: string) =>
+    new Date(instant).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+
+  /** An arranged meeting is drawn as arranged, never as observed: it has not happened
+   *  yet and may still move. A cancelled one keeps its place — an interview that simply
+   *  vanished from a Thursday cannot be told apart from a calendar that failed to load. */
+  const meetingTone = (iv: ScheduledInterview) =>
+    iv.status === 'cancelled' ? 'text-muted-foreground' : 'text-brand-strong';
 
   const dayHeading = (d: CalendarDay) =>
     d.date.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
 
   /** What a cell announces. An empty day says nothing about a count: "0 events" on the
    *  thirty-odd empty cells is noise a screen reader has to walk through. */
+  /** "1 entry" / "3 entries". Shared by the cell's label and the panel's heading so the
+   *  two cannot disagree, which is how "1 entries" got onto the screen in the first place. */
+  function entryCount(d: CalendarDay): string {
+    const n = d.events.length + d.interviews.length;
+    return `${n} ${n === 1 ? 'entry' : 'entries'}`;
+  }
+
   function cellLabel(d: CalendarDay): string {
-    if (d.events.length === 0) return dayHeading(d);
-    const n = d.events.length;
-    return `${dayHeading(d)} — ${n} ${n === 1 ? 'event' : 'events'}`;
+    if (d.events.length + d.interviews.length === 0) return dayHeading(d);
+    const scheduled = d.interviews.length > 0 ? ', interview scheduled' : '';
+    return `${dayHeading(d)} — ${entryCount(d)}${scheduled}`;
   }
 </script>
 
@@ -190,6 +229,19 @@
                 : 'text-muted-foreground'}">{day.dayOfMonth}</span
             >
             <span class="flex flex-wrap items-center gap-0.5">
+              {#each day.interviews as iv (iv.id)}
+                <!-- A square marks an appointment, a circle a record. Shape rather than
+                     hue alone, so the difference does not depend on seeing colour.
+                     rounded-none and not the radius token: radius-sm is 6px, which on an
+                     8px mark rounds the square back into a circle — the distinction was
+                     invisible on screen until it was looked at. -->
+                <span
+                  class="inline-block h-2 w-2 rounded-none border {meetingTone(iv)}"
+                  class:bg-current={iv.status !== 'cancelled'}
+                  style="border-color: currentColor"
+                  title={iv.status === 'cancelled' ? 'Interview — cancelled' : 'Interview'}
+                ></span>
+              {/each}
               {#each marks.shown as e (e.id)}
                 <!-- Filled = a date somebody other than the candidate set. Hollow = one
                      they recorded themselves. -->
@@ -231,11 +283,49 @@
       <div id="calendar-day-panel" role="region" aria-live="polite" class="rounded-lg border bg-card p-4">
         <h3 class="mb-3 text-sm font-medium">
           {dayHeading(selected)}
-          <span class="font-normal text-muted-foreground">· {selected.events.length} events</span>
+          <span class="font-normal text-muted-foreground">· {entryCount(selected)}</span>
         </h3>
-        {#if selected.events.length === 0}
+        {#if selected.interviews.length > 0}
+          <ul class="mb-3 flex flex-col gap-3">
+            {#each selected.interviews as iv (iv.id)}
+              <li class="flex gap-3">
+                <span
+                  class="mt-1.5 inline-block h-2 w-2 shrink-0 rounded-none border {meetingTone(iv)}"
+                  class:bg-current={iv.status !== 'cancelled'}
+                  style="border-color: currentColor"
+                ></span>
+                <div class="min-w-0 flex-1">
+                  <p class="text-sm" class:line-through={iv.status === 'cancelled'}>
+                    <span class="font-medium">{iv.company_slug}</span>
+                    {#if iv.role_title}<span class="text-muted-foreground"> · {iv.role_title}</span>{/if}
+                  </p>
+                  <p class="text-sm text-muted-foreground">
+                    {iv.title || 'Interview'}
+                    {#if iv.status === 'cancelled'}<span class="font-medium"> — cancelled</span>{/if}
+                    {#if iv.status === 'suggested'}<span> — unconfirmed</span>{/if}
+                  </p>
+                  <p class="mt-0.5 text-xs text-muted-foreground">
+                    {clockOf(iv.starts_at)}
+                    {#if iv.application_id}
+                      · <a
+                          class="underline hover:no-underline"
+                          href={resolve('/my/tracking/[id]', { id: boardRefFor(iv) ?? '' })}>application</a
+                        >
+                    {/if}
+                    {#if iv.join_url && iv.status !== 'cancelled'}
+                      ·
+                      <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- the organiser's meeting link, an external URL rather than an internal route -->
+                      <a class="underline hover:no-underline" href={iv.join_url} rel="noreferrer">join</a>
+                    {/if}
+                  </p>
+                </div>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        {#if selected.events.length === 0 && selected.interviews.length === 0}
           <p class="text-sm text-muted-foreground">Nothing happened on this day.</p>
-        {:else}
+        {:else if selected.events.length > 0}
           <ul class="flex flex-col gap-3">
             {#each selected.events as e (e.id)}
               <li class="flex gap-3">
@@ -278,6 +368,32 @@
             {/each}
           </ul>
         {/if}
+      </div>
+    {/if}
+
+    {#if calendarConnected === false && connectAvailable}
+      <!-- Said plainly rather than discovered at Google's consent screen. The OAuth app
+           is not verified yet, so an account outside the test roster is simply refused
+           there — and a refusal with no explanation reads as a fault in freehire. -->
+      <div class="rounded-lg border bg-card p-4">
+        <p class="text-sm">
+          Connect your calendar and the interviews you accept will appear here, on the day they
+          are due.
+        </p>
+        <p class="mt-1 text-sm text-muted-foreground">
+          Only meetings we can attach to one of your applications are stored — the rest of your
+          calendar is read and discarded. While our Google app is awaiting verification the
+          connection works for approved test accounts only.
+        </p>
+        <!-- eslint-disable svelte/no-navigation-without-resolve -- an API route the browser must
+             navigate to so Google can redirect it back, not a SvelteKit page to resolve. The
+             block form because prettier puts href on its own line, past a next-line disable. -->
+        <a
+          href="/api/v1/me/calendar/connect"
+          class="mt-3 inline-block rounded-md border px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+          >Connect Google Calendar</a
+        >
+        <!-- eslint-enable svelte/no-navigation-without-resolve -->
       </div>
     {/if}
 
