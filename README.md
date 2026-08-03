@@ -405,15 +405,20 @@ proxy forwards `/api` to the backend).
 
 ## Contributing
 
-freehire's core is a small pipeline; the easiest way to help is to **add a
-source** — one entry in a `sources/` board file, or a new adapter in
-`internal/sources`. Questions and ideas are always welcome in
-[Discussions](https://github.com/strelov1/freehire/discussions). Ready to send a
-change? **Open an issue first** — it gets you on the contributor allowlist and
-points you at the right seam. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
-workflow and [AGENTS.md](AGENTS.md) for the architecture and conventions. (Issues
-and PRs from accounts not yet on the allowlist are auto-closed to keep out spam —
-a quick intro issue is all it takes.)
+**Contributions are welcome, and issues and PRs are open to everyone.** No
+allowlist, no approval step — open one.
+
+The easiest way to help is to **add a source**: one entry in a `sources/` board
+file, or a new adapter in `internal/sources`. Missing a company you would apply
+to? That is a one-line PR, and it is the single most useful thing you can send.
+
+Questions and half-formed ideas are equally welcome in
+[Discussions](https://github.com/strelov1/freehire/discussions) — no need to
+polish them into an issue first. For anything large, an issue up front saves you
+from building the wrong thing, but nothing stops you from just opening the PR.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the checks CI runs and
+[AGENTS.md](AGENTS.md) for the architecture and conventions.
 
 ## Security
 

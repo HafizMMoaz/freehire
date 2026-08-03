@@ -1,7 +1,7 @@
-blank_issues_enabled: false
+blank_issues_enabled: true
 contact_links:
   - name: Questions & discussions
     url: https://github.com/strelov1/freehire/discussions
     about: >-
-      Ask questions, propose ideas, or get help here. New-contributor issues are
-      auto-closed by default — Discussions are not gated.
+      Ask questions, propose ideas, or get help. Nothing needs to be polished
+      into an issue first.
