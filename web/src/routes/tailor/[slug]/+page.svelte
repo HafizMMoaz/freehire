@@ -266,6 +266,17 @@
       // and the preview falls back to the template's own face meanwhile.
       void api.listCvFonts().then((f) => (fonts = f)).catch(() => {});
     } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        // The bootstrap (tailorCv) requires a cached match to already exist — true for
+        // every vacancy reached the normal way (the match page's "Tailor my CV" button
+        // only ever appears once one has run), but never true for a job that just came
+        // through the JD-intake dialog (paste text/URL/pick a vacancy — none of those
+        // run a match first). Rather than surface that as an error, send the candidate
+        // straight to the match page, which auto-runs on a cold start and hands them
+        // back here once it lands.
+        void goto(resolve('/match/[slug]', { slug }));
+        return;
+      }
       if (e instanceof ApiError && e.status === 402) {
         // Out of AI credits: surface the message plus when the monthly grant renews.
         const resetsAt = typeof e.body?.resets_at === 'string' ? e.body.resets_at : null;
@@ -435,7 +446,7 @@
   {:else if status === 'error'}
     <div class="flex min-w-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
       <p class="max-w-md text-sm text-destructive">{errorMsg}</p>
-      <a href={resolve('/match/[slug]', { slug })} class="text-sm text-brand hover:underline">Back to the fit analysis</a>
+      <a href={resolve('/match/[slug]', { slug })} class="text-sm text-brand hover:underline">Back to the match</a>
     </div>
   {:else}
     <div class="flex min-w-0 flex-1 flex-col lg:flex-row">
