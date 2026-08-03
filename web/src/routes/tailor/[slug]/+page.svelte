@@ -23,6 +23,7 @@
   import MarginSettings from '$lib/components/cv/MarginSettings.svelte';
   import TracerLinksSettings from '$lib/components/cv/TracerLinksSettings.svelte';
   import StyleSettings from '$lib/components/cv/StyleSettings.svelte';
+  import TemplateGallery from '$lib/tailor/TemplateGallery.svelte';
   import AccountNavRail from '$lib/components/AccountNavRail.svelte';
   import { clampWidth } from '$lib/tailor/geometry';
   import { undoRun, openingActions } from '$lib/tailor/autopilot';
@@ -88,7 +89,17 @@
 
   // Left panel: which tab is shown, and its resizable width. The chat stays mounted across tab
   // switches (hidden, not unmounted) so its live session is never dropped.
-  let leftTab = $state<'chat' | 'editor' | 'settings'>('chat');
+  // The left panel holds what CHANGES the document — its text, its template, its typography —
+  // and the chat that does all three by asking. Measuring the document is the right panel's job.
+  type LeftTab = 'chat' | 'editor' | 'templates' | 'settings';
+  let leftTab = $state<LeftTab>('chat');
+  // Templates before Settings: a template is chosen first and then tuned.
+  const leftTabs: [LeftTab, string][] = [
+    ['editor', 'Editor'],
+    ['templates', 'Templates'],
+    ['settings', 'Settings'],
+    ['chat', 'Chat'],
+  ];
   let leftWidth = $state(350);
   // Folded to a rail so the centre CV preview can take the width. Desktop-only: below lg the
   // columns already show one at a time, and collapsing there would hide a view with no way back.
@@ -98,7 +109,7 @@
 
   // The right context panel's tab, lifted here so the mobile tab bar can drive it (on desktop the
   // panel's own tab bar sets it via the same binding).
-  let artifactTab = $state<'templates' | 'jd' | 'jobmatch' | 'score'>('jobmatch');
+  let artifactTab = $state<'jd' | 'jobmatch' | 'score'>('jobmatch');
 
   // Mobile-only navigation: below lg the three columns collapse to one, so a single flat tab bar
   // picks which view fills the screen. At lg it's hidden and every column shows at once as before.
@@ -110,12 +121,12 @@
   const mobileTabs: [MobileView, string][] = [
     ['chat', 'Chat'],
     ['editor', 'Editor'],
+    ['templates', 'Templates'],
     ['settings', 'Settings'],
     ['preview', 'Preview'],
     ['jobmatch', 'Job Match'],
     ['score', 'Score'],
     ['jd', 'Job'],
-    ['templates', 'Templates'],
   ];
   let mobileView = $state<MobileView>('chat');
 
@@ -124,7 +135,7 @@
   let navOpen = $state(false);
   function pickMobile(v: MobileView) {
     mobileView = v;
-    if (v === 'chat' || v === 'editor' || v === 'settings') leftTab = v;
+    if (v === 'chat' || v === 'editor' || v === 'templates' || v === 'settings') leftTab = v;
     else if (v !== 'preview') artifactTab = v;
   }
 
@@ -477,7 +488,9 @@
         bind:this={leftPanelEl}
         class={[
           'w-full min-h-0 flex-1 flex-col border-r border-border bg-background lg:w-[var(--lw)] lg:flex-none',
-          mobileView === 'chat' || mobileView === 'editor' || mobileView === 'settings' ? 'flex' : 'hidden',
+          mobileView === 'chat' || mobileView === 'editor' || mobileView === 'templates' || mobileView === 'settings'
+            ? 'flex'
+            : 'hidden',
           leftCollapsed ? 'lg:hidden' : 'lg:flex',
         ]}
         style="--lw: {leftWidth}px"
@@ -485,27 +498,15 @@
         <!-- Own tab bar (and save status) is desktop-only; the mobile bar drives the tab there. -->
         <div class="hidden items-center justify-between gap-2 border-b border-border px-2 py-1.5 text-sm lg:flex">
           <div class="flex items-center gap-1">
-            <button
-              type="button"
-              onclick={() => (leftTab = 'editor')}
-              class={['rounded px-2 py-1 transition-colors', leftTab === 'editor' ? 'bg-brand-muted font-semibold text-brand-strong' : 'text-muted-foreground hover:text-foreground']}
-            >
-              Editor
-            </button>
-            <button
-              type="button"
-              onclick={() => (leftTab = 'settings')}
-              class={['rounded px-2 py-1 transition-colors', leftTab === 'settings' ? 'bg-brand-muted font-semibold text-brand-strong' : 'text-muted-foreground hover:text-foreground']}
-            >
-              Settings
-            </button>
-            <button
-              type="button"
-              onclick={() => (leftTab = 'chat')}
-              class={['rounded px-2 py-1 transition-colors', leftTab === 'chat' ? 'bg-brand-muted font-semibold text-brand-strong' : 'text-muted-foreground hover:text-foreground']}
-            >
-              Chat
-            </button>
+            {#each leftTabs as [id, label] (id)}
+              <button
+                type="button"
+                onclick={() => (leftTab = id)}
+                class={['rounded px-2 py-1 transition-colors', leftTab === id ? 'bg-brand-muted font-semibold text-brand-strong' : 'text-muted-foreground hover:text-foreground']}
+              >
+                {label}
+              </button>
+            {/each}
           </div>
           <div class="flex items-center gap-1">
             {#if leftTab === 'editor' || leftTab === 'settings'}
@@ -543,6 +544,11 @@
           <!-- Presentation, in two blocks of label→control rows. Both write straight into the
                shared document, so the centre preview re-renders live and autosave persists them
                on the same debounce as any other edit. -->
+          <!-- Templates: what the CV looks like, beside the rest of what decides that. The
+               gallery is the same component the right panel used to host — moved, not rewritten. -->
+          <div class="h-full overflow-auto p-4" class:hidden={leftTab !== 'templates'}>
+            <TemplateGallery {cvId} onSelected={onTemplateSelected} />
+          </div>
           <div class="h-full overflow-auto p-4" class:hidden={leftTab !== 'settings'}>
             <div class="space-y-6">
               <section class="space-y-2">
@@ -628,7 +634,6 @@
       <!-- RIGHT: Templates / Job description / Verdict (renders its own splitter). Shown on mobile
            only when one of its tabs is picked; always shown at lg. -->
       <ArtifactPanel
-        {cvId}
         job={job!}
         {analysis}
         {autopilotReport}
@@ -640,12 +645,8 @@
         onPreviewRevision={(r) => (pinnedRevision = r)}
         onUndoRevision={undoRevision}
         onUndoRevisionRun={undoRevisionRun}
-        {onTemplateSelected}
         bind:tab={artifactTab}
-        mobileVisible={mobileView === 'templates' ||
-          mobileView === 'jd' ||
-          mobileView === 'jobmatch' ||
-          mobileView === 'score'}
+        mobileVisible={mobileView === 'jd' || mobileView === 'jobmatch' || mobileView === 'score'}
       />
     </div>
   {/if}
