@@ -451,6 +451,7 @@ type Job struct {
 	DownvoteCount         int32              `json:"downvote_count"`
 	AtsAbsentAt           pgtype.Timestamptz `json:"ats_absent_at"`
 	ClosedReason          string             `json:"closed_reason"`
+	IsPrivate             bool               `json:"is_private"`
 }
 
 type JobDailyStat struct {

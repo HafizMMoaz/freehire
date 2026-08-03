@@ -1110,6 +1110,25 @@ type Querier interface {
 	// has a mailbox) or address (taken) — the allocation service handles both: it
 	// reads-back on a user conflict and retries the next suffix on an address conflict.
 	InsertMailbox(ctx context.Context, arg InsertMailboxParams) (Mailbox, error)
+	// Creates a job visible only to its creator: the jd-tailor-intake private-JD path
+	// (pasted text, or a URL only a generic scrape could read). Always a plain INSERT,
+	// never an upsert — external_id is a synthetic value scoped to this one submission
+	// (see internal/privatejob), never compared against the public (source, external_id)
+	// dedup space, so two submissions never collide and this never conflicts with an
+	// existing row.
+	//
+	// Deliberately does NOT touch the companies table (unlike UpsertJob/UpsertManualJob):
+	// a private submission's employer name is not a vetted catalogue entry, so minting or
+	// updating a companies row from it would leak a one-off private JD's company into the
+	// public companies directory. jobs.company_slug has no FK to companies, so this is
+	// safe to leave unbacked.
+	//
+	// Also deliberately does NOT enqueue enrichment (contrast UpsertManualJob's Repository,
+	// which does): a private, single-tailoring-session row doesn't recoup that cost. The
+	// caller supplies content_hash/role_fingerprint precomputed the same way every other
+	// write path does (job.Fields.UpsertParams), so a private job's fingerprints are
+	// comparable if it were ever to matter, even though it is never indexed or clustered.
+	InsertPrivateJob(ctx context.Context, arg InsertPrivateJobParams) (Job, error)
 	// Append a reward: points earned (e.g. for an accepted board contribution), delta positive,
 	// feature NULL. Rewards bank above the monthly grant and survive the period reset. The
 	// partial unique index on (user_id, ref) WHERE kind='reward' guards against a double
@@ -1516,6 +1535,13 @@ type Querier interface {
 	// Newest-added first: created_at is when the job entered the catalogue (stable
 	// across re-ingests), so fresh ingests surface on top regardless of how old the
 	// platform's posted_at is. id breaks ties within one ingest batch.
+	//
+	// AND NOT is_private excludes the jd-tailor-intake private-job path (visible only to
+	// its creator, through GetJobBySlug, not this listing). The partial index backing this
+	// query's ORDER BY (jobs_open_created_idx) predicates on closed_at IS NULL only, not
+	// is_private — Postgres can still use it here since that predicate is implied by this
+	// WHERE clause, applying the is_private filter on the (small) scanned window rather than
+	// the whole table, so this stays index-served rather than degrading to a full scan.
 	ListJobs(ctx context.Context, arg ListJobsParams) ([]Job, error)
 	// duplicate_of IS NULL collapses role-cluster reposts to their canonical row, matching
 	// the /jobs list so a company page shows one card per role, not every repost.
@@ -1591,6 +1617,11 @@ type Querier interface {
 	// its own location and apply URL, so a seeker picks their city; the anchor itself is
 	// included (it is one of the openings). Ordered by location. An empty-fingerprint anchor
 	// clusters with no one and returns nothing.
+	//
+	// AND NOT j.is_private excludes the jd-tailor-intake private-job path: without it, a
+	// private job that coincidentally shares its cluster key with a public one would surface
+	// (slug, location, url) to anyone browsing that PUBLIC job's copies — a listing leak, not
+	// merely "you'd need the direct link", which is what never indexing/listing it is for.
 	ListRoleClusterCopies(ctx context.Context, arg ListRoleClusterCopiesParams) ([]ListRoleClusterCopiesRow, error)
 	// Every public_slug the user has saved (bookmarked). Used by the SPA to render
 	// the save toggle as filled on already-saved cards in the browse list and search

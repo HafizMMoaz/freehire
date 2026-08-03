@@ -30,6 +30,7 @@ import (
 	"github.com/strelov1/freehire/internal/experience"
 	"github.com/strelov1/freehire/internal/gmailsync"
 	"github.com/strelov1/freehire/internal/headshot"
+	"github.com/strelov1/freehire/internal/jdresolve"
 	"github.com/strelov1/freehire/internal/linkimport"
 	"github.com/strelov1/freehire/internal/llm"
 	"github.com/strelov1/freehire/internal/llmkey"
@@ -37,6 +38,7 @@ import (
 	"github.com/strelov1/freehire/internal/matchanalysis"
 	"github.com/strelov1/freehire/internal/moderation"
 	"github.com/strelov1/freehire/internal/pii"
+	"github.com/strelov1/freehire/internal/privatejob"
 	"github.com/strelov1/freehire/internal/referral"
 	"github.com/strelov1/freehire/internal/report"
 	"github.com/strelov1/freehire/internal/resume"
@@ -313,6 +315,10 @@ func Register(app *fiber.App, cfg Config) {
 	ingestClient := sources.NewClient()
 	importer := linkimport.New(cfg.Pool, queries, cfg.Search, ingestClient, sources.All(ingestClient), boardresolve.New())
 	contributionsH := newContributionHandlers(contributionSvc, creditsStore, queries, importer)
+	// jd-tailor-intake reuses the SAME importer as the contribution flow (shared SSRF-guarded
+	// transport and rate limits — see the comment on ingestClient above) for its recognized-ATS
+	// branch, and internal/privatejob for its generic-scrape/pasted-text branch.
+	jdResolveH := newJDResolveHandlers(jdresolve.New(queries, importer, privatejob.NewWriter(queries)))
 	creditsH := newCreditsHandlers(creditsStore, queries)
 	matchH := newMatchHandlers(queries, profileSvc, resumeStore, matchAnalyzer, creditsStore)
 	// The CV store is shared: the CV surface owns the write path, referrals render from it
@@ -529,6 +535,7 @@ func Register(app *fiber.App, cfg Config) {
 
 	// Link contributions (see contributionHandlers).
 	contributionsH.register(api, mw)
+	jdResolveH.register(api, mw)
 
 	// Employee referrals (see referralHandlers).
 	referralsH.register(api, mw)

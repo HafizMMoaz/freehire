@@ -22,6 +22,7 @@ import type {
   CvTracerLink,
   UpdateCvInput,
   TailorResult,
+  JdResolveInput,
 } from './cv';
 import type {
   Job,
@@ -1618,6 +1619,21 @@ export function createApi(
     return requestData<TailorResult>(`/api/v1/me/cvs/${id}/tailor-session`, jsonBody('POST', {}));
   }
 
+  /**
+   * Turn a job slug, an external URL, or pasted JD text into a job slug the tailoring
+   * workspace can open. Exactly one of `job_slug`/`url`/`text` must be set. A URL a
+   * recognized ATS can read becomes a normal catalog job; anything else (a generic scrape
+   * or plain text) becomes a private job — visible only via its own slug, never listed or
+   * searchable. 422 when a URL cannot be read at all.
+   */
+  async function resolveJd(input: JdResolveInput): Promise<string> {
+    const { job_slug } = await requestData<{ job_slug: string }>(
+      '/api/v1/me/jd/resolve',
+      jsonBody('POST', input),
+    );
+    return job_slug;
+  }
+
   /** A subject's open discussion threads, newest first. `subjectType` is 'company'
    *  or 'job', `subjectSlug` the subject's public slug. `nextCursor` (when present)
    *  fetches the following keyset page. Public — no auth needed to read. */
@@ -1842,6 +1858,7 @@ export function createApi(
     undoCvRevisionRun,
     tailorCv,
     startTailorSession,
+    resolveJd,
     listThreads,
     countThreads,
     getThread,
