@@ -18,8 +18,8 @@
   // and — when it failed — the reason the model was given.
   //
   // `request_confirmation` is the one exception: instead of a collapsed line it
-  // renders as the claim text plus Да/Нет. `onConfirm` sends whichever text the
-  // candidate picked as an ordinary chat message — clicking Да replays the claim
+  // renders as the claim text plus Yes/No. `onConfirm` sends whichever text the
+  // candidate picked as an ordinary chat message — clicking Yes replays the claim
   // verbatim, which is what lets the backend's own verbatim-quote check recognise it
   // as the candidate's own words. There is no other wiring: this component holds no
   // state about which claims were already answered.
@@ -60,7 +60,7 @@
               {disabled}
               class="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
             >
-              Да
+              Yes
             </button>
             <button
               type="button"
@@ -68,7 +68,7 @@
               {disabled}
               class="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted disabled:opacity-50"
             >
-              Нет
+              No
             </button>
           </div>
         </div>

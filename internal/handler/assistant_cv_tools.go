@@ -67,9 +67,9 @@ func (h *assistantHandlers) assistantCVTools(cvID uuid.UUID, jobID int64, batchI
 }
 
 // requestConfirmationTool puts a confirmation question in front of the candidate as a
-// claim plus a Да/Нет choice, instead of the agent writing it as free-text prose. It has
+// claim plus a Yes/No choice, instead of the agent writing it as free-text prose. It has
 // no side effect: the client renders the buttons from the call's own arguments, and the
-// candidate's answer arrives as an ordinary chat message on their NEXT turn — clicking Да
+// candidate's answer arrives as an ordinary chat message on their NEXT turn — clicking Yes
 // replays the claim text verbatim, which is what lets the unchanged verbatim-quote
 // provenance check (internal/assistant/message.go's UserSaid) recognise it as the
 // candidate's own words on the agent's next experience_add retry. There is no dedicated
@@ -79,14 +79,14 @@ func (h *assistantHandlers) requestConfirmationTool() assistant.Tool {
 	return assistant.Tool{
 		Name: "request_confirmation",
 		Description: "Ask the candidate to confirm a claim before it can be written into the CV, instead of " +
-			"asking in free text. Pass the exact claim text — the candidate sees it with Да/Нет buttons, and " +
-			"Да replays that exact text as their next message, which is what makes it citable.",
+			"asking in free text. Pass the exact claim text — the candidate sees it with Yes/No buttons, and " +
+			"Yes replays that exact text as their next message, which is what makes it citable.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"claim": map[string]any{
 					"type":        "string",
-					"description": "The exact claim text to confirm, verbatim — this is what Да replays back.",
+					"description": "The exact claim text to confirm, verbatim — this is what Yes replays back.",
 				},
 				"question": map[string]any{
 					"type":        "string",

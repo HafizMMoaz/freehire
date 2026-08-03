@@ -123,13 +123,13 @@ export function toolErrorMessage(call: ToolCall): string | null {
   }
 }
 
-/** The tool whose calls the renderer shows as a claim plus Да/Нет buttons instead of
+/** The tool whose calls the renderer shows as a claim plus Yes/No buttons instead of
  *  the generic collapsed line. */
 export const REQUEST_CONFIRMATION_TOOL = 'request_confirmation';
 
-/** What Нет sends, verbatim — a fixed decline, never the claim text, so declining
+/** What No sends, verbatim — a fixed decline, never the claim text, so declining
  *  never accidentally reads as confirming it. */
-export const CONFIRMATION_DECLINE_TEXT = 'Нет, это не так — не добавляй.';
+export const CONFIRMATION_DECLINE_TEXT = "No, that's not right — don't add it.";
 
 export interface ConfirmationRequest {
   claim: string;
@@ -138,7 +138,7 @@ export interface ConfirmationRequest {
 
 /** Reads a `request_confirmation` call's arguments into what the button UI needs, or
  *  null when the call is a different tool or its claim is missing or blank — the one
- *  thing the renderer actually replays on Да. */
+ *  thing the renderer actually replays on Yes. */
 export function parseConfirmationRequest(call: ToolCall): ConfirmationRequest | null {
   if (call.name !== REQUEST_CONFIRMATION_TOOL) return null;
   if (!call.input || typeof call.input !== 'object') return null;
