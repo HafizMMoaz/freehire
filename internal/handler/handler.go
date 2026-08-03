@@ -366,10 +366,8 @@ func Register(app *fiber.App, cfg Config) {
 	// disagree. The tailoring bootstrap mints its conversations through the same
 	// store, which is why the CV handlers get it back. It also takes the browser-tool
 	// hub, which a browsing session reads the caller's open page through.
-	// Suggestions run on LLM (cheap, one-shot) rather than on AssistantLLM: the whole
-	// argument for generating them outside the turn is that they cost almost nothing.
 	assistantH := newAssistantHandlers(queries,
-		assistantModels{Agent: cfg.AssistantLLM, FollowUps: cfg.LLM, Keys: llmKeys, MaxSteps: cfg.AssistantMaxSteps},
+		assistantModels{Agent: cfg.AssistantLLM, Keys: llmKeys, MaxSteps: cfg.AssistantMaxSteps},
 		assistantStore, searchH, resumeH, trackingH, cvH, profileH, a.browserTools, inboxH, bank)
 	resumeH.llm = llmBinding{client: cfg.LLM, keys: llmKeys}
 	matchH.llm = llmBinding{client: cfg.LLM, keys: llmKeys}
