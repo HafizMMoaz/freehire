@@ -14,6 +14,7 @@ import (
 	"github.com/strelov1/freehire/internal/assistant"
 	"github.com/strelov1/freehire/internal/cv"
 	"github.com/strelov1/freehire/internal/cvedit"
+	"github.com/strelov1/freehire/internal/cvmatch"
 	"github.com/strelov1/freehire/internal/experience"
 	"github.com/strelov1/freehire/internal/matchanalysis"
 )
@@ -63,6 +64,7 @@ func (h *assistantHandlers) assistantCVTools(cvID uuid.UUID, jobID int64, batchI
 		h.cvEditTool(cvID, batchID),
 		h.tailorReportTool(cvID),
 		h.requestConfirmationTool(),
+		h.cvJobMatchTool(cvID, jobID),
 	}
 }
 
@@ -194,6 +196,55 @@ func (h *assistantHandlers) cvContextTool(jobID int64) assistant.Tool {
 				return nil, err
 			}
 			return h.withBankEvidence(ctx, userID, base), nil
+		},
+	}
+}
+
+// cvJobMatchTool lets the tailoring agent read the deterministic CV-vs-vacancy score as
+// feedback on what it has changed. It is a different signal from cv_context's Verdict/
+// OverallScore: those come from the cached LLM fit analysis and MUST NOT be recomputed
+// mid-tailoring (internal/matchanalysis, cv-tailoring spec), while this recomputes fresh off
+// the CV's own rendered text every call — the same read GetCVJobMatch serves the workspace
+// panel, which already refreshes after every saved edit. No model call, so it costs nothing
+// to check after a batch of edits.
+func (h *assistantHandlers) cvJobMatchTool(cvID uuid.UUID, jobID int64) assistant.Tool {
+	return assistant.Tool{
+		Name: "job_match",
+		Description: "Read how well the CV currently scores against this vacancy — Requirements Coverage, " +
+			"Keyword Match, Job Title Match, Seniority Fit — recomputed fresh from what the CV says right now, " +
+			"not the cached fit analysis. Call it after a batch of edits to see their effect; no model call.",
+		Schema: map[string]any{"type": "object", "properties": map[string]any{}},
+		Run: func(ctx context.Context, userID int64, raw json.RawMessage) (any, error) {
+			var in struct{}
+			if err := assistant.DecodeArgs(raw, &in); err != nil {
+				return nil, err
+			}
+			rec, err := h.cv.cvStore.GetForModel(ctx, cvID, userID)
+			if err != nil {
+				return nil, cvToolError(err)
+			}
+			tmpl, err := cv.ResolveTemplate(rec.TemplateID)
+			if err != nil {
+				return nil, cvToolError(err)
+			}
+			job, err := h.cv.jobReader.GetJob(ctx, jobID)
+			if err != nil {
+				return nil, err
+			}
+			analysis, hasAnalysis := h.cv.cachedAnalysisOrNone(ctx, userID, jobID)
+			score, err := h.cv.cvJobMatchScore(ctx, rec.Document, tmpl, cvmatch.Input{
+				JobTitle:     job.Title,
+				JobSkills:    job.Skills,
+				Requirements: cvJobMatchRequirements(analysis),
+				HasAnalysis:  hasAnalysis,
+			})
+			if err != nil {
+				return map[string]any{"available": false, "reason": "could not compute a score right now"}, nil
+			}
+			if len(score.Contributing) == 0 {
+				return map[string]any{"available": false, "reason": "nothing about this vacancy could be matched automatically"}, nil
+			}
+			return map[string]any{"available": true, "score": score}, nil
 		},
 	}
 }
