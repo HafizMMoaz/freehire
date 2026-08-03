@@ -445,3 +445,37 @@ func TestCVEditAppliesAWholeBatchAtOnce(t *testing.T) {
 		}
 	}
 }
+
+// request_confirmation has no side effect: the client renders it as buttons, and the
+// candidate's answer arrives as an ordinary chat message on their next turn, not as a
+// second tool call this one waits for.
+func TestRequestConfirmationToolIsRegisteredForTailoring(t *testing.T) {
+	a, _ := cvToolsAPI(t, oneExperienceCV)
+
+	tool := toolByName(t, a.assistantCVTools(testCVID, 9, uuid.New()), "request_confirmation")
+	out, err := tool.Run(context.Background(), 3, json.RawMessage(
+		`{"claim":"Built Reelmente.app with React and Next.js","question":"Is that right?"}`))
+	if err != nil {
+		t.Fatalf("request_confirmation: %v", err)
+	}
+	payload, _ := json.Marshal(out)
+	if !strings.Contains(string(payload), "awaiting_candidate_response") {
+		t.Errorf("payload = %s, want status awaiting_candidate_response", payload)
+	}
+}
+
+// The tool writes nothing and reads nothing — a claim rejected outright (no employment,
+// no evidence yet) must still be askable about.
+func TestRequestConfirmationToolTouchesNoStore(t *testing.T) {
+	a, repo := cvToolsAPI(t, oneExperienceCV)
+	before := string(repo.written)
+
+	tool := toolByName(t, a.assistantCVTools(testCVID, 9, uuid.New()), "request_confirmation")
+	if _, err := tool.Run(context.Background(), 3, json.RawMessage(
+		`{"claim":"Anything","question":"Confirm?"}`)); err != nil {
+		t.Fatalf("request_confirmation: %v", err)
+	}
+	if string(repo.written) != before {
+		t.Errorf("request_confirmation wrote to the CV store; it must have no side effect (before=%q after=%q)", before, repo.written)
+	}
+}
