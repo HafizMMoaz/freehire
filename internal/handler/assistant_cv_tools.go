@@ -62,6 +62,50 @@ func (h *assistantHandlers) assistantCVTools(cvID uuid.UUID, jobID int64, batchI
 		h.cvGetTool(cvID),
 		h.cvEditTool(cvID, batchID),
 		h.tailorReportTool(cvID),
+		h.requestConfirmationTool(),
+	}
+}
+
+// requestConfirmationTool puts a confirmation question in front of the candidate as a
+// claim plus a Да/Нет choice, instead of the agent writing it as free-text prose. It has
+// no side effect: the client renders the buttons from the call's own arguments, and the
+// candidate's answer arrives as an ordinary chat message on their NEXT turn — clicking Да
+// replays the claim text verbatim, which is what lets the unchanged verbatim-quote
+// provenance check (internal/assistant/message.go's UserSaid) recognise it as the
+// candidate's own words on the agent's next experience_add retry. There is no dedicated
+// confirmation endpoint and no new provenance value; this tool only changes how the
+// question is put, not how an answer becomes citable.
+func (h *assistantHandlers) requestConfirmationTool() assistant.Tool {
+	return assistant.Tool{
+		Name: "request_confirmation",
+		Description: "Ask the candidate to confirm a claim before it can be written into the CV, instead of " +
+			"asking in free text. Pass the exact claim text — the candidate sees it with Да/Нет buttons, and " +
+			"Да replays that exact text as their next message, which is what makes it citable.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"claim": map[string]any{
+					"type":        "string",
+					"description": "The exact claim text to confirm, verbatim — this is what Да replays back.",
+				},
+				"question": map[string]any{
+					"type":        "string",
+					"description": "A short question putting the claim to the candidate.",
+				},
+			},
+			"required":             []string{"claim", "question"},
+			"additionalProperties": false,
+		},
+		Run: func(ctx context.Context, userID int64, raw json.RawMessage) (any, error) {
+			var in struct {
+				Claim    string `json:"claim"`
+				Question string `json:"question"`
+			}
+			if err := assistant.DecodeArgs(raw, &in); err != nil {
+				return nil, err
+			}
+			return map[string]any{"status": "awaiting_candidate_response"}, nil
+		},
 	}
 }
 

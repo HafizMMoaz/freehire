@@ -31,11 +31,6 @@ import (
 type assistantHandlers struct {
 	store  *assistant.Store
 	runner *assistant.Runner
-	// followUps suggests what to ask next, on the CHEAP model rather than the agent's
-	// own: it is a three-line task, and spending the tool-calling model on it would
-	// undo the only reason it is a separate call. Nil when unconfigured, which the
-	// endpoint answers as an empty list.
-	followUps *assistant.FollowUps
 
 	// llm is the agent's own client, kept beside the runner so a turn can be re-bound
 	// to the caller's gateway credential. The runner holds it as an interface and
@@ -44,10 +39,6 @@ type assistantHandlers struct {
 	// keys resolves the credential a turn spends under. Nil in a deployment that does
 	// not attribute spend, which every path treats as "spend on the service credential".
 	keys *llmkey.Resolver
-	// followUpLLM binds the CHEAP model the suggestion strip runs on. Separate from the
-	// agent's own client for the same reason followUps is: they are different models,
-	// and one field holding both would eventually be handed the wrong one.
-	followUpLLM llmBinding
 
 	// turns are the turns running right now, so a cancel request can reach one that is
 	// streaming on a goroutine no request owns any more, and so a session keeps to one turn
@@ -81,18 +72,13 @@ type assistantHandlers struct {
 	invitation invitationReader
 }
 
-// assistantModels names the two model clients the assistant runs on and the resolver that
-// bills them. It exists because Agent and FollowUps are the SAME TYPE and different models
-// — as two adjacent parameters a swap would compile and quietly move every turn onto the
-// cheap model — so the call site names each one instead of relying on argument order.
+// assistantModels names the model client the assistant runs on and the resolver that
+// bills it.
 type assistantModels struct {
 	// Agent is the model the turn loop runs on. Nil leaves the runner nil: old
 	// conversations stay readable and a new turn reports the assistant as unavailable,
 	// rather than the whole surface disappearing.
 	Agent *llm.Client
-	// FollowUps is the cheap general-purpose model the suggestion strip runs on. The whole
-	// argument for generating suggestions outside the turn is that they cost almost nothing.
-	FollowUps *llm.Client
 	// Keys names the caller on the gateway. Nil is ordinary rather than degraded: every
 	// turn then spends on the service credential, exactly as it did before attribution.
 	Keys     *llmkey.Resolver
@@ -128,8 +114,6 @@ func newAssistantHandlers(queries *db.Queries, models assistantModels, store *as
 		h.runner = assistant.NewRunner(models.Agent, h.store, assistant.RunnerConfig{MaxSteps: models.MaxSteps})
 	}
 	h.keys = models.Keys
-	h.followUps = assistant.NewFollowUps(models.FollowUps)
-	h.followUpLLM = llmBinding{client: models.FollowUps, keys: models.Keys}
 	return h
 }
 
@@ -151,7 +135,6 @@ func (h *assistantHandlers) register(api fiber.Router, mw middleware) {
 	api.Post("/assistant/sessions/:id/messages", mw.key, h.PostAssistantMessage)
 	api.Post("/assistant/sessions/:id/cancel", mw.key, h.CancelAssistantTurn)
 	api.Post("/assistant/sessions/:id/opening", mw.key, h.PostAssistantOpening)
-	api.Post("/assistant/sessions/:id/followups", mw.key, h.PostAssistantFollowUps)
 	// Cookie-only: an unattended run rewrites a CV, and the browser is the only place
 	// the candidate can watch it happen and undo it.
 	api.Post("/assistant/sessions/:id/autopilot", mw.cookie, h.PostAssistantAutopilot)
