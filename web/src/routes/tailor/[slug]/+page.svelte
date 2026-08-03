@@ -13,11 +13,12 @@
   import { goto } from '$app/navigation';
   import { resolve } from '$app/paths';
   import { page } from '$app/state';
-  import { ZoomIn, ZoomOut, Download, Menu, PanelLeftClose, PanelLeftOpen } from '@lucide/svelte';
+  import { ZoomIn, ZoomOut, Download, Menu, PanelLeftClose, PanelLeftOpen, Terminal } from '@lucide/svelte';
   import { api, ApiError } from '$lib/api';
   import { track } from '$lib/analytics';
   import AssistantChat from '$lib/assistant/AssistantChat.svelte';
   import ArtifactPanel from '$lib/tailor/ArtifactPanel.svelte';
+  import CliEditDialog from '$lib/components/cv/CliEditDialog.svelte';
   import CvHtmlPreview from '$lib/tailor/CvHtmlPreview.svelte';
   import CvSectionForm from '$lib/components/cv/CvSectionForm.svelte';
   import MarginSettings from '$lib/components/cv/MarginSettings.svelte';
@@ -104,6 +105,7 @@
   // Folded to a rail so the centre CV preview can take the width. Desktop-only: below lg the
   // columns already show one at a time, and collapsing there would hide a view with no way back.
   let leftCollapsed = $state(false);
+  let cliDialogOpen = $state(false);
   let leftPanelEl = $state<HTMLElement>();
   let leftResizing = false;
 
@@ -531,6 +533,14 @@
             {/if}
             <button
               type="button"
+              onclick={() => (cliDialogOpen = true)}
+              aria-label="Edit this CV from the CLI"
+              class="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <Terminal class="size-4" />
+            </button>
+            <button
+              type="button"
               onclick={() => (leftCollapsed = true)}
               aria-label="Collapse the editor panel"
               class="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
@@ -660,5 +670,8 @@
         mobileVisible={mobileView === 'jd' || mobileView === 'jobmatch' || mobileView === 'score'}
       />
     </div>
+  {/if}
+  {#if cliDialogOpen}
+    <CliEditDialog {cvId} onClose={() => (cliDialogOpen = false)} />
   {/if}
 </div>
