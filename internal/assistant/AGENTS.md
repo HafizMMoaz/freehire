@@ -16,13 +16,28 @@ built from the same services the HTTP handlers use.
   turn. Only a model/transport failure ends a turn as errored.
 - **Every turn ends with exactly one `result` event.** A client that receives no
   terminal event waits forever, so the loop emits one on every path: an answer,
-  the step cap, cancellation, and failure.
-- **A turn is bounded three ways**: tool-calling rounds, the LLM client's per-call
-  timeout, and cancellation. Zero/negative bounds fall back to defaults rather
-  than meaning "unbounded" — an unbounded loop on a metered gateway is a runaway
-  bill. The round ceiling is `RunnerConfig.MaxSteps` unless the turn names its own
-  through `TurnConfig`; that value is always chosen server-side, because a ceiling
-  a client can raise is not a ceiling.
+  the step cap, cancellation, and failure — and so does the handler on the one path
+  that never reaches the loop, a queued message whose wait ran out.
+- **A turn is bounded two ways**: tool-calling rounds and the LLM client's per-call
+  timeout. Zero/negative bounds fall back to defaults rather than meaning
+  "unbounded" — an unbounded loop on a metered gateway is a runaway bill. The round
+  ceiling is `RunnerConfig.MaxSteps` unless the turn names its own through
+  `TurnConfig`; that value is always chosen server-side, because a ceiling a client
+  can raise is not a ceiling.
+- **A turn outlives its reader, and stops only when asked.** A failed SSE write means
+  this reader is not listening — a phone freezing a backgrounded tab, a slept laptop
+  — and nothing more; the turn runs to its own end and its transcript is stored
+  whether or not anyone reads it. Treating that write as "the user left" is what once
+  lost an unattended run its report after twenty-five committed CV edits. Stopping is
+  a request of its own (`POST /assistant/sessions/:id/cancel`), because a dropped
+  connection cannot be told apart from a deliberate Stop.
+- **One turn at a time per session.** `turnRegistry` (`internal/handler/assistant_turns.go`)
+  holds each running turn's `CancelFunc` — the only handle on a turn no request owns
+  any more — and makes a second message wait rather than run beside the first: two
+  turns of one tailoring session would edit one CV from two conversations that cannot
+  see each other. One message may wait, a further one is refused. The registry is
+  per-process, so a turn started before a blue/green flip cannot be cancelled and ends
+  at its step cap.
 - **The transcript IS the model's history.** One table holds both, including the
   assistant's tool calls and each tool's result, with the model's argument string
   stored verbatim. Two stores would drift; re-encoding parsed arguments would

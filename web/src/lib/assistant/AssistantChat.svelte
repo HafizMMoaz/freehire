@@ -10,7 +10,13 @@
     SessionNotFound,
   } from '$lib/assistant/api';
   import { track } from '$lib/analytics';
-  import { openRehearsal, sendTurn, startAutopilot, type Turn } from '$lib/assistant/client';
+  import {
+    openRehearsal,
+    sendTurn,
+    startAutopilot,
+    StreamInterrupted,
+    type Turn,
+  } from '$lib/assistant/client';
   import { initChat, reduceTurnEvent, type ChatState } from '$lib/assistant/chat';
   import { splitPresentingCalls } from '$lib/assistant/deck';
   import { atBottom } from '$lib/assistant/scrolling';
@@ -112,8 +118,8 @@
   let chat = $state<ChatState>(initChat());
   let draft = $state('');
   let turnActive = $state(false);
-  // The turn in flight, so it can be cancelled. Aborting the request is what
-  // tells the backend to stop the loop.
+  // The turn in flight, so it can be cancelled. Cancelling asks the server to stop the work;
+  // aborting the fetch only stops this client reading it.
   let turn: Turn | null = null;
 
   let sidebarOpen = $state(true);
@@ -487,8 +493,9 @@
     }
   }
 
-  /** Stop an in-flight turn. The backend notices its next write fail and stops the
-   *  loop before spending another model call. */
+  /** Stop an in-flight turn: ask the server to stop the work, and stop reading it here. The
+   *  backend no longer infers the first from the second — it could not tell a deliberate stop
+   *  apart from a phone locking its screen. */
   function cancelTurn() {
     turn?.cancel();
     turn = null;
@@ -546,24 +553,62 @@
         /* the host reports its own save failures; a turn is still worth starting */
       }
     }
+    // Whether the turn ever began. A message can queue behind the session's running turn and
+    // then never start — the wait runs out, or it is stopped — and the composer cleared the
+    // draft the moment it was sent. Without this the user's words would simply vanish.
+    let began = false;
+    const watch = (event: TurnEvent) => {
+      if (event.type === 'user_prompt') began = true;
+      onEvent(id, event);
+    };
+
     let started: Turn;
     if (start.kind === 'autopilot') {
       runActive = true;
       onRunStateChange?.(true);
-      started = startAutopilot(id, (event) => onEvent(id, event));
+      started = startAutopilot(id, watch);
     } else if (start.kind === 'opening') {
-      started = openRehearsal(id, (event) => onEvent(id, event));
+      started = openRehearsal(id, watch);
     } else {
-      started = sendTurn(id, start.text, (event) => onEvent(id, event));
+      started = sendTurn(id, start.text, watch);
     }
     turn = started;
     void scrollToBottom(true);
     try {
       await started.done;
+      if (!began && start.kind === 'message' && id === activeId) {
+        // The turn never ran, so the message was never recorded. Give it back rather than
+        // losing it, and say why — the composer is empty and nothing else would explain it.
+        draft = draft.trim() === '' ? start.text : draft;
+        error = 'That message was not sent: the chat was still busy. Try again.';
+      }
     } catch (err) {
+      if (err instanceof StreamInterrupted) {
+        // The stream broke, not the turn: it runs on the server under its own bounds and
+        // stores everything it does. Marking the message as failed would tell the user
+        // their CV edits were lost when they were not — so we re-read the session and show
+        // whatever the agent has managed so far.
+        await reloadTranscript(id);
+        endTurn();
+        return;
+      }
       error = err instanceof Error ? err.message : 'Could not send the message.';
       chat = reduceTurnEvent(chat, { type: 'result', stop_reason: 'error', is_error: true });
       endTurn();
+    }
+  }
+
+  /** Re-read a session's stored transcript into the view. The server holds the truth about a
+   *  turn whose stream we lost, so this is how a returning client catches up. */
+  async function reloadTranscript(id: string) {
+    if (id !== activeId) return;
+    try {
+      const { messages } = await getSession(id);
+      let next = initChat();
+      for (const event of eventsFromTranscript(messages)) next = reduceTurnEvent(next, event);
+      if (id === activeId) chat = next;
+    } catch {
+      /* the transcript stays as it is; the next visit will catch up */
     }
   }
 
@@ -571,9 +616,22 @@
     queue = queue.filter((q) => q.id !== id);
   }
 
+  /** Catch up when the tab comes back. A phone freezes a backgrounded tab, which breaks the
+   *  stream while the turn keeps running on the server — so what is on screen when the user
+   *  returns is whatever arrived before the freeze, and the session holds the rest. Nothing
+   *  is re-read while a turn is streaming: that stream is already the newer truth. */
+  function catchUpOnReturn() {
+    if (document.visibilityState !== 'visible' || turnActive || !activeId) return;
+    void reloadTranscript(activeId);
+  }
+
   onMount(() => {
     void boot();
-    return cancelTurn;
+    document.addEventListener('visibilitychange', catchUpOnReturn);
+    return () => {
+      document.removeEventListener('visibilitychange', catchUpOnReturn);
+      cancelTurn();
+    };
   });
 </script>
 
@@ -779,13 +837,19 @@
             {/if}
           {/each}
 
-          {#if turnActive}
+          <!-- One indicator, two states. Queued is not working: nothing is being spent yet, and
+               the elapsed counter would be timing somebody else's turn. -->
+          {#if chat.queued || turnActive}
             <div class="self-start inline-flex items-baseline gap-2 px-2 py-1 text-xs text-muted-foreground">
               <span class="star-glow font-mono text-[0.85rem] font-semibold">
                 {SPINNER_GLYPHS[spinnerIdx]}
               </span>
-              <span class="shimmer font-medium">{currentVerb}…</span>
-              <span class="font-mono text-[0.7rem] text-muted-foreground/70">({elapsedSec}s)</span>
+              <span class="shimmer font-medium">
+                {chat.queued ? 'Waiting for the current turn to finish' : currentVerb}…
+              </span>
+              {#if !chat.queued}
+                <span class="font-mono text-[0.7rem] text-muted-foreground/70">({elapsedSec}s)</span>
+              {/if}
             </div>
           {/if}
         </div>

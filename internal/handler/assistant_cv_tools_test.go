@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -285,6 +286,76 @@ func TestCVEditToolAppliesAPatch(t *testing.T) {
 	}
 	if !strings.Contains(string(repo.written), "Senior backend engineer") {
 		t.Errorf("stored document = %s, want the patched summary", repo.written)
+	}
+}
+
+// A model packages the batch as a string holding the array often enough to matter: 15 refusals
+// in 30 days on prod, each one an otherwise-correct edit that cost the turn a round. Packaging
+// says nothing about the document, so the tool reads through it.
+func TestCVEditToolAcceptsOpsAsAJSONString(t *testing.T) {
+	bank := newStubBank()
+	atom := bank.add(3, experience.Atom{Claim: "Senior backend engineer", Provenance: experience.ProvenanceStatedInChat})
+	a, repo := cvToolsAPIWithBank(t, oneExperienceCV, bank)
+
+	tool := toolByName(t, a.assistantCVTools(testCVID, 9, uuid.New()), "cv_edit")
+	args, err := json.Marshal(map[string]any{
+		"ops": `[{"kind":"set","path":"summary","value":"Senior backend engineer","evidence_id":"` + atom.ID.String() + `"}]`,
+	})
+	if err != nil {
+		t.Fatalf("marshal arguments: %v", err)
+	}
+	if _, err := tool.Run(context.Background(), 3, json.RawMessage(args)); err != nil {
+		t.Fatalf("cv_edit: %v", err)
+	}
+	if !strings.Contains(string(repo.written), "Senior backend engineer") {
+		t.Errorf("stored document = %s, want the patched summary", repo.written)
+	}
+}
+
+// The tolerance is for packaging only. A field the editor does not define is the shape that
+// once let an agent clobber the wrong experience entry while reading 200 back, so it stays
+// refused, and the refusal still names what it choked on.
+func TestCVEditToolStillRefusesAnUnknownField(t *testing.T) {
+	a, _ := cvToolsAPI(t, oneExperienceCV)
+
+	tool := toolByName(t, a.assistantCVTools(testCVID, 9, uuid.New()), "cv_edit")
+	_, err := tool.Run(context.Background(), 3, json.RawMessage(
+		`{"ops":"[{\"kind\":\"set\",\"path\":\"summary\",\"value\":\"x\",\"skill\":0}]"}`))
+	if err == nil {
+		t.Fatal("an operation carrying an undefined field must be refused, packaged or not")
+	}
+	if !strings.Contains(err.Error(), "skill") {
+		t.Errorf("error = %v, want it to name the offending field", err)
+	}
+}
+
+// The model names positions against the document it read, so a batch removing two lines of one
+// list must mean what it says. The conversion lives at this boundary and nowhere deeper: the
+// editor's other callers state their indices sequentially.
+func TestCVEditToolRemovesTwoPositionsOfOneList(t *testing.T) {
+	const fourBullets = `{"header":{"full_name":"Ada Lovelace"},"summary":"Backend engineer",` +
+		`"experience":[{"company":"Acme","title":"Engineer","bullets":["A","B","C","D"]}]}`
+	a, repo := cvToolsAPI(t, fourBullets)
+
+	tool := toolByName(t, a.assistantCVTools(testCVID, 9, uuid.New()), "cv_edit")
+	// Non-adjacent, and named against the document the model read.
+	_, err := tool.Run(context.Background(), 3, json.RawMessage(
+		`{"ops":[{"kind":"remove","path":"experience[0].bullets[1]"},{"kind":"remove","path":"experience[0].bullets[3]"}]}`))
+	if err != nil {
+		t.Fatalf("cv_edit: %v", err)
+	}
+
+	var stored struct {
+		Experience []struct {
+			Bullets []string `json:"bullets"`
+		} `json:"experience"`
+	}
+	if err := json.Unmarshal(repo.written, &stored); err != nil {
+		t.Fatalf("decode stored document: %v", err)
+	}
+	want := []string{"A", "C"}
+	if got := stored.Experience[0].Bullets; !reflect.DeepEqual(got, want) {
+		t.Errorf("bullets = %q, want %q", got, want)
 	}
 }
 
