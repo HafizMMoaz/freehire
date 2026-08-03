@@ -76,6 +76,121 @@ func TestExperienceAtomClaimKeyIsUniquePerOwner(t *testing.T) {
 	}
 }
 
+// The honest wall's actual failure mode in production: a claim first recorded as
+// agent_inferred (the model's paraphrase, unconfirmed) must become writable once a
+// later call carries a genuinely different provenance — the ON CONFLICT must upgrade
+// it in place rather than swallowing the second insert and leaving the claim stuck.
+func TestExperienceAtomClaimKeyUpgradesFromAgentInferred(t *testing.T) {
+	pool := startPostgres(t)
+	q := New(pool)
+	ctx := context.Background()
+
+	alice := seedExperienceUser(t, pool, "upgrade-alice@example.test")
+
+	const key = "built reelmente.app with react and next.js"
+	first, err := q.InsertExperienceAtomIfNew(ctx, InsertExperienceAtomIfNewParams{
+		UserID: alice, Claim: "Built Reelmente.app with React and Next.js", ClaimKey: key,
+		Provenance: "agent_inferred", Metrics: []string{}, Skills: []string{},
+	})
+	if err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+	if first.Provenance != "agent_inferred" {
+		t.Fatalf("first.Provenance = %q, want agent_inferred", first.Provenance)
+	}
+
+	// The candidate has now confirmed it verbatim in chat — the retry carries a real
+	// provenance upgrade.
+	upgraded, err := q.InsertExperienceAtomIfNew(ctx, InsertExperienceAtomIfNewParams{
+		UserID: alice, Claim: "built reelmente.app with react and next.js.", ClaimKey: key,
+		Provenance: "stated_in_chat", Metrics: []string{}, Skills: []string{},
+	})
+	if err != nil {
+		t.Fatalf("upgrade insert = %v, want success (the atom should upgrade in place)", err)
+	}
+	if upgraded.ID != first.ID {
+		t.Errorf("upgraded.ID = %v, want the SAME id as the original atom (%v)", upgraded.ID, first.ID)
+	}
+	if upgraded.Provenance != "stated_in_chat" {
+		t.Errorf("upgraded.Provenance = %q, want stated_in_chat", upgraded.Provenance)
+	}
+
+	atoms, err := q.ListExperienceAtoms(ctx, alice)
+	if err != nil {
+		t.Fatalf("ListExperienceAtoms: %v", err)
+	}
+	if len(atoms) != 1 {
+		t.Fatalf("alice has %d atoms after the upgrade, want 1 (no duplicate row)", len(atoms))
+	}
+	if atoms[0].Provenance != "stated_in_chat" {
+		t.Errorf("stored provenance = %q, want stated_in_chat", atoms[0].Provenance)
+	}
+}
+
+// A confirmed atom must never be downgraded by a later, weaker call — the upgrade path
+// is one-directional.
+func TestExperienceAtomClaimKeyNeverDowngradesFromConfirmed(t *testing.T) {
+	pool := startPostgres(t)
+	q := New(pool)
+	ctx := context.Background()
+
+	alice := seedExperienceUser(t, pool, "nodowngrade-alice@example.test")
+
+	const key = "led the postgres migration"
+	first, err := q.InsertExperienceAtomIfNew(ctx, InsertExperienceAtomIfNewParams{
+		UserID: alice, Claim: "Led the Postgres migration", ClaimKey: key,
+		Provenance: "manual", Metrics: []string{}, Skills: []string{},
+	})
+	if err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+
+	// A later, unconfirmed paraphrase of the SAME claim must not touch it.
+	_, err = q.InsertExperienceAtomIfNew(ctx, InsertExperienceAtomIfNewParams{
+		UserID: alice, Claim: "led the postgres migration", ClaimKey: key,
+		Provenance: "agent_inferred", Metrics: []string{}, Skills: []string{},
+	})
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("second insert = %v, want pgx.ErrNoRows (a confirmed atom must not be touched)", err)
+	}
+
+	got, err := q.GetExperienceAtom(ctx, GetExperienceAtomParams{ID: first.ID, UserID: alice})
+	if err != nil {
+		t.Fatalf("GetExperienceAtom: %v", err)
+	}
+	if got.Provenance != "manual" {
+		t.Errorf("provenance = %q, want manual (unchanged)", got.Provenance)
+	}
+}
+
+// Two unconfirmed attempts at the same claim leave it exactly as unconfirmed as
+// before — this is the "still can't write" case, not the upgrade case, and must keep
+// reporting ErrAlreadyBanked (via pgx.ErrNoRows) so Store.AddAtom's existing mapping
+// is unchanged.
+func TestExperienceAtomClaimKeyStaysUnconfirmedAcrossRepeatedAgentInferred(t *testing.T) {
+	pool := startPostgres(t)
+	q := New(pool)
+	ctx := context.Background()
+
+	alice := seedExperienceUser(t, pool, "stillunconfirmed-alice@example.test")
+
+	const key = "shipped the onboarding flow"
+	if _, err := q.InsertExperienceAtomIfNew(ctx, InsertExperienceAtomIfNewParams{
+		UserID: alice, Claim: "Shipped the onboarding flow", ClaimKey: key,
+		Provenance: "agent_inferred", Metrics: []string{}, Skills: []string{},
+	}); err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+
+	_, err := q.InsertExperienceAtomIfNew(ctx, InsertExperienceAtomIfNewParams{
+		UserID: alice, Claim: "shipped the onboarding flow.", ClaimKey: key,
+		Provenance: "agent_inferred", Metrics: []string{}, Skills: []string{},
+	})
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("second insert = %v, want pgx.ErrNoRows (still no genuine upgrade)", err)
+	}
+}
+
 // Import must fill what the bank lacks and touch nothing it already has. A CV
 // re-uploaded after the user corrected a job title must not undo that correction, and a
 // CV that still reads "Present" must not resurrect a role the user has ended.

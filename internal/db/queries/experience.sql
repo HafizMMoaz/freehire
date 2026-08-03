@@ -82,14 +82,25 @@ FROM experience_atoms
 WHERE id = $1 AND user_id = $2;
 
 -- name: InsertExperienceAtomIfNew :one
--- The only insert. ON CONFLICT DO NOTHING against the (user_id, claim_key) unique index makes
--- "the same claim is never banked twice" a database guarantee rather than a property of the
--- import code — so re-uploading a CV cannot duplicate atoms no matter what the caller does.
--- Returns no row when the claim is already banked, which callers report rather than treat as
--- an error: the user learns it is already recorded.
+-- The only insert. A claim already banked with a stronger provenance than
+-- agent_inferred is never touched — ON CONFLICT DO NOTHING behavior for every case
+-- except one: a claim first recorded as agent_inferred (the model's unconfirmed
+-- paraphrase) is upgraded in place when a later call carries a real provenance,
+-- because the candidate confirming it afterward must actually unstick the write —
+-- otherwise that exact claim text stays permanently un-writable to a CV. The WHERE
+-- guards both non-upgrade cases: a confirmed atom is never downgraded, and two
+-- agent_inferred attempts at the same claim leave it exactly as unconfirmed as
+-- before. Returns no row when there is genuinely nothing to change, which callers
+-- report as ErrAlreadyBanked rather than an error.
 INSERT INTO experience_atoms (user_id, employment_id, claim, claim_key, context, metrics, skills, provenance, source_ref)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-ON CONFLICT (user_id, claim_key) DO NOTHING
+ON CONFLICT (user_id, claim_key) DO UPDATE
+SET provenance = EXCLUDED.provenance,
+    source_ref = EXCLUDED.source_ref,
+    context = EXCLUDED.context,
+    updated_at = now()
+WHERE experience_atoms.provenance = 'agent_inferred'
+  AND EXCLUDED.provenance != 'agent_inferred'
 RETURNING id, user_id, employment_id, claim, claim_key, context, metrics, skills, provenance, source_ref, created_at, updated_at;
 
 -- name: UpdateExperienceAtom :one
