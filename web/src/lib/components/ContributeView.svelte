@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { env } from '$env/dynamic/public';
   import { resolve } from '$app/paths';
   import { api, ApiError } from '$lib/api';
   import { AsyncData } from '$lib/asyncData.svelte';
@@ -38,8 +39,29 @@
   // Shown only right after a successful link mint — the token is short-TTL and a
   // status refetch never returns it again, so this is never restored from anywhere.
   let discordLinkResult = $state.raw<DiscordLinkResult | null>(null);
+  let discordCopied = $state(false);
+
+  // The exact command the user pastes into Discord — kept separate from the prose
+  // instructions the API returns, so the copy button copies only this and nothing
+  // a stray manual selection could clip a character off of.
+  const discordCommand = $derived(discordLinkResult ? `/link token:${discordLinkResult.token}` : '');
+
+  // The operator's own Discord server URL, set once at deploy time (optional — the
+  // section still works without it, just without the shortcut link).
+  const discordChannelUrl = env.PUBLIC_DISCORD_CHANNEL_URL;
+
+  async function copyDiscordCommand() {
+    if (!discordCommand) return;
+    try {
+      await navigator.clipboard.writeText(discordCommand);
+      discordCopied = true;
+    } catch {
+      discordCopied = false;
+    }
+  }
 
   async function linkDiscord() {
+    discordCopied = false;
     if (discordBusy) return;
     discordBusy = true;
     discordError = null;
@@ -140,6 +162,18 @@
             <span class="text-xs text-muted-foreground">
               Link your account to run <code class="rounded bg-secondary px-1 py-0.5 font-mono text-[11px]">/contribute</code>
               in the freehire Discord server for the same reward.
+              {#if discordChannelUrl}
+                <!-- eslint-disable svelte/no-navigation-without-resolve -- external Discord channel URL, not an internal route -->
+                <a
+                  href={discordChannelUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="font-medium text-foreground underline underline-offset-2 hover:opacity-80"
+                >
+                  Open the channel
+                </a>
+                <!-- eslint-enable svelte/no-navigation-without-resolve -->
+              {/if}
             </span>
           </div>
           {#if discord.linked}
@@ -155,8 +189,15 @@
 
         {#if discordLinkResult}
           <div class="rounded-md bg-secondary/40 p-3 text-xs">
-            <p>{discordLinkResult.instructions}</p>
-            <p class="mt-1 font-mono text-[11px]">{discordLinkResult.token}</p>
+            <p>Paste this command in the freehire Discord server:</p>
+            <div class="mt-1 flex items-center gap-2">
+              <code class="flex-1 overflow-x-auto rounded bg-background px-2 py-1.5 font-mono text-[11px]"
+                >{discordCommand}</code
+              >
+              <Button variant="secondary" size="sm" onclick={copyDiscordCommand}>
+                {discordCopied ? 'Copied' : 'Copy'}
+              </Button>
+            </div>
             <button
               type="button"
               onclick={recheckDiscord}
