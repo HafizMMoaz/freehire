@@ -21,14 +21,14 @@
 
 ## 3. Frontend: render the confirmation as buttons
 
-- [ ] 3.1 Add a name-conditional branch in `web/src/lib/assistant/ToolGroupList.svelte`
+- [x] 3.1 Add a name-conditional branch in `web/src/lib/assistant/ToolGroupList.svelte`
   for `request_confirmation`: render the `claim` text plus **Да**/**Нет** buttons instead
   of the generic collapsed tool-call line; every other tool name keeps the existing
   generic rendering.
-- [ ] 3.2 Wire **Да** to `submitText(raw)` (`AssistantChat.svelte:545`) with `raw` equal
+- [x] 3.2 Wire **Да** to `submitText(raw)` (`AssistantChat.svelte:545`) with `raw` equal
   to the claim text, verbatim and unmodified. Wire **Нет** to `submitText` with a fixed
   decline message (e.g. "Нет, это не так — не добавляй.").
-- [ ] 3.3 Add component tests: the new branch renders buttons for `request_confirmation`
+- [x] 3.3 Add component tests: the new branch renders buttons for `request_confirmation`
   and falls back to generic rendering for every other tool name; each button's click
   fires `submitText` with the expected payload (claim text verbatim for Да, the fixed
   decline string for Нет).
@@ -48,18 +48,23 @@
 
 ## 5. Remove Follow-ups: frontend
 
-- [ ] 5.1 Delete `web/src/lib/assistant/followups.ts` and its test file; remove the
+- [x] 5.1 Delete `web/src/lib/assistant/followups.ts` and its test file; remove the
   `suggestFollowUps` call and its wrapper from `web/src/lib/assistant/api.ts`.
-- [ ] 5.2 Remove every remaining reference in `web/src/lib/assistant/AssistantChat.svelte`:
+- [x] 5.2 Remove every remaining reference in `web/src/lib/assistant/AssistantChat.svelte`:
   the `followUps` state, `askForFollowUps`, the reset points that clear it on a new turn,
   and the chip-rendering block.
 
 ## 6. Verify
 
-- [ ] 6.1 Run `go build ./...`, `go vet ./...`, `go vet -tags=integration ./...`, and
+- [x] 6.1 Run `go build ./...`, `go vet ./...`, `go vet -tags=integration ./...`, and
   `go test ./...`; run `go test -tags=integration ./internal/handler/` (needs Docker) to
-  cover the deleted-route assertion and the new tool's registration test.
+  cover the deleted-route assertion and the new tool's registration test. Done: also ran
+  the full `go test -tags=integration ./...` (whole module, Docker), all green.
 - [ ] 6.2 Run the frontend test suite (`web/`) for the touched Svelte files; manually
   drive one tailoring turn that needs a fresh confirmation (through the dev server) to
   confirm the button appears, **Да** unsticks the write, and **Нет** leaves the claim
   out, and confirm the Follow-ups strip no longer appears anywhere in the assistant chat.
+  Partially done: `vitest run` (822 tests), `svelte-check` (0 errors) and a production
+  `vite build` all pass clean. The live click-through against a running dev server (real
+  turn, real DB, real confirm button) has NOT been done — needs a local LLM stub per
+  `hire-local-qa-account` memory, or the user's own manual check.
