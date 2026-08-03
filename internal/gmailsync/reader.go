@@ -25,9 +25,13 @@ type Message struct {
 // the worker is unit-tested with a fake and the live client is exercised only in
 // the dry run.
 type GmailReader interface {
-	// ListATSMessageIDs returns the ids of ATS messages received after the Unix
-	// watermark (0 = full backfill).
-	ListATSMessageIDs(ctx context.Context, afterUnix int64) ([]string, error)
+	// ListATSMessageIDs returns the ids of hiring-shaped messages received after the Unix
+	// watermark (0 = full backfill), excluding mail the connected address itself sent.
+	//
+	// The address is a parameter rather than reader state because the worker is the one
+	// that knows it, and because a reader built for a search (see MailboxSearcher) has no
+	// business carrying it.
+	ListATSMessageIDs(ctx context.Context, selfAddr string, afterUnix int64) ([]string, error)
 	// ListThreadMessageIDs returns the ids of every message in a thread, so replies
 	// that carry no ATS marker (personal recruiters, scheduling) are ingested
 	// alongside the matched message that anchors the thread.

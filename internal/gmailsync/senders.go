@@ -71,6 +71,23 @@ var recallPhrases = []string{
 	"приглашаем вас",             // ru: we invite you
 	"hemos recibido tu",          // es: we have received your
 	"invitación a la entrevista", // es: interview invitation
+
+	// Added 2026-08-02 from a measurement rather than from imagination. Over 120 days on a
+	// live mailbox this list fetched 431 messages where a hiring-shaped query found 1151,
+	// and the misses were near misses: an acknowledgement reading "we've received your …
+	// application" (a16z) where the list knew only "your application at", and invitations
+	// reading "interview invite" (micro1) where it knew only "invite you to interview".
+	//
+	// The lesson generalises past these six. Each entry above was one canonical wording of
+	// a thing employers phrase several ways, so the list's shape — one phrasing per idea —
+	// was the defect. When adding, add the SIBLINGS of a wording, not the wording.
+	"received your application",
+	"interview invite",
+	"interview invitation",
+	"next steps",
+	"schedule a call",
+	"приглашение на собеседование", // ru: interview invitation
+	"собеседование",                // ru: interview
 }
 
 // BuildQuery builds a Gmail search query for job-application mail newer than the
@@ -80,6 +97,20 @@ var recallPhrases = []string{
 // time-bounded by after:. A zero watermark omits the time clause for a first-run
 // backfill.
 func BuildQuery(afterUnix int64, extraDomains []string) string {
+	return BuildQueryFor("", afterUnix, extraDomains)
+}
+
+// BuildQueryFor is BuildQuery with the connected address excluded.
+//
+// The candidate's own replies match these phrasings as readily as an employer's — they are
+// replies to them — and fetching one buys nothing: the worker drops a message whose sender
+// is the connected address before storing it. What it costs is a listed id and a full body
+// retrieval each, and room in the page a widened query returns. An empty address adds no
+// clause, so a caller that has none is unchanged.
+//
+// The exclusion sits OUTSIDE the alternation. Inside it, `-from:` would be one more thing a
+// message could match rather than a condition every message must meet.
+func BuildQueryFor(selfAddr string, afterUnix int64, extraDomains []string) string {
 	senders := make([]string, 0, len(ATSDomains)+len(extraDomains))
 	senders = append(senders, ATSDomains...)
 	senders = append(senders, extraDomains...)
@@ -92,6 +123,9 @@ func BuildQuery(afterUnix int64, extraDomains []string) string {
 	}
 
 	q := "(" + strings.Join(clauses, " OR ") + ")"
+	if selfAddr != "" {
+		q += " -from:" + selfAddr
+	}
 	if afterUnix > 0 {
 		q += fmt.Sprintf(" after:%d", afterUnix)
 	}

@@ -42,6 +42,31 @@ the point: it is the tier that costs us nothing. See the `external` bullets belo
 
 ## Always true
 
+- **The fetch is scoped to hiring-SHAPED mail, not to ATS senders, and the inbox filters at
+  DISPLAY.** `gmailsync.BuildQueryFor` admits mail from a curated ATS domain OR carrying one
+  of the recognised application/interview phrasings, minus anything the connected address
+  itself sent. Two things about it are measured rather than assumed.
+  *The phrase list's shape was the defect.* It held one canonical wording per idea, so over
+  120 days it fetched 431 messages from a mailbox where a hiring-shaped query found 1151 —
+  and the 739 misses were NEAR misses: an acknowledgement reading "we've received your …
+  application" where the list knew only "your application at", an invitation reading
+  "interview invite" where it knew only "invite you to interview". When adding, add the
+  SIBLINGS of a wording, not the wording.
+  *The junk filter is the classifier, and it runs at display.* Roughly 40% of any widening is
+  aggregator and course marketing, and the answer is NOT a blocklist of domains: that is a
+  second judge, curated by hand forever against people whose business is registering domains,
+  judging by sender where `mailclassify` already judges by content on a call we already pay
+  for. The listing therefore omits `status_signal = 'other'` by default and reports how many
+  it omitted, under the SAME filters — a hidden count computed separately would describe a
+  different mailbox the moment any filter is on. Two rules keep it honest: unclassified mail
+  is NEVER hidden (nothing has judged it), and asking FOR the label overrides the default
+  (`inbox.Query.showsOther`), or `?status=other` and the hide rule cancel and the filter
+  answers nothing about its own subject.
+  **Why display and not fetch:** the sync carries a watermark, so mail not fetched today is
+  never fetched. A fetch-time filter loses silently and permanently, and fixing the rule
+  brings nothing back. A display filter loses nothing — and it became affordable only once
+  the recall sweep stopped reading our copy (it searches Gmail now), so extra rows degrade a
+  list a person reads and nothing else.
 - **Never match on the sender-address domain.** Inbox mail arrives from ATS relay domains
   (`ashbyhq.com`, `greenhouse-mail.io`, …), not from employer domains. `mailmatch` matches on
   thread continuity and the company name carried in the sender *name* / subject. A

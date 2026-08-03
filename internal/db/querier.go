@@ -384,9 +384,14 @@ type Querier interface {
 	// so search/filter pagination reports the filtered total. Keep this WHERE identical
 	// to ListCompanies (including the job_count > 0 hiring scope).
 	CountCompanies(ctx context.Context, arg CountCompaniesParams) (int64, error)
-	// Total live messages for the caller (same optional filters as ListEmails), for
-	// pagination.
-	CountEmails(ctx context.Context, arg CountEmailsParams) (int64, error)
+	// Total live messages for the caller under the same optional filters as ListEmails, plus
+	// how many of them the `other` default omitted.
+	//
+	// Both numbers come from one statement and one set of predicates on purpose: a hidden count
+	// computed separately would describe a different mailbox from the one on screen the moment
+	// any filter is active. The count is not decoration — a filter that hides silently makes a
+	// misclassification impossible to find, and the classifier reads attacker-controlled text.
+	CountEmails(ctx context.Context, arg CountEmailsParams) (CountEmailsRow, error)
 	// The mailbox's shape in one pass: one row per classification label (the empty
 	// label being mail nothing has judged yet), carrying that label's total plus how
 	// many of it are unread, unclassified, linked to an application, or carrying a

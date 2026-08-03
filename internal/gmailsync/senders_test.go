@@ -175,3 +175,45 @@ func TestBuildRecallQueryWithoutARole(t *testing.T) {
 		t.Errorf("the rest of the gate went missing with the role:\n%s", q)
 	}
 }
+
+// The list knew one canonical wording of each thing and employers use several. These are
+// the wordings a live mailbox proved were being missed: an acknowledgement reading
+// "we've received your … application" where the list knew only "your application at", and
+// an invitation reading "interview invite" where it knew only "invite you to interview".
+func TestBuildQueryCoversTheWordingsEmployersActuallyUse(t *testing.T) {
+	q := BuildQuery(0, nil)
+	for _, phrase := range []string{
+		"received your application", "interview invite", "interview invitation",
+	} {
+		if !strings.Contains(q, `"`+phrase+`"`) {
+			t.Errorf("the query does not look for %q — measured as missed on a live mailbox", phrase)
+		}
+	}
+	// The wordings that were already there must survive: this list only ever grows, and a
+	// phrase silently dropped is mail silently missed for as long as nobody notices.
+	for _, phrase := range []string{
+		"thank you for applying", "we regret to inform", "recebemos sua candidatura",
+		"ваш отклик", "hemos recibido tu",
+	} {
+		if !strings.Contains(q, `"`+phrase+`"`) {
+			t.Errorf("the query lost the existing phrase %q", phrase)
+		}
+	}
+}
+
+// Fetching the candidate's own replies buys nothing: worker.go drops them before storing.
+// What it costs is a body retrieval each, and room in the page the widened query returns.
+func TestBuildQueryExcludesTheConnectedAddress(t *testing.T) {
+	q := BuildQueryFor("me@example.test", 0, nil)
+	if !strings.Contains(q, "-from:me@example.test") {
+		t.Errorf("the query does not exclude the connected address:\n%s", q)
+	}
+	// The exclusion sits OUTSIDE the OR group. Inside it, it would be one more alternative
+	// and would match everything rather than removing anything.
+	if strings.Contains(q, `OR -from:`) {
+		t.Errorf("the exclusion was OR-ed into the alternatives:\n%s", q)
+	}
+	if plain := BuildQuery(0, nil); strings.Contains(plain, "-from:") {
+		t.Errorf("an address nobody gave leaked into the query:\n%s", plain)
+	}
+}

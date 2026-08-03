@@ -152,6 +152,22 @@ func listResponse(c *fiber.Ctx, data any, total int64, limit, offset int) error 
 	})
 }
 
+// listResponseWithHidden is listResponse plus the count a default filter suppressed.
+//
+// Separate from listResponse rather than a widened one: every other listing hides nothing,
+// and a `hidden: 0` on all of them would be a field readers have to learn to ignore.
+func listResponseWithHidden(c *fiber.Ctx, data any, total, hidden int64, limit, offset int) error {
+	return c.JSON(fiber.Map{
+		"data": data,
+		"meta": fiber.Map{
+			"total":  total,
+			"limit":  limit,
+			"offset": offset,
+			"hidden": hidden,
+		},
+	})
+}
+
 // Config is the dependency bundle Register wires onto the app: the DB pool, the
 // single browser origin allowed cross-origin (FrontendOrigin), the token-issuer
 // settings (JWTSecret/JWTTTL), the HTTPS-only cookie flag (CookieSecure), the

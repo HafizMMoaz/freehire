@@ -33,8 +33,8 @@ func NewAPIReader(client *http.Client, learned []string) GmailReader {
 }
 
 // ListATSMessageIDs pages through the ATS-scoped search, returning all matching ids.
-func (r *apiReader) ListATSMessageIDs(ctx context.Context, afterUnix int64) ([]string, error) {
-	q := BuildQuery(afterUnix, r.learned)
+func (r *apiReader) ListATSMessageIDs(ctx context.Context, selfAddr string, afterUnix int64) ([]string, error) {
+	q := BuildQueryFor(selfAddr, afterUnix, r.learned)
 	var ids []string
 	pageToken := ""
 	for {

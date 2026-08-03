@@ -1350,8 +1350,11 @@ export function createApi(
       source?: InboxSource;
       unread?: boolean;
       status?: string;
+      /** Ask for mail the classifier judged not to be about an application at all. The
+       *  listing hides it by default and reports how many it hid. */
+      includeOther?: boolean;
     } = {},
-  ): Promise<Slice<InboxMessage>> {
+  ): Promise<Slice<InboxMessage> & { hidden: number }> {
     const params = new URLSearchParams({
       limit: String(opts.limit ?? 20),
       offset: String(opts.offset ?? 0),
@@ -1360,7 +1363,11 @@ export function createApi(
     if (opts.source) params.set('source', opts.source);
     if (opts.unread) params.set('unread', '1');
     if (opts.status) params.set('status', opts.status);
-    return toSlice(await request<Page<InboxMessage>>(`/api/v1/me/inbox?${params.toString()}`), opts.offset ?? 0);
+    if (opts.includeOther) params.set('include_other', '1');
+    const page = await request<Page<InboxMessage> & { meta: { hidden?: number } }>(
+      `/api/v1/me/inbox?${params.toString()}`
+    );
+    return { ...toSlice(page, opts.offset ?? 0), hidden: page.meta.hidden ?? 0 };
   }
 
   /** Mark every unread message matching the active filters as read; returns the
