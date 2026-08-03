@@ -178,6 +178,22 @@ func TestCVEditGateAllowsWhatTheCandidateAsserted(t *testing.T) {
 	}
 }
 
+// A batch cites an evidence id per operation, so "that id" names nothing a model can act on
+// when thirteen of them went out together. The refusal carries the id that missed.
+func TestCVEditGateNamesTheIdThatMissed(t *testing.T) {
+	h, _ := gateHandlers(t)
+	gate := bankGate{bank: h.experience}
+	missing := uuid.New()
+
+	err := gate.Publishable(context.Background(), 1, missing.String())
+	if err == nil {
+		t.Fatal("an id matching no achievement was accepted")
+	}
+	if !strings.Contains(err.Error(), missing.String()) {
+		t.Errorf("error = %v, want it to name the id that missed", err)
+	}
+}
+
 func TestCVEditGateRefusesAnUnknownOrForeignAtom(t *testing.T) {
 	h, bank := gateHandlers(t)
 	gate := bankGate{bank: h.experience}

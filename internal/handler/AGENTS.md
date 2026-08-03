@@ -104,10 +104,22 @@ Both SSE endpoints — the turn and the fit analysis — write through `sseStrea
 (`match_analysis_stream.go`), the one owner of the stream protocol: it serializes the
 heartbeat goroutine against the event callback and re-arms the write deadline before every
 write. `event` reports whether the frame reached the client, and a marshal failure reports
-**true** — an unencodable frame is our bug, not a dead reader. That is how a streamed turn
-learns the client is gone: the failure cancels the loop's context, so it stops before
-spending another model call. The fit analysis deliberately ignores the same signal — its run
-was paid for with an AI credit, so it finishes into the cache rather than aborting.
+**true** — an unencodable frame is our bug, not a dead reader.
+
+A failed write does NOT stop an assistant turn. It used to: the failure cancelled the loop's
+context, which meant a phone freezing a backgrounded tab threw away live work — an unattended
+tailoring run once lost its report after twenty-five committed CV edits. A write that fails now
+means only that this reader is not listening; the turn runs to its own end under the step cap
+and the model timeout, and its transcript is stored either way. The fit analysis always ignored
+the same signal, for the neighbouring reason: its run was paid for with an AI credit.
+
+Stopping a turn is therefore a request of its own — `POST /assistant/sessions/:id/cancel`,
+owner-scoped — because a dropped connection cannot be told apart from a deliberate Stop.
+`turnRegistry` (`assistant_turns.go`) holds each running turn's cancellation, which is the only
+handle on a turn no request owns any more, and keeps a session to ONE turn at a time: a second
+message waits for the first and is told so with a `queued` event, a third is refused with 409.
+The registry is per-process, so a turn that outlives a blue/green flip cannot be cancelled and
+ends at its step cap.
 
 `assistant_tools.go` / `assistant_tracking_tools.go` / `assistant_cv_tools.go` /
 `assistant_profile_tool.go` / `assistant_present_tool.go` / `assistant_page_tools.go`
