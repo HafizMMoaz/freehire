@@ -221,6 +221,16 @@ type Config struct {
 	TelegramBotToken      string
 	TelegramBotUsername   string
 	TelegramWebhookSecret string
+	// Discord bot for slash-command board contributions, mirroring the Telegram bot's
+	// role. Optional: empty DiscordBotToken disables the feature — the linking
+	// endpoints and interaction webhook are inert. DiscordApplicationID and
+	// DiscordPublicKey are the app's identity and the key used to verify inbound
+	// interaction signatures. DiscordGuildID scopes slash-command registration to a
+	// single guild.
+	DiscordBotToken      string
+	DiscordApplicationID string
+	DiscordPublicKey     string
+	DiscordGuildID       string
 	// GmailConnector + GmailCipher enable the Connect-Gmail inbox. Both nil = the
 	// feature is off (connect routes unregistered, inbox empty).
 	GmailConnector *gmailsync.Connector
@@ -343,6 +353,7 @@ func Register(app *fiber.App, cfg Config) {
 	llmKeys := llmkey.NewResolver(queries, cfg.LLMKeys)
 	cvH := newCVHandlers(cfg.Pool, queries, cvStore, assistantStore, cvRenderer, cfg.TracerLinkSalt, cfg.FrontendOrigin, servedHostsOrDefault(cfg.ServedHosts, cfg.FrontendOrigin), resumeStore, photoStore, creditsStore, matchH, bankGate{bank: bank})
 	telegramH := newTelegramHandlers(queries, cfg.JWTSecret, cfg.TelegramBotToken, cfg.TelegramBotUsername, cfg.TelegramWebhookSecret, cfg.FrontendOrigin, contributionsH.intake)
+	discordH := newDiscordHandlers(queries, cfg.JWTSecret, cfg.DiscordBotToken, cfg.DiscordApplicationID, cfg.DiscordPublicKey, cfg.DiscordGuildID, cfg.FrontendOrigin, contributionsH.intake)
 	inboxH := newInboxHandlers(queries, cfg.Pool, cfg.GmailConnector, cfg.GmailCipher, cfg.FrontendOrigin, cfg.CookieSecure, cfg.MailboxDomain)
 	// The pull direction is wired only where there is a model to ask. Left nil, its endpoint
 	// reports the feature off — the same way an unconfigured deployment reports every other
@@ -578,5 +589,7 @@ func Register(app *fiber.App, cfg Config) {
 
 	// Telegram linking + the inbound bot webhook (see telegramHandlers).
 	telegramH.register(api, mw)
+	// Discord linking + the inbound interaction webhook (see discordHandlers).
+	discordH.register(api, mw)
 
 }

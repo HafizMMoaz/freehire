@@ -49,6 +49,8 @@ import type {
   UserProfile,
   Subscription,
   TelegramStatus,
+  DiscordStatus,
+  DiscordLinkResult,
   Submission,
   SubmissionInput,
   Contribution,
@@ -1161,6 +1163,22 @@ export function createApi(
     await call('/api/v1/me/telegram', { method: 'DELETE' });
   }
 
+  /** Whether Discord contribution linking is configured and whether this user is linked. */
+  async function discordStatus(): Promise<DiscordStatus> {
+    return requestData<DiscordStatus>('/api/v1/me/discord');
+  }
+
+  /** Mint a one-time token: the user runs `/link token:<token>` in the freehire Discord
+   *  server to connect their account. */
+  async function discordLink(): Promise<DiscordLinkResult> {
+    return requestData<DiscordLinkResult>('/api/v1/me/discord/link', { method: 'POST' });
+  }
+
+  /** Disconnect the user's linked Discord account. */
+  async function discordUnlink(): Promise<void> {
+    await call('/api/v1/me/discord', { method: 'DELETE' });
+  }
+
   /** Submit a vacancy for moderation. Returns the pending submission. */
   async function submitJob(input: SubmissionInput): Promise<Submission> {
     return requestData<Submission>('/api/v1/submissions', jsonBody('POST', input));
@@ -1793,6 +1811,9 @@ export function createApi(
     telegramStatus,
     telegramLink,
     telegramUnlink,
+    discordStatus,
+    discordLink,
+    discordUnlink,
     submitJob,
     listMySubmissions,
     resolveJobLink,

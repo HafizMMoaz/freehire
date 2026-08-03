@@ -594,6 +594,8 @@ type Querier interface {
 	// Remove a user's company vote (toggle-clear or the DELETE endpoint). No-op when
 	// absent.
 	DeleteCompanyVote(ctx context.Context, arg DeleteCompanyVoteParams) error
+	// Unlink Discord. Returns the affected row count: 0 means there was no link.
+	DeleteDiscordLink(ctx context.Context, userID int64) (int64, error)
 	DeleteEmailClassificationOutbox(ctx context.Context, id int64) error
 	// Consume the code (on success) or burn it (on too many attempts). Idempotent: deleting
 	// an absent code is a no-op, so a double submit cannot fail the request.
@@ -858,6 +860,8 @@ type Querier interface {
 	GetCompanyResponse(ctx context.Context, companySlug string) (GetCompanyResponseRow, error)
 	// The caller's current vote for a company (0 when none). Always returns one row.
 	GetCompanyVote(ctx context.Context, arg GetCompanyVoteParams) (int16, error)
+	// The caller's linked Discord account (link-status endpoint + delivery resolution).
+	GetDiscordLink(ctx context.Context, userID int64) (DiscordLink, error)
 	GetEmail(ctx context.Context, arg GetEmailParams) (GetEmailRow, error)
 	// The outstanding code for a purpose. No row means nothing was issued or it was consumed;
 	// the caller treats pgx.ErrNoRows as "request a new code". Expiry and the attempt ceiling
@@ -1017,6 +1021,9 @@ type Querier interface {
 	GetUserByID(ctx context.Context, id int64) (GetUserByIDRow, error)
 	// OAuth sign-in fast path: resolve a provider identity straight to its user.
 	GetUserByIdentity(ctx context.Context, arg GetUserByIdentityParams) (GetUserByIdentityRow, error)
+	// Reverse lookup: the user linked to an inbound Discord account, for contribution-from-Discord. If a
+	// Discord account somehow linked more than once, the most recently linked user wins.
+	GetUserIDByDiscordID(ctx context.Context, discordID int64) (int64, error)
 	// Reverse lookup: the user linked to an inbound chat, for contribution-from-Telegram. If a
 	// chat somehow linked more than once, the most recently linked user wins.
 	GetUserIDByTelegramChat(ctx context.Context, chatID int64) (int64, error)
@@ -2762,6 +2769,9 @@ type Querier interface {
 	// Set a user's company vote to $3 (-1 or 1), inserting or overwriting in place.
 	// Toggle-to-clear is handled by DeleteCompanyVote, chosen by the domain layer.
 	UpsertCompanyVote(ctx context.Context, arg UpsertCompanyVoteParams) error
+	// Link (or relink) a user's Discord account, captured from the inbound /link command. One
+	// row per user; relinking from a different Discord account overwrites the discord_id.
+	UpsertDiscordLink(ctx context.Context, arg UpsertDiscordLinkParams) error
 	// Store a Gmail message, idempotent by (user_id, source, external_id) with
 	// source fixed to 'gmail'; the hosted path has its own insert (InsertHostedMessage).
 	UpsertEmail(ctx context.Context, arg UpsertEmailParams) error
