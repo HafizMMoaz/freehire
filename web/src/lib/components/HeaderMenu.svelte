@@ -34,6 +34,12 @@
   import { cn } from '$lib/ui';
   import BrandMark from './BrandMark.svelte';
   import GithubStars from './GithubStars.svelte';
+  import ProviderIcon from './ProviderIcon.svelte';
+
+  // Same invite link as the footer's socials row (Footer.svelte) — no shared
+  // constant exists for it yet, so it's kept inline here like GITHUB_URL's
+  // counterpart in Footer.
+  const DISCORD_URL = 'https://discord.gg/aAXS2rghW';
 
   // The single menu absorbs the site nav, the signed-in account items, the theme
   // toggle, and the auth action — the header's only control besides search.
@@ -178,6 +184,17 @@
        into the drawer (below), leaving just the menu button here. -->
   <GithubStars class="hidden sm:inline-flex" />
 
+  <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external Discord invite, not an internal route -->
+  <a
+    href={DISCORD_URL}
+    target="_blank"
+    rel="noreferrer"
+    aria-label="freehire on Discord"
+    class={cn('hidden sm:inline-flex', iconButton)}
+  >
+    <ProviderIcon provider="discord" />
+  </a>
+
   <!-- Desktop only: theme toggle sits second, before the menu button. -->
   <button
     type="button"
@@ -316,6 +333,18 @@
       <!-- Mobile-only: GitHub + theme + auth pinned to the bottom of the drawer. -->
       <div class="shrink-0 border-t border-border p-2 sm:hidden">
         <GithubStars variant="row" class={cn(rowBase, 'text-muted-foreground')} />
+        <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external Discord invite, not an internal route -->
+        <a
+          href={DISCORD_URL}
+          target="_blank"
+          rel="noreferrer"
+          role="menuitem"
+          aria-label="freehire on Discord"
+          class={cn(rowBase, 'text-muted-foreground')}
+        >
+          <ProviderIcon provider="discord" class="size-4 shrink-0" />
+          <span>Discord</span>
+        </a>
         {@render themeButton()}
         {@render authButton()}
       </div>
