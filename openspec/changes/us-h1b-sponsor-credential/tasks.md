@@ -21,6 +21,6 @@
 
 ## 5. Verify and ship
 
-- [ ] 5.1 `go build ./... && go vet ./... && go vet -tags=integration ./... && go test ./...` green; web build/lint/check at their existing baseline
+- [x] 5.1 `go build ./... && go vet ./... && go vet -tags=integration ./... && go test ./...` green; web build/lint/check at their existing baseline — `npx eslint .` and `npx svelte-check` both confirmed clean of any NEW error/warning (the 1 lint warning and 18 svelte-check warnings present are all pre-existing, in files this change never touched)
 - [ ] 5.2 Before any write, measure the real resolver/parser/gate against the live USCIS files and the public catalogue API (`/api/v1/companies?countries=US`, paginated by `offset`), following the UK/NL precedent: record matched / gated-out / ambiguous counts, and check the top ~40 grants by eye for a false positive, before this is considered safe to run against production
 - [ ] 5.3 Run the real import (`cmd/import-collections`, needs `DATABASE_URL`), then `make reindex` (never stacked with `reindex-companies`), and confirm the `us-h1b-sponsor` facet returns jobs — if this session has no production database access, leave this unchecked and say so explicitly rather than marking it done
