@@ -75,6 +75,9 @@ func ParseUSH1BSponsorsCSV(data []byte) ([]Record, error) {
 		if name == "" {
 			continue
 		}
+		// A malformed count reads as 0 rather than aborting the row: the Data Hub is
+		// a clean machine-generated export, and csvColumns already tolerates ragged
+		// rows the same way.
 		initial, _ := strconv.Atoi(row[1])
 		continuing, _ := strconv.Atoi(row[3])
 		if initial+continuing < 1 {
