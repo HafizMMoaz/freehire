@@ -1,4 +1,13 @@
-## ADDED Requirements
+# tailor-claim-confirmation Specification
+
+## Purpose
+
+Confirming a claim the experience bank holds no evidence for, during CV tailoring, so the
+transcript ends up with a verbatim candidate message the existing `stated_in_chat`
+provenance check can match — without the candidate ever having to type or paste a claim
+back by hand.
+
+## Requirements
 
 ### Requirement: The tailoring agent requests confirmation through a dedicated tool, not free text
 
@@ -20,33 +29,33 @@ returns `{"status": "awaiting_candidate_response"}` and writes nothing.
 - **WHEN** a session runs under any preset other than `tailor`
 - **THEN** `request_confirmation` is not among the tools offered to the model
 
-### Requirement: A confirmation request renders as the claim text plus Да/Нет buttons
+### Requirement: A confirmation request renders as the claim text plus Yes/No buttons
 
 The client SHALL render a `request_confirmation` tool call as the claim text together
-with two actions, **Да** and **Нет**, instead of the generic collapsed tool-call
+with two actions, **Yes** and **No**, instead of the generic collapsed tool-call
 rendering every other tool receives.
 
 #### Scenario: The claim and buttons are shown
 
 - **WHEN** an assistant message contains a `request_confirmation` tool call
-- **THEN** the claim text is shown in full alongside **Да** and **Нет** actions
+- **THEN** the claim text is shown in full alongside **Yes** and **No** actions
 
 ### Requirement: Confirming sends the claim text verbatim as an ordinary message
 
-Activating **Да** SHALL send the claim text, unmodified, as a message from the
-candidate, taking the same path a typed message takes. Activating **Нет** SHALL send a
+Activating **Yes** SHALL send the claim text, unmodified, as a message from the
+candidate, taking the same path a typed message takes. Activating **No** SHALL send a
 fixed decline message. Neither action SHALL call any endpoint other than the ordinary
 message-send path — no dedicated confirmation endpoint exists.
 
-#### Scenario: Да replays the claim verbatim
+#### Scenario: Yes replays the claim verbatim
 
-- **WHEN** the candidate activates **Да** on a confirmation request
+- **WHEN** the candidate activates **Yes** on a confirmation request
 - **THEN** the exact claim text is sent as their next chat message, unchanged in any
   way, through the same path a typed message takes
 
-#### Scenario: Нет declines without replaying the claim
+#### Scenario: No declines without replaying the claim
 
-- **WHEN** the candidate activates **Нет** on a confirmation request
+- **WHEN** the candidate activates **No** on a confirmation request
 - **THEN** a fixed decline message is sent as their next chat message, and the claim
   text is not sent
 

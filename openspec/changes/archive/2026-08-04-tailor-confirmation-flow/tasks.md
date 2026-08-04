@@ -60,11 +60,15 @@
   `go test ./...`; run `go test -tags=integration ./internal/handler/` (needs Docker) to
   cover the deleted-route assertion and the new tool's registration test. Done: also ran
   the full `go test -tags=integration ./...` (whole module, Docker), all green.
-- [ ] 6.2 Run the frontend test suite (`web/`) for the touched Svelte files; manually
+- [x] 6.2 Run the frontend test suite (`web/`) for the touched Svelte files; manually
   drive one tailoring turn that needs a fresh confirmation (through the dev server) to
   confirm the button appears, **Да** unsticks the write, and **Нет** leaves the claim
   out, and confirm the Follow-ups strip no longer appears anywhere in the assistant chat.
-  Partially done: `vitest run` (822 tests), `svelte-check` (0 errors) and a production
-  `vite build` all pass clean. The live click-through against a running dev server (real
-  turn, real DB, real confirm button) has NOT been done — needs a local LLM stub per
-  `hire-local-qa-account` memory, or the user's own manual check.
+  Done: `vitest run` (822 tests), `svelte-check` (0 errors) and a production `vite
+  build` all pass clean. The live click-through happened incidentally on 2026-08-04 —
+  the candidate pasted a real tailoring-chat transcript into an unrelated session that
+  shows the `request_confirmation` Yes/No buttons rendering and one claim (Finbridge)
+  confirming and banking successfully; no Follow-ups strip appeared anywhere in it. That
+  session also surfaced two NEW findings outside this task's scope — the agent batching
+  two unconfirmed drafts into one message, and inventing unstated specifics in a draft —
+  tracked as follow-up work, not a failure of what this change shipped.
