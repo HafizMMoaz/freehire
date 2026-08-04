@@ -126,7 +126,9 @@ func TestParseUSH1BSponsorsCSV_RejectsAMissingColumn(t *testing.T) {
 // olderFYHeaderFixture mirrors the real FY2019 file's header, which pluralizes the
 // approval/denial columns ("Initial Approvals" vs FY2023's "Initial Approval") —
 // discovered by running the parser against the live file during the task 5.2
-// measurement, not assumed from the FY2023 sample alone.
+// measurement, not assumed from the FY2023 sample alone. The blank Tax ID is copied
+// verbatim from that live row, not a placeholder — the reason USCIS leaves it blank
+// for some rows is not established here.
 func TestParseUSH1BSponsorsCSV_AcceptsTheOlderPluralColumnNames(t *testing.T) {
 	csv := `"Fiscal Year","Employer","Initial Approvals","Initial Denials","Continuing Approvals","Continuing Denials","NAICS","Tax ID","State","City","ZIP"` + "\n" +
 		`"2019","GESTAMP ALABAMA LLC","1","0","0","0","33","","AL","MC CALLA","35111"`
