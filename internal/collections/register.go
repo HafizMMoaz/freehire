@@ -113,7 +113,7 @@ func RequireCountry(code string) func(Company, Record) bool {
 var countryAliases = map[string][]string{
 	"GB": {"uk", "united kingdom", "great britain", "england", "scotland", "wales"},
 	"NL": {"netherlands", "the netherlands", "holland"},
-	"US": {"usa", "u.s.", "united states", "america"},
+	"US": {"usa", "u.s.a.", "u.s.", "united states", "united states of america", "america"},
 }
 
 // countryMatches reports whether a stored country value denotes the given ISO code.

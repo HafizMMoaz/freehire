@@ -220,7 +220,7 @@ func TestRequireCountry_AcceptsSpelledOutCountryNames(t *testing.T) {
 		}
 	}
 	gate = RequireCountry("US")
-	for _, hq := range []string{"US", "us", "USA", "United States", "united states", "U.S.", "America"} {
+	for _, hq := range []string{"US", "us", "USA", "U.S.A.", "United States", "united states", "United States of America", "U.S.", "America"} {
 		co := Company{Slug: "stripe", Countries: []string{"US"}, HQCountry: hq}
 		if !gate(co, Record{Name: "STRIPE"}) {
 			t.Errorf("hq_country %q was not recognised as the United States", hq)
