@@ -41,7 +41,7 @@
     <button
       type="button"
       onclick={copyPrompt}
-      class="shrink-0 rounded-md border border-border px-2 py-0.5 font-sans text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+      class="shrink-0 rounded-md border border-border px-2 py-0.5 font-sans text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
     >
       {copied ? 'copied ✓' : 'copy'}
     </button>
