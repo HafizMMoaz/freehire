@@ -11,8 +11,8 @@
 
 ## 3. Registry entry
 
-- [ ] 3.1 Add the `us-h1b-sponsor` entry to `internal/collections/collections.go`: `Kind: KindCredential`, `Dataset: &Dataset{Records: FetchUSH1BSponsors, IdentityKey: "tin4"}`, `Gate: RequireCountry("US")`, with title "H-1B sponsor history" and a description carrying the same "not a commitment to sponsor any particular role" disclaimer pattern as the UK/NL entries
-- [ ] 3.2 Rename and extend `TestRegistry_HasBothSponsorCredentials` in `register_test.go` (it no longer covers just two) to iterate all three credential slugs, asserting `Kind == KindCredential`, non-empty `Title`/`Description`, `Dataset.Valid()`, and `Gate != nil` for each
+- [x] 3.1 Add the `us-h1b-sponsor` entry to `internal/collections/collections.go`: `Kind: KindCredential`, `Dataset: &Dataset{Records: FetchUSH1BSponsors, IdentityKey: "tin4"}`, `Gate: RequireCountry("US")`, with title "H-1B sponsor history" and a description carrying the same "not a commitment to sponsor any particular role" disclaimer pattern as the UK/NL entries
+- [x] 3.2 Rename and extend `TestRegistry_HasBothSponsorCredentials` in `register_test.go` (it no longer covers just two) to iterate all three credential slugs, asserting `Kind == KindCredential`, non-empty `Title`/`Description`, `Dataset.Valid()`, and `Gate != nil` for each
 
 ## 4. Frontend badge copy
 
