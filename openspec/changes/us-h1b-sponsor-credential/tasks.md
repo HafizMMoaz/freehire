@@ -1,7 +1,7 @@
 ## 1. Matching-toolkit extension for US employers
 
-- [ ] 1.1 Add `"US": {"usa", "u.s.", "u.s.a.", "united states", "united states of america", "america"}` to `countryAliases` in `internal/collections/register.go`; test that a company with `hq_country` stored as `United States` is recognised as denoting `US`, alongside the existing bare-ISO-code case
-- [ ] 1.2 Add `inc`, `incorporated`, `corp`, `corporation`, `llc` to `legalSuffixes`; test that `ACME ROBOTICS INC` strips to `acme-robotics` and that `Co` is deliberately **not** in the map (a name ending in `Co` is left unstripped)
+- [x] 1.1 Add `"US": {"usa", "u.s.", "u.s.a.", "united states", "united states of america", "america"}` to `countryAliases` in `internal/collections/register.go`; test that a company with `hq_country` stored as `United States` is recognised as denoting `US`, alongside the existing bare-ISO-code case
+- [x] 1.2 Add `inc`, `incorporated`, `corp`, `corporation`, `llc` to `legalSuffixes`; test that `ACME ROBOTICS INC` strips to `acme-robotics` and that `Co` is deliberately **not** in the map (a name ending in `Co` is left unstripped)
 
 ## 2. USCIS H-1B Employer Data Hub source
 
