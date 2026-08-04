@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-func TestRegistry_HasBothSponsorCredentials(t *testing.T) {
-	for _, slug := range []string{"uk-skilled-worker-sponsor", "nl-recognised-sponsor"} {
+func TestRegistry_HasEverySponsorCredential(t *testing.T) {
+	for _, slug := range []string{"uk-skilled-worker-sponsor", "nl-recognised-sponsor", "us-h1b-sponsor"} {
 		c, ok := Lookup(slug)
 		if !ok {
 			t.Errorf("registry missing %q", slug)
@@ -57,6 +57,24 @@ func TestNLSponsorEntry_GateIsGeographyOnly(t *testing.T) {
 	elsewhere := Company{Slug: "adyen", Countries: []string{"US"}, HQCountry: "US"}
 	if c.Admits(elsewhere, Record{Name: "Adyen N.V."}) {
 		t.Error("a company with no Dutch presence earned the Dutch credential")
+	}
+}
+
+func TestUSH1BSponsorEntry_GateIsGeographyOnly(t *testing.T) {
+	c, ok := Lookup("us-h1b-sponsor")
+	if !ok {
+		t.Fatal("us-h1b-sponsor missing")
+	}
+	// The USCIS Data Hub is H-1B-specific already, so — like the Dutch register and
+	// unlike the UK register — there is no route to gate on: presence is the whole
+	// test, but presence still has to hold.
+	stripe := Company{Slug: "stripe", Countries: []string{"US"}, HQCountry: "US"}
+	if !c.Admits(stripe, Record{Name: "STRIPE"}) {
+		t.Error("a US-headquartered approved sponsor was rejected")
+	}
+	elsewhere := Company{Slug: "stripe", Countries: []string{"NL"}, HQCountry: "NL"}
+	if c.Admits(elsewhere, Record{Name: "STRIPE"}) {
+		t.Error("a company with no US presence earned the US credential")
 	}
 }
 

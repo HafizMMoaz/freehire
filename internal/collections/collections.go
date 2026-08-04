@@ -256,6 +256,16 @@ var All = []Collection{
 		// No route gate: the IND register publishes recognition, not routes.
 		Gate: RequireCountry("NL"),
 	},
+	{
+		Slug:        "us-h1b-sponsor",
+		Title:       "H-1B sponsor history",
+		Description: "Open roles at employers with USCIS-approved H-1B petitions in the last five fiscal years. Historical approval belongs to the employer — it is not a commitment to sponsor any particular role.",
+		Kind:        KindCredential,
+		Dataset:     &Dataset{Records: FetchUSH1BSponsors, IdentityKey: "tin4"},
+		// No route gate: the USCIS Data Hub is H-1B-specific already, unlike the UK
+		// register's multi-route file.
+		Gate: RequireCountry("US"),
+	},
 }
 
 // Default dataset URLs (overridable per collection via <SLUG>_DATASET_URL in the
