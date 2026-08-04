@@ -123,6 +123,23 @@ func TestParseUSH1BSponsorsCSV_RejectsAMissingColumn(t *testing.T) {
 	}
 }
 
+// olderFYHeaderFixture mirrors the real FY2019 file's header, which pluralizes the
+// approval/denial columns ("Initial Approvals" vs FY2023's "Initial Approval") —
+// discovered by running the parser against the live file during the task 5.2
+// measurement, not assumed from the FY2023 sample alone.
+func TestParseUSH1BSponsorsCSV_AcceptsTheOlderPluralColumnNames(t *testing.T) {
+	csv := `"Fiscal Year","Employer","Initial Approvals","Initial Denials","Continuing Approvals","Continuing Denials","NAICS","Tax ID","State","City","ZIP"` + "\n" +
+		`"2019","GESTAMP ALABAMA LLC","1","0","0","0","33","","AL","MC CALLA","35111"`
+	got, err := ParseUSH1BSponsorsCSV([]byte(csv))
+	if err != nil {
+		t.Fatalf("ParseUSH1BSponsorsCSV: %v", err)
+	}
+	want := []Record{{Name: "GESTAMP ALABAMA LLC", Meta: map[string]string{"tin4": ""}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ParseUSH1BSponsorsCSV =\n%+v\nwant\n%+v", got, want)
+	}
+}
+
 func TestFetchUSH1BSponsors_CombinesAllFiveYears(t *testing.T) {
 	years := []string{"2023", "2022", "2021", "2020", "2019"}
 	mux := http.NewServeMux()

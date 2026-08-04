@@ -67,7 +67,15 @@ func ParseUSH1BSponsorsCSV(data []byte) ([]Record, error) {
 	rows, err := csvColumns(data, ',',
 		"Employer", "Initial Approval", "Initial Denial", "Continuing Approval", "Continuing Denial", "Tax ID")
 	if err != nil {
-		return nil, err
+		// USCIS pluralized these four column names at some point in its own export
+		// history — the live FY2023 file has "Initial Approval", the live FY2019 file
+		// has "Initial Approvals" — so a singular miss falls back to the older
+		// spelling before giving up.
+		rows, err = csvColumns(data, ',',
+			"Employer", "Initial Approvals", "Initial Denials", "Continuing Approvals", "Continuing Denials", "Tax ID")
+		if err != nil {
+			return nil, err
+		}
 	}
 	records := make([]Record, 0, len(rows))
 	for _, row := range rows {
