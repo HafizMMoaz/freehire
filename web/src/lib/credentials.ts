@@ -33,6 +33,11 @@ const COPY: Record<string, { issuer: string; tooltip: string }> = {
     tooltip:
       'This employer appears on the IND public register of recognised sponsors for work and highly skilled migrants. The recognition belongs to the employer and is not a commitment to sponsor this role.',
   },
+  'us-h1b-sponsor': {
+    issuer: 'USCIS',
+    tooltip:
+      'This employer has had H-1B petitions approved by USCIS in the last five fiscal years, per the USCIS H-1B Employer Data Hub. The approval belongs to the employer and is not a commitment to sponsor this role.',
+  },
 };
 
 /**

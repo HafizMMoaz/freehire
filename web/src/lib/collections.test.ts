@@ -65,12 +65,13 @@ describe('credential collections in the job-search facet', () => {
     expect(collectionFacets).toHaveLength(1);
   });
 
-  it('offers both sponsor credentials, grouped apart from editorial collections', () => {
+  it('offers every sponsor credential, grouped apart from editorial collections', () => {
     const options = collectionFacets[0]?.options ?? [];
     const credentials = options.filter((o) => o.group);
     expect(credentials.map((o) => o.value)).toEqual([
       'uk-skilled-worker-sponsor',
       'nl-recognised-sponsor',
+      'us-h1b-sponsor',
     ]);
     for (const c of credentials) {
       expect(c.group).toBe('Employer credentials');
