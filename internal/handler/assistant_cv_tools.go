@@ -413,7 +413,9 @@ func (h *assistantHandlers) cvEditTool(cvID uuid.UUID, batchID uuid.UUID) assist
 			"their path from cv_get. Anything that states what the candidate did (a bullet, a summary, a " +
 			"technology, a skill) needs `evidence_id` from experience_search; if the bank holds nothing " +
 			"on the point, ask the candidate and record their answer with experience_add first. Contact " +
-			"details are not editable here.",
+			"details are not editable here. If this batch closes a requirement from cv_context, pass " +
+			"`requirement` and `requirement_status` — the report updates in this same call, so you do not " +
+			"need a separate tailor_report call for it.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -427,13 +429,26 @@ func (h *assistantHandlers) cvEditTool(cvID uuid.UUID, batchID uuid.UUID) assist
 					"description": "One short line on why you made these edits — shown to the candidate " +
 						"beside them, in your own words.",
 				},
+				"requirement": map[string]any{
+					"type": "string",
+					"description": "A requirement this batch closes, copied verbatim from cv_context. Omit " +
+						"when this batch does not close a requirement (rewording, reordering, a technology " +
+						"tag). Requires `requirement_status`.",
+				},
+				"requirement_status": map[string]any{
+					"type":        "string",
+					"enum":        []string{string(cv.AutopilotClosedBank), string(cv.AutopilotClosedCandidate)},
+					"description": "closed_bank if the bank already had evidence; closed_candidate if the candidate just confirmed it in this conversation. Required when requirement is set.",
+				},
 			},
 			"required": []string{"ops"},
 		},
 		Run: func(ctx context.Context, userID int64, raw json.RawMessage) (any, error) {
 			var in struct {
-				Ops  opBatch `json:"ops"`
-				Note string  `json:"note"`
+				Ops               opBatch `json:"ops"`
+				Note              string  `json:"note"`
+				Requirement       string  `json:"requirement"`
+				RequirementStatus string  `json:"requirement_status"`
 			}
 			if err := assistant.DecodeArgs(raw, &in); err != nil {
 				return nil, err
@@ -444,6 +459,12 @@ func (h *assistantHandlers) cvEditTool(cvID uuid.UUID, batchID uuid.UUID) assist
 				if _, err := cvedit.ParsePath(string(op.Path)); err != nil {
 					return nil, fmt.Errorf("edit %d: %w", i+1, err)
 				}
+			}
+			requirement := strings.TrimSpace(in.Requirement)
+			status := cv.AutopilotStatus(in.RequirementStatus)
+			if requirement != "" && status != cv.AutopilotClosedBank && status != cv.AutopilotClosedCandidate {
+				return nil, fmt.Errorf("requirement_status must be %q or %q when requirement is set",
+					cv.AutopilotClosedBank, cv.AutopilotClosedCandidate)
 			}
 			// A model names the positions it SAW: it read the document once and wrote every
 			// index against that reading. Applied in sequence those addresses shift out from
@@ -460,6 +481,17 @@ func (h *assistantHandlers) cvEditTool(cvID uuid.UUID, batchID uuid.UUID) assist
 			})
 			if err != nil {
 				return nil, cvToolError(err)
+			}
+			// Merged only after Commit succeeds: a refused batch must not leave the report
+			// claiming a requirement was closed by an edit that never landed.
+			if requirement != "" {
+				if err := h.cv.cvStore.MergeAutopilotEntry(ctx, cvID, userID, cv.AutopilotEntry{
+					Requirement: requirement,
+					Status:      status,
+					Note:        in.Note,
+				}); err != nil {
+					return nil, cvToolError(err)
+				}
 			}
 			// A receipt, not the document: a tool result is replayed into the model's
 			// context on every later turn of the session, so echoing the CV back would be
