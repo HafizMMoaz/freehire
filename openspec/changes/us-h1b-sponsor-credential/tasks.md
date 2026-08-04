@@ -16,8 +16,8 @@
 
 ## 4. Frontend badge copy
 
-- [ ] 4.1 Add a `COPY['us-h1b-sponsor']` entry to `web/src/lib/credentials.ts` with `issuer: 'USCIS'` and a tooltip stating the credential belongs to the employer and is not a commitment to sponsor the viewed role, mirroring the UK/NL entries' phrasing; confirm `credentials.test.ts` (which already asserts every credential collection has a COPY entry) passes with the new slug
-- [ ] 4.2 Run `make gen-contracts`, commit the regenerated `web/src/lib/generated/contracts.ts`, and confirm no other frontend file needs a manual edit — the credential filter group, the `/collections/[slug]` route, and the job-card/company-page badge renderer are all already generic over the registry
+- [x] 4.1 Add a `COPY['us-h1b-sponsor']` entry to `web/src/lib/credentials.ts` with `issuer: 'USCIS'` and a tooltip stating the credential belongs to the employer and is not a commitment to sponsor the viewed role, mirroring the UK/NL entries' phrasing; confirm `credentials.test.ts` (which already asserts every credential collection has a COPY entry) passes with the new slug
+- [x] 4.2 Run `make gen-contracts`, commit the regenerated `web/src/lib/generated/contracts.ts`. One other frontend file DID need a manual edit despite the plan's claim otherwise: `web/src/lib/collections.test.ts` had its own hardcoded "both credentials" assertion in the facet-grouping test, missed by the earlier Go-side rename — fixed alongside. The `/collections/[slug]` route and the badge renderer are confirmed generic (no slug literals found)
 
 ## 5. Verify and ship
 
