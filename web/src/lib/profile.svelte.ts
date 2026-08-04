@@ -9,6 +9,7 @@
 import { api } from '$lib/api';
 import {
   withSkill,
+  withSkills,
   withoutSkill,
   withAvoidedSkill,
   withoutAvoidedSkill,
@@ -68,6 +69,25 @@ class ProfileStore extends UserResource<UserProfile | null> {
    *  when the write is refused, leaving the stored copy untouched either way. */
   addSkill(skill: string): Promise<UserProfile> {
     return this.#queue(() => this.#writeSkills((sets) => withSkill(sets, skill)));
+  }
+
+  /** Merge résumé-extracted skills into the profile, replacing its specializations with
+   *  `specializations` in the same write — what a résumé upload against an already-existing
+   *  profile does with both fields the extraction resolved (the set-up form instead merges
+   *  both into its own unsaved fields, before there is a profile to write to). Both land in
+   *  one PUT rather than two, so a specialization the extraction also found never sits in
+   *  the caller's local state alone — a second, skills-only write would trigger the same
+   *  reseed-from-profile the caller's own save does, discarding an unsaved specialization
+   *  before the caller ever gets to persist it separately. Reads `#profile` at call time,
+   *  inside the queue, so a concurrent skill edit elsewhere isn't clobbered. Rejects when
+   *  there is no profile, same as `addSkill`. */
+  mergeResumeExtraction(newSkills: string[], specializations: string[]): Promise<UserProfile> {
+    return this.#queue(() => {
+      const current = this.#profile;
+      if (!current) return Promise.reject(new Error('No profile to edit.'));
+      const sets = withSkills(current, newSkills);
+      return this.save(specializations, sets.skills, sets.excluded_skills, current.location_preferences);
+    });
   }
 
   /** Take one skill back out — undoing a claim. Subtracts only that skill, so a claim made

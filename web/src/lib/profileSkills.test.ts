@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   withSkill,
+  withSkills,
   withoutSkill,
   withAvoidedSkill,
   withoutAvoidedSkill,
@@ -32,6 +33,33 @@ describe('withSkill', () => {
     const before = { skills: ['docker'], excluded_skills: ['bash'] };
     withSkill(before, 'bash');
     expect(before).toEqual({ skills: ['docker'], excluded_skills: ['bash'] });
+  });
+});
+
+describe('withSkills', () => {
+  it('claims every skill in the list', () => {
+    expect(withSkills({ skills: ['docker'], excluded_skills: [] }, ['go', 'postgresql'])).toEqual(
+      { skills: ['docker', 'go', 'postgresql'], excluded_skills: [] },
+    );
+  });
+
+  it('drops each claimed skill from the excluded set, whatever its case', () => {
+    expect(
+      withSkills({ skills: [], excluded_skills: ['Go', 'php'] }, ['go', 'postgresql']),
+    ).toEqual({ skills: ['go', 'postgresql'], excluded_skills: ['php'] });
+  });
+
+  it('adds nothing already held, whatever its case', () => {
+    expect(withSkills({ skills: ['Docker'], excluded_skills: [] }, ['docker', 'go'])).toEqual({
+      skills: ['Docker', 'go'],
+      excluded_skills: [],
+    });
+  });
+
+  it('does not mutate what it was given', () => {
+    const before = { skills: ['docker'], excluded_skills: ['go'] };
+    withSkills(before, ['go']);
+    expect(before).toEqual({ skills: ['docker'], excluded_skills: ['go'] });
   });
 });
 

@@ -31,6 +31,12 @@ export function withSkill(sets: ProfileSkillSets, skill: string): ProfileSkillSe
   };
 }
 
+/** The skill sets once the viewer claims every skill in `skills` — the fold of `withSkill`
+ *  over a list, for a bulk claim (e.g. a résumé extraction) in one write. */
+export function withSkills(sets: ProfileSkillSets, skills: string[]): ProfileSkillSets {
+  return skills.reduce(withSkill, sets);
+}
+
 /** The skill sets once the viewer undoes a claim. It subtracts that one skill rather than
  *  restoring a snapshot, so undoing an earlier claim leaves a later one standing. The
  *  exclusion `withSkill` dropped is not restored — that would re-create the contradiction

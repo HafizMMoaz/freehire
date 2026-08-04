@@ -13,6 +13,7 @@
   import FilterEdgeTab from '$lib/components/FilterEdgeTab.svelte';
   import ProfileForm from '$lib/components/ProfileForm.svelte';
   import ResumeStructuredView from '$lib/components/ResumeStructuredView.svelte';
+  import SkillsView from '$lib/components/SkillsView.svelte';
   import States from '$lib/components/States.svelte';
   import TabRow, { tabId } from '$lib/components/TabRow.svelte';
   import VerdictView from '$lib/components/VerdictView.svelte';
@@ -40,13 +41,16 @@
   // referenced by an id the strip doesn't offer.
   const TABS = [
     { id: 'settings', label: 'Settings' },
+    { id: 'skills', label: 'Skills' },
     { id: 'structured', label: 'Profile' },
     { id: 'experience', label: 'Experience' },
     { id: 'coverage', label: 'Market coverage' },
     { id: 'readiness', label: 'CV readiness' },
   ] as const;
   const PANEL_ID = 'profile-panel';
-  let tab = $state<'settings' | 'structured' | 'experience' | 'coverage' | 'readiness'>('settings');
+  let tab = $state<'settings' | 'skills' | 'structured' | 'experience' | 'coverage' | 'readiness'>(
+    'settings',
+  );
   let modalOpen = $state(false);
   let actionError = $state<string | null>(null);
 
@@ -290,6 +294,8 @@
             </Button>
             <DeleteAccountButton />
           </div>
+        {:else if tab === 'skills'}
+          <SkillsView />
         {:else if tab === 'structured'}
           <!-- Profile: the read-only structured résumé parsed from the CV. Loaded
                independently of the filter-driven reload, so no verdict gate. -->
