@@ -2577,6 +2577,10 @@ type Querier interface {
 	// its aggregator copy back into search/embedding/enrichment. min(id) picks a stable
 	// target; the IS DISTINCT FROM guard makes re-runs cheap and idempotent. Run AFTER
 	// RecomputeRoleDuplicatesForCompany so ATS reposts have already collapsed to their canon.
+	// Company match folds away word-separator spelling variance between sources: company_slug
+	// is normalize.Slug(name), which never strips legal suffixes, so two sources naming the
+	// same employer with a different word break ("Cfoinsights" vs "CFO Insights") land on
+	// different slugs ("cfoinsights" vs "cfo-insights") that agree once hyphens are removed.
 	SuppressAggregatorDuplicatesForCompany(ctx context.Context, arg SuppressAggregatorDuplicatesForCompanyParams) (int64, error)
 	// Rebuild the companies catalogue from jobs. The companies table is derivable
 	// from jobs (slug = company_slug, name = company), so after a slug-builder change

@@ -234,6 +234,68 @@ func TestSuppressedAggregator_HiddenFromListAndEnrichmentButServedBySlug(t *test
 }
 
 // verify the driver only returns companies that actually have an open aggregator posting.
+func TestSuppressAggregator_FoldsCompanySlugWordSeparatorVariance(t *testing.T) {
+	pool := startPostgres(t)
+	q := New(pool)
+	truncate(t, pool)
+
+	// Two sources spell the same employer differently: greenhouse's raw company name has a
+	// space ("CFO Insights" -> "cfo-insights"), the aggregator's has none ("Cfoinsights" ->
+	// "cfoinsights") — mirroring a real incident that arrived via arbeitnow, though this
+	// fixture uses the file's own stock aggregator (himalayas) since arbeitnow isn't wired
+	// into the `aggregators` var above. company_slug is normalize.Slug(name), which never
+	// strips legal suffixes (internal/normalize/slug.go), so the only difference here is
+	// where the word-break hyphen landed.
+	ats := atsJob("cfoinsights:6500265003", "Founder Associate (MBA Graduate)", []string{"GB"})
+	ats.Company = "CFO Insights"
+	ats.CompanySlug = "cfo-insights"
+	mustUpsert(t, q, ats)
+
+	agg := aggJob("himalayas:founder-associate-349135", "Founder Associate (MBA Graduate)", []string{"GB"})
+	agg.Company = "Cfoinsights"
+	agg.CompanySlug = "cfoinsights"
+	mustUpsert(t, q, agg)
+
+	suppressAggregators(t, q)
+
+	atsID, atsDup := dupOf(t, pool, "cfoinsights:6500265003")
+	if atsDup != -1 {
+		t.Errorf("ATS row duplicate_of = %d, want NULL (canonical)", atsDup)
+	}
+	if _, aggDup := dupOf(t, pool, "himalayas:founder-associate-349135"); aggDup != atsID {
+		t.Errorf("aggregator duplicate_of = %d, want ATS %d (company_slug word-separator variance must fold)", aggDup, atsID)
+	}
+}
+
+// TestSuppressAggregator_FoldedSlugCollisionStillGatedByTitle pins the safety argument for
+// folding hyphens away: even if two DIFFERENT companies' slugs happen to fold to the same
+// string ("met-a" and "meta" both fold to "meta"), the independent title-equality gate (the
+// matches CTE) is what prevents a false merge between them, not slug distinctness. The two
+// titles here don't overlap on any of the three match paths (exact, suffix-stripped, or
+// word-subset containment).
+func TestSuppressAggregator_FoldedSlugCollisionStillGatedByTitle(t *testing.T) {
+	pool := startPostgres(t)
+	q := New(pool)
+	truncate(t, pool)
+
+	ats := atsJob("meta-inc:store", "Store Manager", []string{"US"})
+	ats.Company = "Met A"
+	ats.CompanySlug = "met-a"
+	mustUpsert(t, q, ats)
+
+	agg := aggJob("meta:data-eng", "Data Engineer", []string{"US"})
+	agg.Company = "Meta"
+	agg.CompanySlug = "meta"
+	mustUpsert(t, q, agg)
+
+	suppressAggregators(t, q)
+
+	if _, aggDup := dupOf(t, pool, "meta:data-eng"); aggDup != -1 {
+		t.Errorf("aggregator duplicate_of = %d, want NULL (folded slug collision must not "+
+			"suppress across a disjoint title)", aggDup)
+	}
+}
+
 func TestCompaniesWithAggregatorPostings_OnlyAggregatorCompanies(t *testing.T) {
 	pool := startPostgres(t)
 	q := New(pool)

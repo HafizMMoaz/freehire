@@ -2417,8 +2417,8 @@ WITH ats AS (
            ), '[^a-z0-9]+', ' ', 'g')) AS ntitle2,
            jobs.countries
     FROM jobs
-    WHERE jobs.company_slug = $1
-      AND jobs.closed_at IS NULL AND jobs.duplicate_of IS NULL
+    WHERE replace(jobs.company_slug, '-', '') = replace($1::text, '-', '')
+      AND jobs.closed_at IS NULL AND jobs.duplicate_of IS NULL AND jobs.company_slug <> ''
       AND NOT (jobs.source = ANY($2::text[]))
 ),
 agg AS (
@@ -2433,8 +2433,8 @@ agg AS (
            ), '[^a-z0-9]+', ' ', 'g')) AS ntitle2,
            a.countries
     FROM jobs a
-    WHERE a.company_slug = $1
-      AND a.closed_at IS NULL
+    WHERE replace(a.company_slug, '-', '') = replace($1::text, '-', '')
+      AND a.closed_at IS NULL AND a.company_slug <> ''
       AND a.source = ANY($2::text[])
       AND (
           a.duplicate_of IS NULL
@@ -2522,6 +2522,10 @@ type SuppressAggregatorDuplicatesForCompanyParams struct {
 // its aggregator copy back into search/embedding/enrichment. min(id) picks a stable
 // target; the IS DISTINCT FROM guard makes re-runs cheap and idempotent. Run AFTER
 // RecomputeRoleDuplicatesForCompany so ATS reposts have already collapsed to their canon.
+// Company match folds away word-separator spelling variance between sources: company_slug
+// is normalize.Slug(name), which never strips legal suffixes, so two sources naming the
+// same employer with a different word break ("Cfoinsights" vs "CFO Insights") land on
+// different slugs ("cfoinsights" vs "cfo-insights") that agree once hyphens are removed.
 func (q *Queries) SuppressAggregatorDuplicatesForCompany(ctx context.Context, arg SuppressAggregatorDuplicatesForCompanyParams) (int64, error) {
 	result, err := q.db.Exec(ctx, suppressAggregatorDuplicatesForCompany, arg.Company, arg.Aggregators)
 	if err != nil {

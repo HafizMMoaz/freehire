@@ -584,6 +584,10 @@ WHERE closed_at IS NULL AND company_slug <> ''
 -- its aggregator copy back into search/embedding/enrichment. min(id) picks a stable
 -- target; the IS DISTINCT FROM guard makes re-runs cheap and idempotent. Run AFTER
 -- RecomputeRoleDuplicatesForCompany so ATS reposts have already collapsed to their canon.
+-- Company match folds away word-separator spelling variance between sources: company_slug
+-- is normalize.Slug(name), which never strips legal suffixes, so two sources naming the
+-- same employer with a different word break ("Cfoinsights" vs "CFO Insights") land on
+-- different slugs ("cfoinsights" vs "cfo-insights") that agree once hyphens are removed.
 WITH ats AS (
     SELECT jobs.id,
            btrim(regexp_replace(lower(jobs.title), '[^a-z0-9]+', ' ', 'g')) AS ntitle,
@@ -596,8 +600,8 @@ WITH ats AS (
            ), '[^a-z0-9]+', ' ', 'g')) AS ntitle2,
            jobs.countries
     FROM jobs
-    WHERE jobs.company_slug = sqlc.arg(company)
-      AND jobs.closed_at IS NULL AND jobs.duplicate_of IS NULL
+    WHERE replace(jobs.company_slug, '-', '') = replace(sqlc.arg(company)::text, '-', '')
+      AND jobs.closed_at IS NULL AND jobs.duplicate_of IS NULL AND jobs.company_slug <> ''
       AND NOT (jobs.source = ANY(sqlc.arg(aggregators)::text[]))
 ),
 agg AS (
@@ -612,8 +616,8 @@ agg AS (
            ), '[^a-z0-9]+', ' ', 'g')) AS ntitle2,
            a.countries
     FROM jobs a
-    WHERE a.company_slug = sqlc.arg(company)
-      AND a.closed_at IS NULL
+    WHERE replace(a.company_slug, '-', '') = replace(sqlc.arg(company)::text, '-', '')
+      AND a.closed_at IS NULL AND a.company_slug <> ''
       AND a.source = ANY(sqlc.arg(aggregators)::text[])
       AND (
           a.duplicate_of IS NULL
