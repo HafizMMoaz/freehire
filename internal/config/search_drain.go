@@ -1,0 +1,42 @@
+package config
+
+import "time"
+
+// SearchDrain holds the tuning knobs for the incremental facet-search worker
+// (cmd/search-drain). Meilisearch is configured elsewhere — MEILI_URL/
+// MEILI_MASTER_KEY via the shared Settings (Load) — so this holds only the
+// queue-drain knobs, mirroring config.Embed.
+type SearchDrain struct {
+	BatchSize    int           // claim wave + index-push batch size (one Meili task per wave)
+	LeaseSeconds int           // how long a claim is held before it can be reclaimed
+	MaxAttempts  int           // failed attempts before an entry is dead-lettered
+	CallTimeout  time.Duration // bounds a single batch's index operation
+}
+
+// LoadSearchDrain reads the worker's tuning from the environment, all optional with
+// defaults. SEARCH_DRAIN_BATCH_SIZE is the wave/batch size — bigger collapses more
+// per-board pushes into fewer, fatter Meili tasks, which is the whole point of this
+// worker (see internal/searchdrain). There is no required field — the
+// MEILI_MASTER_KEY requirement is enforced at the cmd/search-drain call site (like
+// cmd/embed), so this never fails.
+func LoadSearchDrain() SearchDrain {
+	c := SearchDrain{
+		BatchSize:    envInt("SEARCH_DRAIN_BATCH_SIZE", 500),
+		LeaseSeconds: envInt("SEARCH_DRAIN_LEASE_SECONDS", 180),
+		MaxAttempts:  envInt("SEARCH_DRAIN_MAX_ATTEMPTS", 3),
+		CallTimeout:  time.Duration(envInt("SEARCH_DRAIN_CALL_TIMEOUT_SECONDS", 120)) * time.Second,
+	}
+	// A non-positive batch size would make the claim's LIMIT 0 (silently no-op) or
+	// feed a negative LIMIT to Postgres; floor it so the worker always makes progress.
+	if c.BatchSize < 1 {
+		c.BatchSize = 1
+	}
+	// The lease must outlast a single batch's processing, or an in-flight batch
+	// becomes re-claimable mid-push (double work) and a lease of 0 re-claims a
+	// just-failed entry in a tight loop, burning its whole retry budget in one run.
+	// Floor it to the per-call timeout — the longest one batch can hold the lease.
+	if floor := int(c.CallTimeout.Seconds()); c.LeaseSeconds < floor {
+		c.LeaseSeconds = floor
+	}
+	return c
+}

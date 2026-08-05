@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -16,29 +15,21 @@ import (
 	"github.com/strelov1/freehire/internal/db"
 	"github.com/strelov1/freehire/internal/job"
 	"github.com/strelov1/freehire/internal/jobdedup"
-	"github.com/strelov1/freehire/internal/jobview"
 	"github.com/strelov1/freehire/internal/pipeline"
-	"github.com/strelov1/freehire/internal/search"
 	"github.com/strelov1/freehire/internal/sources"
 	"github.com/strelov1/freehire/internal/vocab"
 )
 
-// jobIndexer buffers a persisted job's document for the live search index. It is
-// nil when the worker has no search engine configured (indexing is then skipped).
-type jobIndexer interface {
-	Add(ctx context.Context, doc search.JobDocument)
-}
-
 // dbStore adapts the generated queries + connection pool to pipeline.Store. Save runs
-// the job upsert and the gated enrichment enqueue in one transaction, so a newly
-// ingested job is queued for enrichment atomically with its write. When an indexer
-// is configured, a write that inserted or changed indexed content is also fed to
-// the live search index (best-effort, after the commit).
+// the job upsert, the gated enrichment enqueue, and the gated search-index enqueue in
+// one transaction, so a newly ingested job is queued for both atomically with its
+// write. The search_outbox queue is drained by cmd/search-drain, which builds and
+// pushes documents into the live index wave by wave — cmd/ingest itself never talks
+// to the search engine.
 type dbStore struct {
 	pool          *pgxpool.Pool
 	q             *db.Queries
 	targetVersion int32
-	indexer       jobIndexer
 	crawled       *crawledSet
 	tally         *writeTally
 }
@@ -57,12 +48,11 @@ var (
 	_ pipeline.SeenLookup = (*dbStore)(nil)
 )
 
-func newDBStore(pool *pgxpool.Pool, targetVersion int, indexer jobIndexer, crawled *crawledSet, tally *writeTally) *dbStore {
+func newDBStore(pool *pgxpool.Pool, targetVersion int, crawled *crawledSet, tally *writeTally) *dbStore {
 	return &dbStore{
 		pool:          pool,
 		q:             db.New(pool),
 		targetVersion: int32(targetVersion),
-		indexer:       indexer,
 		crawled:       crawled,
 		tally:         tally,
 	}
@@ -248,6 +238,19 @@ func (s *dbStore) save(ctx context.Context, j job.Job, form *applyform.Form) err
 		}
 	}
 
+	// Queue this write for the live search index, atomically with the row it indexes,
+	// only when the write inserted or changed indexed content and the row is a
+	// searchable canon (mirrors the enrichment gate above). cmd/search-drain builds
+	// and pushes the document later, in a batch with whatever else queued around the
+	// same time — cmd/ingest never talks to the search engine directly. Unconditional
+	// on whether search is configured anywhere: the row is cheap, and an unconfigured
+	// deployment simply never drains it.
+	if needsIndex(saved) && !deduped && !saved.duplicateOf.Valid {
+		if err := qtx.EnqueueSearchOutbox(ctx, saved.id); err != nil {
+			return fmt.Errorf("enqueue search outbox: %w", err)
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
@@ -279,65 +282,6 @@ func (s *dbStore) save(ctx context.Context, j job.Job, form *applyform.Form) err
 	// reported as a saving. The run-end share is the only thing that would show a provider whose
 	// rows never match the cheap key — see writeTally.
 	s.tally.record(saved.source, saved.tookCheapWrite())
-
-	// Best-effort incremental indexing of the now-committed row: only when the
-	// write inserted or changed indexed content, and only if an indexer is wired.
-	// A document-build failure is logged, never propagated — the batch reindex is
-	// the reconciler, and indexing must not fail ingest. The doc is built from the
-	// persisted row, so a re-ingested already-enriched job keeps its enrichment
-	// facets. The signal only covers fields UpsertJob writes: changes made by other
-	// paths (enrichment via SetJobEnrichment, collections via
-	// PropagateCollectionsToJobs) reconcile on the next batch reindex, not here.
-	// A non-canonical repost is not searchable, so it never reaches the live index —
-	// whether it was marked by a prior recompute or by the write above. What still falls
-	// to the reindex is a row that only became a repost after it was written.
-	// saved.row != nil is implied by needsIndex — only the full write reports inserted or
-	// changed — but it is stated because the reads below dereference it, and nothing in this
-	// binary recovers a panic: a divergence would kill the crawl rather than skip a push.
-	if s.indexer != nil && saved.row != nil && needsIndex(saved) && !deduped && !saved.duplicateOf.Valid {
-		// The job-reality signal needs this role's cluster counts; a lookup failure
-		// degrades to a unique role (counts 1) rather than failing the index push.
-		repost, mass := int64(1), int64(1)
-		// Whether to ask for the cluster's geography below. It defaults to true because a
-		// FAILED count must not also suppress the merge: skipping the merge is destructive
-		// (the push replaces the stored union), not conservative, so an unknown cluster
-		// size is a reason to ask rather than a reason to skip. A known singleton is the
-		// only case that can safely skip — its union is its own geography.
-		askGeo := true
-		if c, err := s.q.RoleClusterCount(ctx, db.RoleClusterCountParams{
-			CompanySlug:     saved.companySlug,
-			RoleFingerprint: saved.row.RoleFingerprint,
-		}); err != nil {
-			log.Printf("ingest: role-cluster count for job %d: %v", saved.id, err)
-		} else {
-			repost, mass = c.RepostCount, c.MassCount
-			askGeo = mass > 1
-		}
-		doc, err := search.FromJob(*saved.row)
-		if err != nil {
-			log.Printf("ingest: build index doc for job %d: %v", saved.id, err)
-		} else {
-			reality := jobview.ClassifyReality(*saved.row, time.Now(), int(repost), int(mass))
-			doc.Reality = &reality
-			// Widen the canon with its cluster's geography. The push is a field-level
-			// document update and the geography facets are always present in the payload,
-			// so skipping this would REPLACE the reindex's union with the canon's own
-			// narrow set and the role would stop being findable by the cities its reposts
-			// hold. mass counts the cluster's open rows: at a known 1 the canon is the only
-			// one, so the union is its own geography and there is nothing to ask for.
-			if askGeo {
-				if g, err := s.q.RoleClusterGeo(ctx, db.RoleClusterGeoParams{
-					CompanySlug:     saved.companySlug,
-					RoleFingerprint: saved.row.RoleFingerprint,
-				}); err != nil {
-					log.Printf("ingest: role-cluster geography for job %d: %v", saved.id, err)
-				} else {
-					doc.MergeClusterGeography(g.Countries, g.Regions, g.Cities)
-				}
-			}
-			s.indexer.Add(ctx, doc)
-		}
-	}
 
 	return nil
 }
