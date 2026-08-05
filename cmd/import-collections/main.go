@@ -31,6 +31,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -38,6 +39,7 @@ import (
 
 	"github.com/strelov1/freehire/internal/collections"
 	"github.com/strelov1/freehire/internal/db"
+	"github.com/strelov1/freehire/internal/safehttp"
 	"github.com/strelov1/freehire/internal/worker"
 )
 
@@ -159,16 +161,59 @@ func report(p planResult, companies int) {
 // collection is fetched and parsed. Any resolution failure is returned (the caller
 // aborts rather than write a partial membership).
 func resolveAll(ctx context.Context) (map[string][]collections.Record, error) {
-	client := &http.Client{Timeout: fetchTimeout}
+	direct := &http.Client{Timeout: fetchTimeout}
+	proxied, err := proxiedClient(fetchTimeout)
+	if err != nil {
+		return nil, err
+	}
 	resolved := make(map[string][]collections.Record, len(collections.All))
 	for _, c := range collections.All {
-		records, err := resolveOne(ctx, client, c)
+		records, err := resolveOne(ctx, clientFor(c.Slug, direct, proxied), c)
 		if err != nil {
 			return nil, fmt.Errorf("resolve %q: %w", c.Slug, err)
 		}
 		resolved[c.Slug] = records
 	}
 	return resolved, nil
+}
+
+// proxiedCollectionSlugs are collections whose register blocks the prod datacenter
+// IP outright, confirmed for us-h1b-sponsor on 2026-08-05: uscis.gov 403s a direct
+// request even with a browser User-Agent, so it is IP reputation rather than a bot-
+// detection header — the same class of problem internal/sources/proxy.go already
+// solves for several board providers via the same SOURCES_PROXY_URL. Membership is
+// opt-in; every other collection stays on the direct client.
+var proxiedCollectionSlugs = map[string]struct{}{
+	"us-h1b-sponsor": {},
+}
+
+// clientFor picks direct or proxied for a collection. A nil proxied — meaning
+// SOURCES_PROXY_URL is unset — always falls back to direct, so every collection is
+// reachable without a proxy configured.
+func clientFor(slug string, direct, proxied *http.Client) *http.Client {
+	if proxied == nil {
+		return direct
+	}
+	if _, ok := proxiedCollectionSlugs[slug]; ok {
+		return proxied
+	}
+	return direct
+}
+
+// proxiedClient builds an http.Client egressing through SOURCES_PROXY_URL, or
+// returns nil when the variable is unset. An unparseable value is a fail-fast
+// error rather than a silent fallback to the direct (blocked) IP — the same
+// discipline as internal/sources/proxy.go's ApplyProxyEgress.
+func proxiedClient(timeout time.Duration) (*http.Client, error) {
+	raw := strings.TrimSpace(os.Getenv("SOURCES_PROXY_URL"))
+	if raw == "" {
+		return nil, nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return nil, fmt.Errorf("import-collections: invalid SOURCES_PROXY_URL")
+	}
+	return safehttp.NewClientWithProxy(timeout, u), nil
 }
 
 // resolveOne resolves a single collection's members. A dataset whose payload parses
