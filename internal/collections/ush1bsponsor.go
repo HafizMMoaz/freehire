@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -20,6 +21,12 @@ import (
 const (
 	ush1bIndexURL   = "https://www.uscis.gov/archive/h-1b-employer-data-hub-files"
 	ush1bYearWindow = 5
+
+	// uscis.gov's bot filter 403s a request carrying Go's default User-Agent
+	// ("Go-http-client/1.1") and 200s an identical request with a browser-like one
+	// — confirmed against the live site during design, and against the production
+	// import-collections run on 2026-08-05, which failed outright without this.
+	ush1bUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 )
 
 // fyFile is one fiscal year's data-hub CSV, as listed on the archive index page.
@@ -106,7 +113,7 @@ func ParseUSH1BSponsorsCSV(data []byte) ([]Record, error) {
 // shrunk source and would reconcile the credential off every company it failed to
 // reach. Parameterized on indexURL so it can be exercised against a test server.
 func fetchUSH1BSponsors(ctx context.Context, client *http.Client, indexURL string) ([]Record, error) {
-	page, err := get(ctx, client, indexURL)
+	page, err := getWithUserAgent(ctx, client, indexURL, ush1bUserAgent)
 	if err != nil {
 		return nil, fmt.Errorf("collections: fetch us h1b data hub index: %w", err)
 	}
@@ -125,7 +132,7 @@ func fetchUSH1BSponsors(ctx context.Context, client *http.Client, indexURL strin
 		if err != nil {
 			return nil, fmt.Errorf("collections: resolve us h1b fy%d url: %w", f.Year, err)
 		}
-		body, err := get(ctx, client, base.ResolveReference(ref).String())
+		body, err := getWithUserAgent(ctx, client, base.ResolveReference(ref).String(), ush1bUserAgent)
 		if err != nil {
 			return nil, fmt.Errorf("collections: fetch us h1b fy%d file: %w", f.Year, err)
 		}
@@ -142,4 +149,25 @@ func fetchUSH1BSponsors(ctx context.Context, client *http.Client, indexURL strin
 // archive index.
 func FetchUSH1BSponsors(ctx context.Context, client *http.Client) ([]Record, error) {
 	return fetchUSH1BSponsors(ctx, client, ush1bIndexURL)
+}
+
+// getWithUserAgent is get (see uksponsor.go) with an overridable User-Agent header,
+// kept local to this source rather than added to the shared helper: the UK and NL
+// registers have never needed one, and a request header only this source requires
+// should not ripple into call sites that don't.
+func getWithUserAgent(ctx context.Context, client *http.Client, url, userAgent string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s: status %d", url, resp.StatusCode)
+	}
+	return io.ReadAll(resp.Body)
 }
