@@ -226,6 +226,13 @@ func TestRegisterSlug_StripsTrailingLegalSuffix(t *testing.T) {
 		{"Booking B.V.", "booking"},
 		{"Adyen N.V.", "adyen"},
 		{"Adyen NV", "adyen"},
+		{"Acme Robotics Inc", "acme-robotics"},
+		{"Acme Robotics Inc.", "acme-robotics"},
+		{"Acme Robotics Incorporated", "acme-robotics"},
+		{"Acme Robotics Corp", "acme-robotics"},
+		{"Acme Robotics Corp.", "acme-robotics"},
+		{"Acme Robotics Corporation", "acme-robotics"},
+		{"Acme Robotics LLC", "acme-robotics"},
 		// No suffix to strip.
 		{"Monzo", "monzo"},
 		{"Deliveroo", "deliveroo"},
@@ -237,10 +244,21 @@ func TestRegisterSlug_StripsTrailingLegalSuffix(t *testing.T) {
 	}
 }
 
+func TestRegisterSlug_DoesNotStripCo(t *testing.T) {
+	// "Co" is deliberately excluded from legalSuffixes: unlike Inc/Corp/LLC, it
+	// collides with ordinary short words and abbreviations inside genuine company
+	// names, so stripping it widens the over-strip blast radius more than the other
+	// US forms do.
+	if got := RegisterSlug("Acme Robotics Co"); got != "acme-robotics-co" {
+		t.Errorf("RegisterSlug(Acme Robotics Co) = %q, want acme-robotics-co (Co must not strip)", got)
+	}
+}
+
 func TestRegisterSlug_OnlyStripsAtTheEnd(t *testing.T) {
-	// "Limited" leading the name is part of the name, not a legal form.
-	if got := RegisterSlug("LIMITED BRANDS INC"); got != "limited-brands-inc" {
-		t.Errorf("RegisterSlug(LIMITED BRANDS INC) = %q, want limited-brands-inc", got)
+	// "Limited" leading the name is part of the name, not a legal form — even
+	// though the trailing "Inc" is now a recognised suffix and does strip.
+	if got := RegisterSlug("LIMITED BRANDS INC"); got != "limited-brands" {
+		t.Errorf("RegisterSlug(LIMITED BRANDS INC) = %q, want limited-brands", got)
 	}
 	if got := RegisterSlug("Limited Brands"); got != "limited-brands" {
 		t.Errorf("RegisterSlug(Limited Brands) = %q, want limited-brands", got)

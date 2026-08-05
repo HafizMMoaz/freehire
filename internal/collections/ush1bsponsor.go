@@ -1,0 +1,145 @@
+package collections
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"regexp"
+	"sort"
+	"strconv"
+)
+
+// The USCIS H-1B Employer Data Hub bulk-file archive: one CSV per completed fiscal
+// year, published at a stable index page. Unlike the GOV.UK register (one current
+// snapshot resolved per run) this credential combines several years, so the set of
+// year files is discovered fresh each run rather than pinning literal year numbers
+// — USCIS adds a new file roughly annually, and a pinned year would silently stop
+// meaning "the most recent window" within one cycle.
+const (
+	ush1bIndexURL   = "https://www.uscis.gov/archive/h-1b-employer-data-hub-files"
+	ush1bYearWindow = 5
+)
+
+// fyFile is one fiscal year's data-hub CSV, as listed on the archive index page.
+type fyFile struct {
+	Year int
+	URL  string
+}
+
+// fyLinkPattern matches the index page's per-year download links, e.g.
+// <a href="/sites/default/files/document/data/h1b_datahubexport-2023.csv" ...>.
+// Anchored on the file-name pattern rather than the link text, because the text
+// ("FY 2023 H-1B Employer Data") is decorative — the URL is what identifies the
+// year.
+var fyLinkPattern = regexp.MustCompile(`(?is)<a\s+href="([^"]*h1b_datahubexport-(\d{4})\.csv)"[^>]*>`)
+
+// discoverRecentFYFiles extracts every (year, URL) pair from the archive index
+// page and returns the n most recent, sorted descending. Fewer than n years
+// listed is an error, not a shorter result: a shrunk index is indistinguishable
+// from a genuine drop in USCIS's published coverage and must not silently narrow
+// the window this credential is built on.
+func discoverRecentFYFiles(page []byte, n int) ([]fyFile, error) {
+	matches := fyLinkPattern.FindAllStringSubmatch(string(page), -1)
+	files := make([]fyFile, 0, len(matches))
+	for _, m := range matches {
+		year, err := strconv.Atoi(m[2])
+		if err != nil {
+			continue
+		}
+		files = append(files, fyFile{Year: year, URL: m[1]})
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Year > files[j].Year })
+	if len(files) < n {
+		return nil, fmt.Errorf("collections: us h1b data hub index listed %d fiscal-year files, want at least %d", len(files), n)
+	}
+	return files[:n], nil
+}
+
+// ParseUSH1BSponsorsCSV reads one fiscal year's data-hub file into one record per
+// employer with at least one petition approved (initial or continuing) that year.
+// An employer whose only rows are denials contributes nothing: the credential
+// means "has been approved to sponsor," not "has applied." The last-4-digit tax
+// identifier is retained as the record's identity field, the same role the UK
+// register's town and the Dutch register's KvK number play.
+func ParseUSH1BSponsorsCSV(data []byte) ([]Record, error) {
+	rows, err := csvColumns(data, ',',
+		"Employer", "Initial Approval", "Initial Denial", "Continuing Approval", "Continuing Denial", "Tax ID")
+	if err != nil {
+		// USCIS pluralized these four column names at some point in its own export
+		// history — the live FY2023 file has "Initial Approval", the live FY2019 file
+		// has "Initial Approvals" — so a singular miss falls back to the older
+		// spelling before giving up.
+		rows, err = csvColumns(data, ',',
+			"Employer", "Initial Approvals", "Initial Denials", "Continuing Approvals", "Continuing Denials", "Tax ID")
+		if err != nil {
+			return nil, err
+		}
+	}
+	records := make([]Record, 0, len(rows))
+	for _, row := range rows {
+		name := row[0]
+		if name == "" {
+			continue
+		}
+		// A malformed count reads as 0 rather than aborting the row: the Data Hub is
+		// a clean machine-generated export, and csvColumns already tolerates ragged
+		// rows the same way.
+		initial, _ := strconv.Atoi(row[1])
+		continuing, _ := strconv.Atoi(row[3])
+		if initial+continuing < 1 {
+			continue
+		}
+		records = append(records, Record{Name: name, Meta: map[string]string{"tin4": row[5]}})
+	}
+	if len(records) == 0 {
+		return nil, errors.New("collections: us h1b employer file parsed to no approved rows")
+	}
+	return records, nil
+}
+
+// fetchUSH1BSponsors fetches the archive index at indexURL, discovers the
+// ush1bYearWindow most recent fiscal-year files, fetches and parses each, and
+// concatenates them into one member list. Any single year's fetch or parse
+// failure fails the whole call — a partial read is indistinguishable from a
+// shrunk source and would reconcile the credential off every company it failed to
+// reach. Parameterized on indexURL so it can be exercised against a test server.
+func fetchUSH1BSponsors(ctx context.Context, client *http.Client, indexURL string) ([]Record, error) {
+	page, err := get(ctx, client, indexURL)
+	if err != nil {
+		return nil, fmt.Errorf("collections: fetch us h1b data hub index: %w", err)
+	}
+	files, err := discoverRecentFYFiles(page, ush1bYearWindow)
+	if err != nil {
+		return nil, err
+	}
+	base, err := url.Parse(indexURL)
+	if err != nil {
+		return nil, fmt.Errorf("collections: parse us h1b index url: %w", err)
+	}
+
+	var records []Record
+	for _, f := range files {
+		ref, err := url.Parse(f.URL)
+		if err != nil {
+			return nil, fmt.Errorf("collections: resolve us h1b fy%d url: %w", f.Year, err)
+		}
+		body, err := get(ctx, client, base.ResolveReference(ref).String())
+		if err != nil {
+			return nil, fmt.Errorf("collections: fetch us h1b fy%d file: %w", f.Year, err)
+		}
+		parsed, err := ParseUSH1BSponsorsCSV(body)
+		if err != nil {
+			return nil, fmt.Errorf("collections: parse us h1b fy%d file: %w", f.Year, err)
+		}
+		records = append(records, parsed...)
+	}
+	return records, nil
+}
+
+// FetchUSH1BSponsors is the registry-facing self-fetcher, bound to the live USCIS
+// archive index.
+func FetchUSH1BSponsors(ctx context.Context, client *http.Client) ([]Record, error) {
+	return fetchUSH1BSponsors(ctx, client, ush1bIndexURL)
+}

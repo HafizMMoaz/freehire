@@ -11,12 +11,16 @@ import (
 // Matched as whole trailing tokens after normalization, so "bv" strips from
 // "Booking B.V." but not from "BV Sports".
 //
-// Kept deliberately short: only the forms the UK Companies House and Dutch KvK
-// registers actually emit. A speculative list (GmbH, S.A., Pty, …) would widen the
-// blast radius of an over-strip for registers we do not read.
+// Kept deliberately short: only the forms the UK Companies House, Dutch KvK, and
+// USCIS registers actually emit. A speculative list (GmbH, S.A., Pty, …) would
+// widen the blast radius of an over-strip for registers we do not read. "Co" is a
+// deliberate omission even though USCIS data emits it: unlike the others, it
+// collides with ordinary short words and abbreviations inside genuine company
+// names, not just as a trailing legal-form token.
 var legalSuffixes = map[string]struct{}{
 	"ltd": {}, "limited": {}, "plc": {}, "llp": {}, "lp": {}, "cic": {}, "cio": {},
 	"bv": {}, "nv": {},
+	"inc": {}, "incorporated": {}, "corp": {}, "corporation": {}, "llc": {},
 }
 
 // RegisterSlug normalizes an organisation name as a public register publishes it
@@ -109,6 +113,7 @@ func RequireCountry(code string) func(Company, Record) bool {
 var countryAliases = map[string][]string{
 	"GB": {"uk", "united kingdom", "great britain", "england", "scotland", "wales"},
 	"NL": {"netherlands", "the netherlands", "holland"},
+	"US": {"usa", "u.s.a.", "u.s.", "united states", "united states of america", "america"},
 }
 
 // countryMatches reports whether a stored country value denotes the given ISO code.
