@@ -114,13 +114,17 @@ token) — a judgment call, revisit if the US register's own false-negative rate
 
 ## Risks / Trade-offs
 
-- **[Risk] The design-time fetch tool got HTTP 403 from uscis.gov; a plain curl
-  with a browser User-Agent got 200.** → Mitigation: `cmd/import-collections`
-  already makes plain `net/http` calls for the UK and NL registers with no special
-  headers, and those work in production. Confirm the same is true for uscis.gov
-  during implementation (a live fetch from the actual import path, not just a
-  local curl) before assuming any special User-Agent handling is needed; add one
-  only if a real 403 is observed from the production fetch path.
+- **[Risk — materialized] uscis.gov 403s the production Hetzner datacenter IP.**
+  Confirmed on 2026-08-05: the first real `cmd/import-collections` run against
+  production failed with a 403. A User-Agent fix (matching the design-time
+  curl-vs-tool discrepancy noted above) was insufficient — `curl` run directly
+  *on* host-2 with a browser User-Agent still got 403, proving this is IP
+  reputation against the Hetzner range, not a client-fingerprint check. Fixed by
+  routing the `us-h1b-sponsor` fetch through the existing `SOURCES_PROXY_URL`
+  residential-proxy mechanism (`internal/sources/proxy.go` already solves this
+  exact class of problem for several board providers — reused rather than
+  reinvented), opt-in by collection slug so the UK/NL registers, which have never
+  needed it, stay on the direct IP.
 - **[Risk] The Hub's bulk-file archive lags the live USCIS query tool by roughly
   2-3 fiscal years** (archive topped out at FY2023 at verification time; the query
   tool covers into FY2026). → Mitigation: accepted trade-off — the alternative is

@@ -389,3 +389,55 @@ func TestPlan_FlagsAMajorityLossNotJustATotalOne(t *testing.T) {
 		t.Error("losing 8 of 10 holders was not flagged")
 	}
 }
+
+func TestClientFor_UsesDirectWhenNoProxyConfigured(t *testing.T) {
+	direct := &http.Client{}
+	if got := clientFor("us-h1b-sponsor", direct, nil); got != direct {
+		t.Error("clientFor did not fall back to direct when no proxy client was built")
+	}
+}
+
+func TestClientFor_UsesProxiedForAnAllowlistedSlug(t *testing.T) {
+	direct, proxied := &http.Client{}, &http.Client{}
+	if got := clientFor("us-h1b-sponsor", direct, proxied); got != proxied {
+		t.Error("clientFor did not route the allowlisted slug through the proxy")
+	}
+}
+
+func TestClientFor_UsesDirectForANonAllowlistedSlug(t *testing.T) {
+	// uk-skilled-worker-sponsor has never needed the proxy; a proxy configured for
+	// the US register must not silently reroute an unrelated collection's egress.
+	direct, proxied := &http.Client{}, &http.Client{}
+	if got := clientFor("uk-skilled-worker-sponsor", direct, proxied); got != direct {
+		t.Error("clientFor rerouted a non-allowlisted slug through the proxy")
+	}
+}
+
+func TestProxiedClient_ReturnsNilWhenSOURCES_PROXY_URLIsUnset(t *testing.T) {
+	t.Setenv("SOURCES_PROXY_URL", "")
+	got, err := proxiedClient(fetchTimeout)
+	if err != nil {
+		t.Fatalf("proxiedClient: %v", err)
+	}
+	if got != nil {
+		t.Error("proxiedClient returned a non-nil client with SOURCES_PROXY_URL unset")
+	}
+}
+
+func TestProxiedClient_BuildsAClientWhenSOURCES_PROXY_URLIsSet(t *testing.T) {
+	t.Setenv("SOURCES_PROXY_URL", "http://user:pass@proxy.example:8080")
+	got, err := proxiedClient(fetchTimeout)
+	if err != nil {
+		t.Fatalf("proxiedClient: %v", err)
+	}
+	if got == nil {
+		t.Error("proxiedClient returned nil with SOURCES_PROXY_URL set")
+	}
+}
+
+func TestProxiedClient_ErrorsOnAnUnparseableSOURCES_PROXY_URL(t *testing.T) {
+	t.Setenv("SOURCES_PROXY_URL", "not a url")
+	if _, err := proxiedClient(fetchTimeout); err == nil {
+		t.Error("proxiedClient accepted an invalid SOURCES_PROXY_URL")
+	}
+}
