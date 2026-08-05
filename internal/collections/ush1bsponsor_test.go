@@ -176,6 +176,50 @@ func TestFetchUSH1BSponsors_CombinesAllFiveYears(t *testing.T) {
 	}
 }
 
+func TestFetchUSH1BSponsors_SendsABrowserUserAgent(t *testing.T) {
+	// uscis.gov's bot filter 403s a request with no User-Agent (confirmed against
+	// the live site, and against the production import-collections run on
+	// 2026-08-05) but 200s an identical request carrying a browser-like one. This
+	// test pins that every request fetchUSH1BSponsors makes carries one.
+	years := []string{"2023", "2022", "2021", "2020", "2019"}
+	requireUA := func(w http.ResponseWriter, r *http.Request, body func()) {
+		// Go's http.Client sends "Go-http-client/1.1" when the caller never sets
+		// the header — exactly the fingerprint uscis.gov's bot filter 403s. Only a
+		// caller-set, non-default value proves the fix, so this rejects that
+		// default the same way the live site does.
+		if ua := r.Header.Get("User-Agent"); ua == "" || strings.HasPrefix(ua, "Go-http-client") {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		body()
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/archive/h-1b-employer-data-hub-files", func(w http.ResponseWriter, r *http.Request) {
+		requireUA(w, r, func() {
+			var b strings.Builder
+			for _, y := range years {
+				b.WriteString(`<a href="/sites/default/files/document/data/h1b_datahubexport-` + y + `.csv">FY ` + y + ` H-1B Employer Data</a>`)
+			}
+			w.Write([]byte(b.String()))
+		})
+	})
+	for _, y := range years {
+		y := y
+		mux.HandleFunc("/sites/default/files/document/data/h1b_datahubexport-"+y+".csv", func(w http.ResponseWriter, r *http.Request) {
+			requireUA(w, r, func() {
+				w.Write([]byte("\"Fiscal Year\",Employer,\"Initial Approval\",\"Initial Denial\",\"Continuing Approval\",\"Continuing Denial\",NAICS,\"Tax ID\",State,City,ZIP\n" +
+					y + `,"ACME ROBOTICS INC",1,0,0,0,54,1234,CA,SAN JOSE,95110` + "\n"))
+			})
+		})
+	}
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	if _, err := fetchUSH1BSponsors(context.Background(), srv.Client(), srv.URL+"/archive/h-1b-employer-data-hub-files"); err != nil {
+		t.Fatalf("fetchUSH1BSponsors: %v (expected a User-Agent to be sent, avoiding the 403)", err)
+	}
+}
+
 func TestFetchUSH1BSponsors_FailsWholeCallWhenOneYearIsUnreachable(t *testing.T) {
 	years := []string{"2023", "2022", "2021", "2020", "2019"}
 	mux := http.NewServeMux()
