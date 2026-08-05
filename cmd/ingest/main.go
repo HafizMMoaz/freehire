@@ -7,11 +7,12 @@
 // ingested at least one job has its stale jobs swept. Run on a schedule (e.g. cron); it
 // processes its boards once and exits.
 //
-// When a search engine is configured (MEILI_MASTER_KEY set), each crawl's new or
-// content-changed jobs are pushed to the live facet search index, batched, so they
-// are searchable within one crawl cycle instead of waiting for the next full
-// reindex. The push is best-effort — a search-engine failure is logged and never
-// fails the run — and the batch reindex stays the index's source of truth.
+// Each crawl's new or content-changed jobs are queued (search_outbox, atomically
+// with their write) for the live facet search index; cmd/search-drain builds and
+// pushes the documents on its own schedule. Routing every write through that queue —
+// instead of pushing to Meilisearch directly from inside this worker, one of ~169
+// independent per-board processes — collapses many small, expensive index merges into
+// few, cheap ones. The batch reindex stays the index's source of truth.
 package main
 
 import (
@@ -27,7 +28,6 @@ import (
 	"github.com/strelov1/freehire/internal/db"
 	"github.com/strelov1/freehire/internal/enrich"
 	"github.com/strelov1/freehire/internal/pipeline"
-	"github.com/strelov1/freehire/internal/search"
 	"github.com/strelov1/freehire/internal/sources"
 	"github.com/strelov1/freehire/internal/worker"
 )
@@ -109,24 +109,12 @@ func run() int {
 		log.Printf("ingest: shard %d/%d — crawling %d of %d boards in %s", i, n, len(sourceCfg.Sources), full, path)
 	}
 
-	ctx, cfg, pool, cleanup, err := worker.Bootstrap(context.Background())
+	ctx, _, pool, cleanup, err := worker.Bootstrap(context.Background())
 	if err != nil {
 		log.Printf("database: %v", err)
 		return 1
 	}
 	defer cleanup()
-
-	// Incremental search indexing is wired only when the search engine is
-	// configured for this worker (MEILI_MASTER_KEY set, mirroring the server's
-	// search-enabled gate). Absent it, the store gets a nil indexer and ingest runs
-	// exactly as before. The full batch reindex stays the index's source of truth.
-	var indexer *batchIndexer
-	var storeIndexer jobIndexer
-	if cfg.MeiliKey != "" {
-		client := search.NewClient(cfg.MeiliURL, cfg.MeiliKey)
-		indexer = newBatchIndexer(client.SubmitJobs, indexChunkSize)
-		storeIndexer = indexer
-	}
 
 	// crawled records the company slugs each provider actually wrote this run, so the
 	// post-run sweep scopes its closes to them (see the sweep below and crawledSet).
@@ -136,7 +124,7 @@ func run() int {
 	tally := newWriteTally()
 	runner := pipeline.Runner{
 		Registry:    registry,
-		Store:       newDBStore(pool, enrich.Version, storeIndexer, crawled, tally),
+		Store:       newDBStore(pool, enrich.Version, crawled, tally),
 		BoardHealth: newBoardHealth(pool),
 	}
 
@@ -149,14 +137,6 @@ func run() int {
 	// Surface which boards are failing / cooled without grepping logs — one line
 	// naming them, their failure count, and when they next become eligible.
 	logUnhealthyBoards(ctx, db.New(pool))
-
-	// Flush whatever new/changed documents the crawl buffered into the live index.
-	// Best-effort: failures are already logged per batch and never affect the run.
-	if indexer != nil {
-		indexer.Flush(ctx)
-		st := indexer.Stats()
-		log.Printf("ingest index: indexed=%d failed=%d", st.Indexed, st.Failed)
-	}
 
 	total := runStats.Total()
 	log.Printf("ingest done: file=%s providers=%d ingested=%d failed=%d skipped=%d rejected=%d",

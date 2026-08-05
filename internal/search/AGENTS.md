@@ -25,8 +25,18 @@ Meilisearch-backed keyword and hybrid search over jobs and companies. The packag
   **`is_tech` is deliberately not hashed**, so an is_tech-only flip is invisible to search
   until the document is pushed for some other reason. There is no `--force` flag; the only
   way to surface it immediately is a rebuild from empty.
-- `SubmitJobs` submits **without awaiting** the Meili task (the ingest hot path — awaiting
-  stalled board goroutines); `IndexJobs` awaits (the reindex path). Pick deliberately.
+- `SubmitJobs` submits **without awaiting** the Meili task (`internal/linkimport`'s single
+  on-demand doc push — `cmd/resolve-url` and the browser extension's "add this page", both
+  human-triggered and low-volume, so one unawaited push per action is fine); `IndexJobs`
+  awaits (the reindex path AND `cmd/search-drain`'s wave push — a wrong/silently-dropped
+  push there would leave the outbox entry deleted with nothing actually indexed). Pick
+  deliberately: **never call `SubmitJobs` from a high-frequency caller** — Meilisearch
+  re-merges its inverted index/facet structures across the WHOLE live index on every push
+  regardless of batch size (observed 50-90s per push at catalogue scale), so many small
+  unawaited pushes queue up and saturate host disk IO. That is exactly what happened when
+  `cmd/ingest` called it once per crawl across ~169 independent per-board processes; the
+  fix routes that traffic through `search_outbox` + `cmd/search-drain` instead (see
+  `internal/searchdrain`), collapsing many small pushes into few, fat, awaited ones.
 - `swapIndexes` calls `POST /swap-indexes` over raw HTTP, not the SDK: the pinned
   meilisearch-go always serializes a `rename` field that engine v1.13 rejects.
 - Indexed descriptions are capped at `maxIndexedDescriptionRunes`; `maxTotalHits` is the

@@ -56,9 +56,7 @@ func TestSave_CollapsesPerCityCopiesOfOneRole(t *testing.T) {
 	ctx := context.Background()
 	q := db.New(pool)
 
-	pusher := &fakePusher{}
-	// chunkSize 1 flushes on every Add, so the pushed set is observable without a Flush.
-	store := newDBStore(pool, 1, newBatchIndexer(pusher.push, 1), nil, nil)
+	store := newDBStore(pool, 1, nil, nil)
 
 	if err := store.Save(ctx, cityPosting("248544000257794970", "Querétaro, Mexico")); err != nil {
 		t.Fatalf("save the first city: %v", err)
@@ -89,10 +87,13 @@ func TestSave_CollapsesPerCityCopiesOfOneRole(t *testing.T) {
 		t.Errorf("second.duplicate_of = %v, want the first city's id %d", second.DuplicateOf, first.ID)
 	}
 
-	// The consequence that reached the user: a non-canonical copy must never be pushed to
-	// the live index, or it becomes its own "new job" in every subscription digest.
-	if got := pusher.total(); got != 1 {
-		t.Errorf("pushed %d documents to the index, want 1 (the canon only)", got)
+	// The consequence that reached the user: a non-canonical copy must never be queued
+	// for the live index, or it becomes its own "new job" in every subscription digest.
+	if got := searchOutboxCount(t, pool, first.ID); got != 1 {
+		t.Errorf("search_outbox entries for the canon = %d, want 1", got)
+	}
+	if got := searchOutboxCount(t, pool, second.ID); got != 0 {
+		t.Errorf("search_outbox entries for the non-canonical copy = %d, want 0", got)
 	}
 
 	// And it must not be enriched: an invisible row would pay for an LLM call.

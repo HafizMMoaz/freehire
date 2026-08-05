@@ -64,17 +64,28 @@ func loadJob(t *testing.T, pool *pgxpool.Pool, externalID string) db.Job {
 	return row
 }
 
+// searchOutboxCount reports how many live search_outbox entries a job has queued —
+// 0 or 1, since EnqueueSearchOutbox is ON CONFLICT (job_id) DO NOTHING.
+func searchOutboxCount(t *testing.T, pool *pgxpool.Pool, jobID int64) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM search_outbox WHERE job_id = $1`, jobID,
+	).Scan(&n); err != nil {
+		t.Fatalf("count search_outbox for job %d: %v", jobID, err)
+	}
+	return n
+}
+
 // A second crawl of a posting nobody edited must refresh its liveness and write nothing else —
 // while everything around the write still runs, because the sweep, the enrichment queue and the
 // apply-form queue all depend on it.
 func TestSave_UnchangedRecrawlWritesOnlyLiveness(t *testing.T) {
 	pool := testdb.Pool(t)
 	ctx := context.Background()
-	pusher := &fakePusher{}
 	crawled := newCrawledSet()
 	tally := newWriteTally()
-	// chunkSize 1 flushes on every Add, so a push is observable without a Flush.
-	store := newDBStore(pool, 1, newBatchIndexer(pusher.push, 1), crawled, tally)
+	store := newDBStore(pool, 1, crawled, tally)
 	posting := cheapPosting("acme:cheap-1", "Backend Engineer")
 
 	if err := store.Save(ctx, posting); err != nil {
@@ -82,7 +93,11 @@ func TestSave_UnchangedRecrawlWritesOnlyLiveness(t *testing.T) {
 	}
 	backdateStamps(t, pool, "acme:cheap-1")
 	before := loadJob(t, pool, "acme:cheap-1")
-	pushesAfterInsert := pusher.calls()
+	// Drain the outbox entry the insert queued, so the assertion below observes only
+	// what the re-crawl itself queues.
+	if _, err := pool.Exec(ctx, `DELETE FROM search_outbox WHERE job_id = $1`, before.ID); err != nil {
+		t.Fatalf("drain search_outbox after insert: %v", err)
+	}
 
 	if err := store.Save(ctx, posting); err != nil {
 		t.Fatalf("re-crawl Save: %v", err)
@@ -102,10 +117,9 @@ func TestSave_UnchangedRecrawlWritesOnlyLiveness(t *testing.T) {
 			before.Description, before.ContentHash, after.Description, after.ContentHash)
 	}
 
-	// No document push: the row's indexed content did not move.
-	if got := pusher.calls(); got != pushesAfterInsert {
-		t.Errorf("index pushes = %d, want unchanged at %d for a re-crawl that changed nothing",
-			got, pushesAfterInsert)
+	// No search-index queue entry: the row's indexed content did not move.
+	if got := searchOutboxCount(t, pool, before.ID); got != 0 {
+		t.Errorf("search_outbox entries = %d, want 0 for a re-crawl that changed nothing", got)
 	}
 	// The company must still be in the sweep scope, or its removed postings never close.
 	if slugs := crawled.slugs("lever"); len(slugs) != 1 || slugs[0] != "acme" {
@@ -131,7 +145,7 @@ func TestSave_UnchangedRecrawlWritesOnlyLiveness(t *testing.T) {
 func TestSave_ClosedPostingReopensOnUnchangedRecrawl(t *testing.T) {
 	pool := testdb.Pool(t)
 	ctx := context.Background()
-	store := newDBStore(pool, 1, nil, nil, nil)
+	store := newDBStore(pool, 1, nil, nil)
 	posting := cheapPosting("acme:cheap-2", "Platform Engineer")
 
 	if err := store.Save(ctx, posting); err != nil {
@@ -171,7 +185,7 @@ func TestSave_ClosedPostingReopensOnUnchangedRecrawl(t *testing.T) {
 func TestSaveWithApplyForm_UnchangedRecrawlStillWritesTheForm(t *testing.T) {
 	pool := testdb.Pool(t)
 	ctx := context.Background()
-	store := newDBStore(pool, 1, nil, nil, nil)
+	store := newDBStore(pool, 1, nil, nil)
 	posting := cheapPosting("acme:cheap-3", "Data Engineer")
 
 	first := applyform.Form{Provider: "lever", Fields: []applyform.Field{{ID: "1", Label: "Old question", RawType: "string"}}}
@@ -212,7 +226,7 @@ func TestTouch_CountsAsACheapWrite(t *testing.T) {
 	pool := testdb.Pool(t)
 	ctx := context.Background()
 	tally := newWriteTally()
-	store := newDBStore(pool, 1, nil, newCrawledSet(), tally)
+	store := newDBStore(pool, 1, newCrawledSet(), tally)
 
 	if err := store.Save(ctx, cheapPosting("acme:cheap-4", "Site Engineer")); err != nil {
 		t.Fatalf("Save: %v", err)

@@ -165,6 +165,14 @@ type Querier interface {
 	// lease predicate reclaims entries whose worker died (stale claimed_at), so no
 	// separate reaper process is needed.
 	ClaimEnrichmentBatch(ctx context.Context, arg ClaimEnrichmentBatchParams) ([]ClaimEnrichmentBatchRow, error)
+	// Claim a batch of live, unleased entries for OPEN canonical jobs, freshest job
+	// first, by stamping claimed_at. Mirrors ClaimEnrichmentBatch: the jobs join lets the
+	// claim skip a job that closed or became a non-canonical repost after it was queued
+	// (that reconciles on the next full reindex, same as before this queue existed) and
+	// order by posting freshness. FOR UPDATE OF o locks only outbox rows; SKIP LOCKED
+	// lets concurrent workers take disjoint rows; the lease predicate reclaims entries
+	// whose worker died (stale claimed_at), so no separate reaper process is needed.
+	ClaimSearchOutboxBatch(ctx context.Context, arg ClaimSearchOutboxBatchParams) ([]ClaimSearchOutboxBatchRow, error)
 	// Claim a batch of live, unleased entries, freshest job first, by stamping claimed_at.
 	// Unlike ClaimEnrichmentBatch this does NOT filter unindexable jobs out: a closed OR
 	// non-canonical (duplicate_of) entry is the removal signal, so the worker must receive
@@ -629,6 +637,7 @@ type Querier interface {
 	// Returns the affected row count: 0 means it does not exist or is not the caller's
 	// (the handler maps that to 404).
 	DeleteSavedSearch(ctx context.Context, arg DeleteSavedSearchParams) (int64, error)
+	DeleteSearchOutboxEntries(ctx context.Context, ids []int64) error
 	DeleteSemanticEntriesBatch(ctx context.Context, ids []int64) error
 	// Unsubscribe, scoped to its owner. Returns the affected row count: 0 means it
 	// does not exist or is not the caller's (the handler maps that to 404). The match
@@ -706,6 +715,12 @@ type Querier interface {
 	// ON CONFLICT keeps exactly one entry per (job_id, target_model), so running this every
 	// command invocation never duplicates work.
 	EnqueuePendingSemanticJobs(ctx context.Context, arg EnqueuePendingSemanticJobsParams) (int64, error)
+	// Queue a job for the live facet index. Called by cmd/ingest inside the same
+	// transaction as the job's upsert, only when the write inserted or changed indexed
+	// content (mirrors the gate the old inline SubmitJobs push used). ON CONFLICT keeps
+	// exactly one live entry per job, so a job changed again before it drains is not
+	// queued twice.
+	EnqueueSearchOutbox(ctx context.Context, jobID int64) error
 	// Seed a balance row for a brand-new user so the subsequent SELECT ... FOR UPDATE
 	// always has a row to lock (this is what serializes concurrent first-ever debits).
 	// For an existing user the row is left untouched; a stale period is reset later
@@ -2128,6 +2143,11 @@ type Querier interface {
 	// once attempts reach the max. claimed_at is left in place — its expiry gates the
 	// retry to a later pass and doubles as the crash reaper, mirroring subscription_matches.
 	RecordReminderDeliveryFailure(ctx context.Context, arg RecordReminderDeliveryFailureParams) error
+	// Count a failed attempt: bump attempts, record the error, and dead-letter (set
+	// failed_at) once attempts reach the max. The lease (claimed_at) is intentionally
+	// left in place — its expiry gates the retry to a later run and doubles as the
+	// crash reaper, so a failed entry is never reprocessed within the same run.
+	RecordSearchOutboxFailure(ctx context.Context, arg RecordSearchOutboxFailureParams) (RecordSearchOutboxFailureRow, error)
 	// Count a failed attempt: bump attempts, record the error, and dead-letter (set
 	// failed_at) once attempts reach the max. The lease (claimed_at) is intentionally left
 	// in place — its expiry gates the retry to a later run and doubles as the crash reaper,

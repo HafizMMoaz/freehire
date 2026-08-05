@@ -618,6 +618,16 @@ type SavedSearch struct {
 	AuthorLabel pgtype.Text        `json:"author_label"`
 }
 
+type SearchOutbox struct {
+	ID        int64              `json:"id"`
+	JobID     int64              `json:"job_id"`
+	Attempts  int32              `json:"attempts"`
+	ClaimedAt pgtype.Timestamptz `json:"claimed_at"`
+	FailedAt  pgtype.Timestamptz `json:"failed_at"`
+	LastError string             `json:"last_error"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type SemanticOutbox struct {
 	ID          int64              `json:"id"`
 	JobID       int64              `json:"job_id"`
