@@ -2739,6 +2739,7 @@ export const COLLECTIONS = [
   { slug: 'ai-native', title: 'AI-Native', description: 'Open roles at AI-native companies building AI-first products and infrastructure — model and inference APIs, vector databases, and agent/dev tooling.', kind: 'editorial' },
   { slug: 'uk-skilled-worker-sponsor', title: 'Licensed UK sponsor', description: 'Open roles at employers on the GOV.UK register of licensed sponsors for the Skilled Worker and related work routes. The licence belongs to the employer — it is not a commitment to sponsor any particular role.', kind: 'credential' },
   { slug: 'nl-recognised-sponsor', title: 'Licensed NL sponsor', description: 'Open roles at employers on the IND public register of recognised sponsors for work and highly skilled migrants. The recognition belongs to the employer — it is not a commitment to sponsor any particular role.', kind: 'credential' },
+  { slug: 'us-h1b-sponsor', title: 'H-1B sponsor history', description: 'Open roles at employers with USCIS-approved H-1B petitions in the last five fiscal years. Historical approval belongs to the employer — it is not a commitment to sponsor any particular role.', kind: 'credential' },
 ] as const;
 export type Collection = (typeof COLLECTIONS)[number];
 export type CollectionKind = Collection['kind'];
