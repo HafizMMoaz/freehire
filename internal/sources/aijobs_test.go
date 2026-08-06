@@ -131,6 +131,36 @@ func TestAijobsCrawlListingFirstPageFailureErrors(t *testing.T) {
 	}
 }
 
+// TestAijobsCrawlListingStopsAtHardPageCap covers the "hard cap regardless of seen state"
+// spec scenario: a feed that never runs dry and never repeats an already-seen posting
+// (so the seen-based stop never triggers) must still stop at aijobsMaxPages. It shrinks
+// the package var for the duration of the test rather than paginating to the real ~1200.
+func TestAijobsCrawlListingStopsAtHardPageCap(t *testing.T) {
+	orig := aijobsMaxPages
+	aijobsMaxPages = 3
+	defer func() { aijobsMaxPages = orig }()
+
+	var requests int
+	fake := aijobsGetPostFake{postForm: func(string) (*html.Node, error) {
+		requests++
+		// A fresh, never-seen numeric id every call (aijobsJobIDPattern requires a
+		// trailing digit run): the seen-based stop can never trigger, so only the hard
+		// cap can end the walk.
+		return html.Parse(strings.NewReader(aijobsListingPage(fmt.Sprintf("%d", 1000+requests))))
+	}}
+
+	unseen, err := aijobs{http: fake}.crawlListing(context.Background(), seenSet(), 0)
+	if err != nil {
+		t.Fatalf("crawlListing: %v", err)
+	}
+	if requests != aijobsMaxPages {
+		t.Errorf("requested %d pages, want exactly %d (stop at the hard cap)", requests, aijobsMaxPages)
+	}
+	if len(unseen) != aijobsMaxPages {
+		t.Errorf("got %d unseen postings, want %d (one per page up to the cap)", len(unseen), aijobsMaxPages)
+	}
+}
+
 func TestAijobsCrawlListingLaterPageFailureKeepsWhatWasGathered(t *testing.T) {
 	fake := aijobsPagedFake(map[int]string{1: aijobsListingPage("1")}) // no page=2: page 2 fails
 

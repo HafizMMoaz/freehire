@@ -79,7 +79,8 @@ func aijobsListingLinks(root *html.Node) []string {
 // aijobsMaxPages is the hard pagination safety cap, independent of the seen-based stop
 // (see crawlListing): ~47k postings at 50/page is ~956 pages, so this leaves headroom
 // while still bounding a run if the feed's sort order or markup ever silently changes.
-const aijobsMaxPages = 1200
+// A var, not a const, so a test can shrink it rather than paginate to the real cap.
+var aijobsMaxPages = 1200
 
 // bootstrapSession GETs the aijobs.net home page to obtain the csrftoken cookie the
 // listing POST must echo back (Django's double-submit CSRF pattern — see
@@ -106,7 +107,9 @@ func (a aijobs) listPage(ctx context.Context, csrfToken string, page int) (*html
 	headers := map[string]string{
 		"x-csrftoken": csrfToken,
 		"referer":     aijobsBaseURL + "/",
-		"hx-request":  "true",
+		// The site's own frontend paginates this endpoint via htmx (confirmed live), which
+		// marks every one of its requests this way; sent for parity with the real client.
+		"hx-request": "true",
 	}
 	return a.http.PostFormWithHeaders(ctx, fmt.Sprintf("%s/?page=%d", aijobsBaseURL, page), headers, values)
 }
