@@ -90,6 +90,12 @@ type HeaderJSONPoster interface {
 	PostJSONWithHeaders(ctx context.Context, url string, headers map[string]string, body, v any) error
 }
 
+// CookieReader reads back a cookie a prior request established in the client's jar, for
+// the double-submit CSRF pattern (see Client.CookieValue).
+type CookieReader interface {
+	CookieValue(url, name string) string
+}
+
 // HeaderFormPoster POSTs a form-urlencoded body with extra request headers and returns
 // the response parsed as HTML — for a CSRF-protected listing endpoint that is form-bodied
 // rather than JSON (e.g. aijobs.net's Django cookie-token flow).
@@ -112,6 +118,7 @@ type HTTPClient interface {
 	HeaderJSONGetter
 	HeaderJSONPoster
 	HeaderFormPoster
+	CookieReader
 }
 
 // maxResponseBody caps how many bytes a decoder reads from any response. It bounds a
@@ -431,6 +438,28 @@ type ChallengeError struct {
 
 func (e *ChallengeError) Error() string {
 	return fmt.Sprintf("sources: GET %s: WAF challenge", e.URL)
+}
+
+// CookieValue returns the value of the named cookie as currently held in the client's
+// cookie jar for url's host, "" if unset or the client has no jar (the shared client,
+// built without one). It exists for the double-submit CSRF pattern (e.g. aijobs.net's
+// Django flow), where a value a prior GET's Set-Cookie response established must also be
+// echoed back as a request header/body field — something the jar alone, which only
+// re-attaches cookies to outgoing requests automatically, cannot do.
+func (c *Client) CookieValue(rawURL, name string) string {
+	if c.httpClient.Jar == nil {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	for _, ck := range c.httpClient.Jar.Cookies(u) {
+		if ck.Name == name {
+			return ck.Value
+		}
+	}
+	return ""
 }
 
 // PostFormWithHeaders POSTs values as an application/x-www-form-urlencoded body with

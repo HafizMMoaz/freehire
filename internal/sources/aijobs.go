@@ -17,6 +17,7 @@ type aijobs struct {
 type aijobsHTTP interface {
 	HeaderFormPoster
 	HTMLGetter
+	CookieReader
 }
 
 // NewAijobs builds the aijobs adapter over the given HTTP client (a cookie-jar-backed

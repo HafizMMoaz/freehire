@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -118,6 +119,36 @@ func TestClientPostFormWithHeadersSendsFormEncodedBodyAndParsesHTML(t *testing.T
 	}
 	if got := textContent(node); got != "hi" {
 		t.Errorf("parsed HTML text = %q, want %q", got, "hi")
+	}
+}
+
+func TestClientCookieValueReadsCookieSetByAPriorRequest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: "csrftoken", Value: "tok-abc", Path: "/"})
+		_, _ = w.Write([]byte(`<html></html>`))
+	}))
+	defer srv.Close()
+
+	jar, _ := cookiejar.New(nil)
+	httpClient := srv.Client()
+	httpClient.Jar = jar
+	c := &Client{httpClient: httpClient}
+
+	if _, err := c.GetHTML(context.Background(), srv.URL); err != nil {
+		t.Fatalf("GetHTML: %v", err)
+	}
+	if got := c.CookieValue(srv.URL, "csrftoken"); got != "tok-abc" {
+		t.Errorf("CookieValue = %q, want %q", got, "tok-abc")
+	}
+	if got := c.CookieValue(srv.URL, "nope"); got != "" {
+		t.Errorf("CookieValue for unset cookie = %q, want empty", got)
+	}
+}
+
+func TestClientCookieValueReturnsEmptyWithoutAJar(t *testing.T) {
+	c := &Client{httpClient: &http.Client{}}
+	if got := c.CookieValue("https://example.com", "csrftoken"); got != "" {
+		t.Errorf("CookieValue without a jar = %q, want empty", got)
 	}
 }
 
