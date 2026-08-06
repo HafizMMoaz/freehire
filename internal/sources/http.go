@@ -90,6 +90,13 @@ type HeaderJSONPoster interface {
 	PostJSONWithHeaders(ctx context.Context, url string, headers map[string]string, body, v any) error
 }
 
+// HeaderFormPoster POSTs a form-urlencoded body with extra request headers and returns
+// the response parsed as HTML — for a CSRF-protected listing endpoint that is form-bodied
+// rather than JSON (e.g. aijobs.net's Django cookie-token flow).
+type HeaderFormPoster interface {
+	PostFormWithHeaders(ctx context.Context, url string, headers map[string]string, values url.Values) (*html.Node, error)
+}
+
 // HTTPClient is the full transport surface, composing every capability role. The real
 // Client implements it; sources.All holds one and passes it to each adapter, which then
 // narrows it to the role(s) it actually uses.
@@ -104,6 +111,7 @@ type HTTPClient interface {
 	JSONPoster
 	HeaderJSONGetter
 	HeaderJSONPoster
+	HeaderFormPoster
 }
 
 // maxResponseBody caps how many bytes a decoder reads from any response. It bounds a
