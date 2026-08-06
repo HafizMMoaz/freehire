@@ -110,10 +110,16 @@ func TestAijobsCrawlListingStopsAtNewBudget(t *testing.T) {
 // also swallow the GET, or vice versa.
 type aijobsGetPostFake struct {
 	postForm func(url string) (*html.Node, error)
+	// getHTML overrides GetHTML's response (detail-page tests); nil means the empty page
+	// every pagination test relies on for the session-bootstrap GET.
+	getHTML func(url string) (*html.Node, error)
 }
 
-func (f aijobsGetPostFake) GetHTML(context.Context, string) (*html.Node, error) {
-	return html.Parse(strings.NewReader("<html></html>"))
+func (f aijobsGetPostFake) GetHTML(_ context.Context, url string) (*html.Node, error) {
+	if f.getHTML == nil {
+		return html.Parse(strings.NewReader("<html></html>"))
+	}
+	return f.getHTML(url)
 }
 
 func (f aijobsGetPostFake) PostFormWithHeaders(_ context.Context, url string, _ map[string]string, _ neturl.Values) (*html.Node, error) {
@@ -170,6 +176,140 @@ func TestAijobsCrawlListingLaterPageFailureKeepsWhatWasGathered(t *testing.T) {
 	}
 	if want := []string{"/job/role-1/"}; !slices.Equal(unseen, want) {
 		t.Errorf("unseen = %v, want %v", unseen, want)
+	}
+}
+
+// aijobsDetailFixture is a trimmed real detail-page fragment (captured live), including
+// the "@ M..." masked company name (the page's own visible label is paywalled — the
+// adapter must derive the name from the /company/ href instead, never that text) and the
+// site's own structured Tasks/Perks/Skills sections in place of free-text prose.
+const aijobsDetailFixture = `<html><body><main>
+<h1 class="font-monospace fs-2 py-3">Data Specialist</h1>
+<div class="row g-3 align-items-start flex-nowrap">
+    <div class="col">
+        <strong>Petah Tikva, Center District, IL</strong>
+        <span class="text-bg-success px-1 rounded">R</span>
+        <p class="py-4">
+            <span class="text-bg-secondary px-1 rounded">ILS 139K-151K (estimate)</span>
+            <span class="text-bg-warning px-1 rounded">Mid-level</span>
+        </p>
+    </div>
+    <div class="col-6 col-md-5 col-lg-4 text-end">
+        <div class="fw-bold mb-2">
+            <a class="text-decoration-none d-block text-break" href="/company/medison-pharma-16767/">
+                @ M...
+            </a>
+        </div>
+        <span class="d-block text-muted py-2">
+            Found 8h ago
+        </span>
+    </div>
+</div>
+
+<h5>Tasks</h5>
+<ul>
+    <li>Build AI powered data solutions</li>
+    <li>Design data pipelines</li>
+</ul>
+
+<h5>Perks/Benefits</h5>
+<ul>
+    <li>N/A</li>
+</ul>
+
+<h5>Skills/Tech-stack</h5>
+<p>
+    <a href="/jobs/skill-python/">Python</a> |
+    <a href="/jobs/skill-sql/">SQL</a>
+</p>
+</main></body></html>`
+
+func TestAijobsDetailMapsCoreFields(t *testing.T) {
+	fake := aijobsGetPostFake{
+		getHTML: func(string) (*html.Node, error) {
+			return html.Parse(strings.NewReader(aijobsDetailFixture))
+		},
+	}
+	job, ok := aijobs{http: fake}.detail(context.Background(), "/job/data-specialist-268449/")
+	if !ok {
+		t.Fatal("detail() = false, want a valid posting")
+	}
+	if job.ExternalID != "268449" {
+		t.Errorf("ExternalID = %q, want %q", job.ExternalID, "268449")
+	}
+	if job.URL != "https://aijobs.net/job/data-specialist-268449/" {
+		t.Errorf("URL = %q, want the absolute detail page URL", job.URL)
+	}
+	if job.Title != "Data Specialist" {
+		t.Errorf("Title = %q, want %q", job.Title, "Data Specialist")
+	}
+	if job.Company != "Medison Pharma" {
+		t.Errorf("Company = %q, want %q (derived from the /company/ slug, not the masked label)", job.Company, "Medison Pharma")
+	}
+	if job.Location != "Petah Tikva, Center District, IL" {
+		t.Errorf("Location = %q, want %q", job.Location, "Petah Tikva, Center District, IL")
+	}
+	if !job.Remote {
+		t.Error("Remote = false, want true (the R badge)")
+	}
+	if job.WorkMode != "remote" {
+		t.Errorf("WorkMode = %q, want %q", job.WorkMode, "remote")
+	}
+	if !strings.Contains(job.Description, "Build AI powered data solutions") || !strings.Contains(job.Description, "Design data pipelines") {
+		t.Errorf("Description = %q, want it to contain both task items", job.Description)
+	}
+	if strings.Contains(job.Description, "N/A") {
+		t.Errorf("Description = %q, want the placeholder Perks/Benefits (N/A) section omitted", job.Description)
+	}
+	if want := []string{"Python", "SQL"}; !slices.Equal(job.Skills, want) {
+		t.Errorf("Skills = %v, want %v", job.Skills, want)
+	}
+}
+
+func TestAijobsDetailDropsPostingWithNoCompanyLink(t *testing.T) {
+	fake := aijobsGetPostFake{
+		getHTML: func(string) (*html.Node, error) {
+			return html.Parse(strings.NewReader(`<html><body><main><h1>Some Role</h1></main></body></html>`))
+		},
+	}
+	if _, ok := (aijobs{http: fake}).detail(context.Background(), "/job/some-role-1/"); ok {
+		t.Error("detail() = true, want false for a page with no /company/ link")
+	}
+}
+
+func TestAijobsDetailIncludesRealPerks(t *testing.T) {
+	const withPerks = `<html><body><main>
+<h1>Role</h1>
+<a href="/company/acme-1/">@ A...</a>
+<h5>Tasks</h5><ul><li>Do the work</li></ul>
+<h5>Perks/Benefits</h5><ul><li>Health insurance</li><li>Remote stipend</li></ul>
+</main></body></html>`
+	fake := aijobsGetPostFake{getHTML: func(string) (*html.Node, error) {
+		return html.Parse(strings.NewReader(withPerks))
+	}}
+	job, ok := aijobs{http: fake}.detail(context.Background(), "/job/role-2/")
+	if !ok {
+		t.Fatal("detail() = false, want a valid posting")
+	}
+	if !strings.Contains(job.Description, "Health insurance") || !strings.Contains(job.Description, "Remote stipend") {
+		t.Errorf("Description = %q, want real perks included", job.Description)
+	}
+}
+
+func TestAijobsCompanyNameFromSlug(t *testing.T) {
+	cases := map[string]string{
+		"/company/medison-pharma-16767/": "Medison Pharma",
+		"/company/acme-1/":               "Acme",
+		"/company/multi-word-co-42/":     "Multi Word Co",
+	}
+	for href, want := range cases {
+		root, err := html.Parse(strings.NewReader(`<html><body><a href="` + href + `">@ x</a></body></html>`))
+		if err != nil {
+			t.Fatalf("html.Parse: %v", err)
+		}
+		if got := aijobsCompanyName(root); got != want {
+			t.Errorf("aijobsCompanyName(%q) = %q, want %q", href, got, want)
+		}
 	}
 }
 

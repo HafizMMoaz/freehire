@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strings"
+	"time"
+	"unicode"
 
 	"golang.org/x/net/html"
 )
@@ -162,3 +165,217 @@ func (a aijobs) crawlListing(ctx context.Context, seen func(externalID string) b
 	}
 	return unseen, nil
 }
+
+// aijobsCompanySlugPattern matches a company-profile href and captures its slug, without
+// the trailing "-<id>" suffix every such link carries.
+var aijobsCompanySlugPattern = regexp.MustCompile(`^/company/(.+)-\d+/?$`)
+
+// aijobsCompanyName finds the detail page's company-profile link and derives a display
+// name from its slug — the page's own visible label is masked behind a PRO paywall
+// ("@ M..."), but the slug in the href is not (see design.md Decision 5). "" if the page
+// carries no such link.
+func aijobsCompanyName(root *html.Node) string {
+	var slug string
+	walk(root, func(n *html.Node) bool {
+		if slug == "" && n.Type == html.ElementNode && n.Data == "a" {
+			if m := aijobsCompanySlugPattern.FindStringSubmatch(attr(n, "href")); m != nil {
+				slug = m[1]
+			}
+		}
+		return true
+	})
+	if slug == "" {
+		return ""
+	}
+	return titleCaseSlug(slug)
+}
+
+// titleCaseSlug renders a hyphen-separated URL slug as a display name by upper-casing
+// each word's first rune (a Django slug is already lower-case, so nothing else changes).
+func titleCaseSlug(slug string) string {
+	words := strings.Split(slug, "-")
+	for i, w := range words {
+		if w == "" {
+			continue
+		}
+		r := []rune(w)
+		r[0] = unicode.ToUpper(r[0])
+		words[i] = string(r)
+	}
+	return strings.Join(words, " ")
+}
+
+// aijobsIsRemote reports whether the detail page carries the "R" work-arrangement badge
+// (a span styled text-bg-success, exact text "R" — distinct from the same class used on
+// other badges, which never render that exact text).
+func aijobsIsRemote(root *html.Node) bool {
+	remote := false
+	walk(root, func(n *html.Node) bool {
+		if n.Type == html.ElementNode && n.Data == "span" && hasClass(n, "text-bg-success") {
+			if strings.TrimSpace(textContent(n)) == "R" {
+				remote = true
+			}
+		}
+		return true
+	})
+	return remote
+}
+
+// aijobsSections maps each <h5> section heading's trimmed text (Tasks, Perks/Benefits,
+// Skills/Tech-stack, …) to its immediately following sibling content node (a <ul> or a
+// <p>). It walks the whole page once: an <h5> is remembered as "pending" and paired with
+// the next <ul>/<p> element the walk reaches — true for this page's layout, where each
+// section heading is immediately followed by its own content block.
+func aijobsSections(root *html.Node) map[string]*html.Node {
+	sections := make(map[string]*html.Node)
+	var pending string
+	walk(root, func(n *html.Node) bool {
+		if n.Type != html.ElementNode {
+			return true
+		}
+		switch n.Data {
+		case "h5":
+			pending = strings.TrimSpace(textContent(n))
+			return false // the heading's own text is not section content
+		case "ul", "p":
+			if pending != "" {
+				if _, exists := sections[pending]; !exists {
+					sections[pending] = n
+				}
+				pending = ""
+			}
+		}
+		return true
+	})
+	return sections
+}
+
+// aijobsListItems reads a <ul>'s direct <li> children as trimmed text, nil if n is nil
+// (section absent) or empty.
+func aijobsListItems(n *html.Node) []string {
+	if n == nil {
+		return nil
+	}
+	var items []string
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if c.Type == html.ElementNode && c.Data == "li" {
+			if text := strings.TrimSpace(textContent(c)); text != "" {
+				items = append(items, text)
+			}
+		}
+	}
+	return items
+}
+
+// aijobsAnchorTexts reads every <a>'s trimmed text within n, nil if n is nil.
+func aijobsAnchorTexts(n *html.Node) []string {
+	if n == nil {
+		return nil
+	}
+	var texts []string
+	walk(n, func(c *html.Node) bool {
+		if c.Type == html.ElementNode && c.Data == "a" {
+			if text := strings.TrimSpace(textContent(c)); text != "" {
+				texts = append(texts, text)
+			}
+		}
+		return true
+	})
+	return texts
+}
+
+// aijobsIsPlaceholder reports whether a section's only item is the literal text N/A —
+// the site's own placeholder for "nothing here", observed on every sampled posting with
+// no real perks.
+func aijobsIsPlaceholder(items []string) bool {
+	return len(items) == 1 && items[0] == "N/A"
+}
+
+// aijobsDescription renders the Tasks section as a bullet list (there is no free-text
+// prose anywhere on the page — the site pre-processes every posting into these structured
+// sections), followed by a Perks/Benefits bullet list when it carries real content (the
+// literal-N/A placeholder is omitted rather than rendered as noise).
+func aijobsDescription(sections map[string]*html.Node) string {
+	var b strings.Builder
+	for _, task := range aijobsListItems(sections["Tasks"]) {
+		fmt.Fprintf(&b, "- %s\n", task)
+	}
+	if perks := aijobsListItems(sections["Perks/Benefits"]); len(perks) > 0 && !aijobsIsPlaceholder(perks) {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("Perks/Benefits:\n")
+		for _, perk := range perks {
+			fmt.Fprintf(&b, "- %s\n", perk)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// aijobsPostedText extracts the detail page's relative-posting-time text (e.g. "8h ago"
+// from "Found 8h ago"), "" if the page carries no such element. Parsing this into an
+// absolute PostedAt is aijobsParsePostedAt's job, not this one.
+func aijobsPostedText(root *html.Node) string {
+	const prefix = "Found "
+	var text string
+	walk(root, func(n *html.Node) bool {
+		if text != "" {
+			return false
+		}
+		if n.Type == html.ElementNode && n.Data == "span" {
+			if t := strings.TrimSpace(textContent(n)); strings.HasPrefix(t, prefix) {
+				text = strings.TrimSpace(strings.TrimPrefix(t, prefix))
+			}
+		}
+		return true
+	})
+	return text
+}
+
+// detail fetches one job's detail page and maps it to a Job. It returns ok=false when the
+// page fetch fails, its heading is missing (a layout/error page, not a posting), or it
+// carries no /company/ link — the page's own visible company label is masked behind a PRO
+// paywall, and without the link there is no way to recover a real name (see
+// aijobsCompanyName), so the posting is dropped rather than stored company-less.
+func (a aijobs) detail(ctx context.Context, href string) (Job, bool) {
+	id := aijobsJobID(href)
+	if id == "" {
+		return Job{}, false
+	}
+	link := aijobsBaseURL + href
+	root, err := a.http.GetHTML(ctx, link)
+	if err != nil {
+		return Job{}, false
+	}
+	h1 := firstByTag(root, "h1")
+	if h1 == nil {
+		return Job{}, false
+	}
+	company := aijobsCompanyName(root)
+	if company == "" {
+		return Job{}, false
+	}
+	var location string
+	if loc := firstByTag(root, "strong"); loc != nil {
+		location = strings.TrimSpace(textContent(loc))
+	}
+	remote := aijobsIsRemote(root)
+	sections := aijobsSections(root)
+	return Job{
+		ExternalID:  id,
+		URL:         link,
+		Title:       strings.TrimSpace(textContent(h1)),
+		Company:     company,
+		Location:    location,
+		Description: aijobsDescription(sections),
+		Remote:      remote,
+		WorkMode:    workModeFromRemote(remote),
+		Skills:      aijobsAnchorTexts(sections["Skills/Tech-stack"]),
+		PostedAt:    aijobsParsePostedAt(aijobsPostedText(root)),
+	}, true
+}
+
+// aijobsParsePostedAt is a placeholder; task 5 implements the real "Xh/Xd/Xw/Xmo/Xy ago"
+// parse (the month/year unit-conversion approximation is a deliberate choice left to be
+// made then — see tasks.md 5.1).
+func aijobsParsePostedAt(string) *time.Time { return nil }
