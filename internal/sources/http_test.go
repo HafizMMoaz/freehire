@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -84,6 +85,39 @@ func TestClientPostJSONWithHeadersSendsCustomHeader(t *testing.T) {
 	}
 	if gotRSC != "1" {
 		t.Errorf("RSC = %q, want 1", gotRSC)
+	}
+}
+
+func TestClientPostFormWithHeadersSendsFormEncodedBodyAndParsesHTML(t *testing.T) {
+	var gotContentType, gotCSRF string
+	var gotForm url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotContentType = r.Header.Get("Content-Type")
+		gotCSRF = r.Header.Get("X-Csrftoken")
+		_ = r.ParseForm()
+		gotForm = r.PostForm
+		_, _ = w.Write([]byte(`<html><body><p>hi</p></body></html>`))
+	}))
+	defer srv.Close()
+
+	c := &Client{httpClient: srv.Client()}
+
+	values := url.Values{"page": {"2"}, "csrfmiddlewaretoken": {"tok123"}}
+	node, err := c.PostFormWithHeaders(context.Background(), srv.URL, map[string]string{"X-Csrftoken": "tok123"}, values)
+	if err != nil {
+		t.Fatalf("PostFormWithHeaders: %v", err)
+	}
+	if !strings.Contains(gotContentType, "application/x-www-form-urlencoded") {
+		t.Errorf("Content-Type = %q, want form-urlencoded", gotContentType)
+	}
+	if gotCSRF != "tok123" {
+		t.Errorf("X-Csrftoken = %q, want tok123", gotCSRF)
+	}
+	if gotForm.Get("page") != "2" || gotForm.Get("csrfmiddlewaretoken") != "tok123" {
+		t.Errorf("form body = %v, want page=2 and csrfmiddlewaretoken=tok123", gotForm)
+	}
+	if got := textContent(node); got != "hi" {
+		t.Errorf("parsed HTML text = %q, want %q", got, "hi")
 	}
 }
 

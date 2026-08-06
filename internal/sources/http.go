@@ -425,15 +425,43 @@ func (e *ChallengeError) Error() string {
 	return fmt.Sprintf("sources: GET %s: WAF challenge", e.URL)
 }
 
+// PostFormWithHeaders POSTs values as an application/x-www-form-urlencoded body with
+// extra request headers, and returns the response parsed as HTML — for a listing
+// endpoint that is POST-only and CSRF-protected (aijobs.net's Django cookie-token
+// flow) rather than a JSON API.
+func (c *Client) PostFormWithHeaders(ctx context.Context, url string, headers map[string]string, values url.Values) (*html.Node, error) {
+	var node *html.Node
+	err := c.do(ctx, request{
+		method:      http.MethodPost,
+		url:         url,
+		body:        []byte(values.Encode()),
+		contentType: "application/x-www-form-urlencoded",
+		accept:      "text/html",
+		headers:     headers,
+		decode: func(resp *http.Response) error {
+			n, err := html.Parse(resp.Body)
+			if err != nil {
+				return err
+			}
+			node = n
+			return nil
+		},
+	})
+	return node, err
+}
+
 // request is the parameters of a single HTTP exchange issued by do. A non-nil body is
 // re-sent on each retry; the standard User-Agent/Accept headers always win over headers.
+// contentType is the Content-Type sent alongside a non-nil body; empty defaults to
+// "application/json" (every existing POST helper is JSON-bodied).
 type request struct {
-	method  string
-	url     string
-	body    []byte
-	accept  string
-	headers map[string]string
-	decode  func(*http.Response) error
+	method      string
+	url         string
+	body        []byte
+	contentType string
+	accept      string
+	headers     map[string]string
+	decode      func(*http.Response) error
 }
 
 // do issues an HTTP request (optionally with a JSON body) and applies r.decode to a
@@ -472,7 +500,11 @@ func (c *Client) do(ctx context.Context, r request) error {
 		}
 		req.Header.Set("Accept", r.accept)
 		if r.body != nil {
-			req.Header.Set("Content-Type", "application/json")
+			contentType := r.contentType
+			if contentType == "" {
+				contentType = "application/json"
+			}
+			req.Header.Set("Content-Type", contentType)
 		}
 
 		resp, err := c.httpClient.Do(req)
