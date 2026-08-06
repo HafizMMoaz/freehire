@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -371,11 +372,50 @@ func (a aijobs) detail(ctx context.Context, href string) (Job, bool) {
 		Remote:      remote,
 		WorkMode:    workModeFromRemote(remote),
 		Skills:      aijobsAnchorTexts(sections["Skills/Tech-stack"]),
-		PostedAt:    aijobsParsePostedAt(aijobsPostedText(root)),
+		PostedAt:    aijobsParsePostedAt(aijobsPostedText(root), time.Now()),
 	}, true
 }
 
-// aijobsParsePostedAt is a placeholder; task 5 implements the real "Xh/Xd/Xw/Xmo/Xy ago"
-// parse (the month/year unit-conversion approximation is a deliberate choice left to be
-// made then — see tasks.md 5.1).
-func aijobsParsePostedAt(string) *time.Time { return nil }
+// aijobsPostedTimePattern captures a relative-time value and its unit from text like
+// "8h ago", "3d ago", "2w ago", "5mo ago", "1y ago" — only "h"/"d"/"w" were observed live,
+// but the site's own broader vocabulary implies "mo"/"y" exist for older postings.
+var aijobsPostedTimePattern = regexp.MustCompile(`^(\d+)(h|d|w|mo|y)\s+ago$`)
+
+// aijobsParsePostedAt converts the detail page's relative-time text (see aijobsPostedText)
+// into an absolute PostedAt relative to now. An unrecognized shape returns nil rather than
+// failing the whole posting (see spec Requirement "Posted time is parsed from the
+// relative-time string").
+func aijobsParsePostedAt(text string, now time.Time) *time.Time {
+	m := aijobsPostedTimePattern.FindStringSubmatch(strings.TrimSpace(text))
+	if m == nil {
+		return nil
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return nil
+	}
+	var t time.Time
+	switch m[2] {
+	case "h":
+		t = now.Add(-time.Duration(n) * time.Hour)
+	case "d":
+		t = now.AddDate(0, 0, -n)
+	case "w":
+		t = now.AddDate(0, 0, -7*n)
+	case "mo", "y":
+		// TODO(you): the month/year unit-conversion approximation is your call — see
+		// tasks.md 5.1. Two valid options, and neither is "wrong":
+		//   - calendar-aware: now.AddDate(0, -n, 0) / now.AddDate(-n, 0, 0) — correct
+		//     through month-length variance (e.g. Mar 31 minus 1mo lands on Feb 28/29),
+		//     but "1mo ago" and "30d ago" then don't necessarily agree.
+		//   - flat approximation: now.AddDate(0, 0, -n*30) / now.AddDate(0, 0, -n*365) —
+		//     simpler, and arguably fine for what is ultimately a freshness signal
+		//     nobody reads to the day.
+		// Until you pick one, this returns nil (posting still ingested, just PostedAt
+		// unset) rather than a silently wrong date.
+		return nil
+	default:
+		return nil
+	}
+	return &t
+}

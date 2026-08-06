@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/net/html"
 )
@@ -310,6 +311,51 @@ func TestAijobsCompanyNameFromSlug(t *testing.T) {
 		if got := aijobsCompanyName(root); got != want {
 			t.Errorf("aijobsCompanyName(%q) = %q, want %q", href, got, want)
 		}
+	}
+}
+
+func TestAijobsParsePostedAtHoursDaysWeeks(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		text string
+		want time.Time
+	}{
+		{"8h ago", now.Add(-8 * time.Hour)},
+		{"3d ago", now.AddDate(0, 0, -3)},
+		{"2w ago", now.AddDate(0, 0, -14)},
+	}
+	for _, c := range cases {
+		got := aijobsParsePostedAt(c.text, now)
+		if got == nil {
+			t.Errorf("aijobsParsePostedAt(%q) = nil, want %v", c.text, c.want)
+			continue
+		}
+		if !got.Equal(c.want) {
+			t.Errorf("aijobsParsePostedAt(%q) = %v, want %v", c.text, got, c.want)
+		}
+	}
+}
+
+func TestAijobsParsePostedAtUnrecognizedTextLeavesNil(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	for _, text := range []string{"", "just now", "8 hours ago", "8x ago"} {
+		if got := aijobsParsePostedAt(text, now); got != nil {
+			t.Errorf("aijobsParsePostedAt(%q) = %v, want nil", text, got)
+		}
+	}
+}
+
+// TestAijobsParsePostedAtMonthsYears is the seam for tasks.md 5.1's month/year
+// unit-conversion decision (calendar-aware AddDate vs. a flat-day approximation — see the
+// TODO in aijobsParsePostedAt). Currently red: the function returns nil for "mo"/"y" until
+// that decision is made and implemented.
+func TestAijobsParsePostedAtMonthsYears(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	if got := aijobsParsePostedAt("5mo ago", now); got == nil {
+		t.Error(`aijobsParsePostedAt("5mo ago") = nil, want a non-nil time once 5.1 is implemented`)
+	}
+	if got := aijobsParsePostedAt("1y ago", now); got == nil {
+		t.Error(`aijobsParsePostedAt("1y ago") = nil, want a non-nil time once 5.1 is implemented`)
 	}
 }
 
