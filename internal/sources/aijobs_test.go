@@ -345,17 +345,27 @@ func TestAijobsParsePostedAtUnrecognizedTextLeavesNil(t *testing.T) {
 	}
 }
 
-// TestAijobsParsePostedAtMonthsYears is the seam for tasks.md 5.1's month/year
-// unit-conversion decision (calendar-aware AddDate vs. a flat-day approximation — see the
-// TODO in aijobsParsePostedAt). Currently red: the function returns nil for "mo"/"y" until
-// that decision is made and implemented.
+// TestAijobsParsePostedAtMonthsYears locks in tasks.md 5.1's decision: a flat 30/365-day
+// approximation, not calendar-aware AddDate(0, -n, 0) — PostedAt is a freshness signal,
+// not a legal date.
 func TestAijobsParsePostedAtMonthsYears(t *testing.T) {
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
-	if got := aijobsParsePostedAt("5mo ago", now); got == nil {
-		t.Error(`aijobsParsePostedAt("5mo ago") = nil, want a non-nil time once 5.1 is implemented`)
+	cases := []struct {
+		text string
+		want time.Time
+	}{
+		{"5mo ago", now.AddDate(0, 0, -5*30)},
+		{"1y ago", now.AddDate(0, 0, -365)},
 	}
-	if got := aijobsParsePostedAt("1y ago", now); got == nil {
-		t.Error(`aijobsParsePostedAt("1y ago") = nil, want a non-nil time once 5.1 is implemented`)
+	for _, c := range cases {
+		got := aijobsParsePostedAt(c.text, now)
+		if got == nil {
+			t.Errorf("aijobsParsePostedAt(%q) = nil, want %v", c.text, c.want)
+			continue
+		}
+		if !got.Equal(c.want) {
+			t.Errorf("aijobsParsePostedAt(%q) = %v, want %v", c.text, got, c.want)
+		}
 	}
 }
 

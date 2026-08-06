@@ -402,18 +402,13 @@ func aijobsParsePostedAt(text string, now time.Time) *time.Time {
 		t = now.AddDate(0, 0, -n)
 	case "w":
 		t = now.AddDate(0, 0, -7*n)
-	case "mo", "y":
-		// TODO(you): the month/year unit-conversion approximation is your call — see
-		// tasks.md 5.1. Two valid options, and neither is "wrong":
-		//   - calendar-aware: now.AddDate(0, -n, 0) / now.AddDate(-n, 0, 0) — correct
-		//     through month-length variance (e.g. Mar 31 minus 1mo lands on Feb 28/29),
-		//     but "1mo ago" and "30d ago" then don't necessarily agree.
-		//   - flat approximation: now.AddDate(0, 0, -n*30) / now.AddDate(0, 0, -n*365) —
-		//     simpler, and arguably fine for what is ultimately a freshness signal
-		//     nobody reads to the day.
-		// Until you pick one, this returns nil (posting still ingested, just PostedAt
-		// unset) rather than a silently wrong date.
-		return nil
+	case "mo":
+		// Flat approximation (30 days/month), not calendar-aware AddDate(0, -n, 0):
+		// PostedAt here is a freshness signal, not a legal date, so month-length
+		// variance doesn't matter enough to justify "1mo ago" and "30d ago" disagreeing.
+		t = now.AddDate(0, 0, -30*n)
+	case "y":
+		t = now.AddDate(0, 0, -365*n)
 	default:
 		return nil
 	}
