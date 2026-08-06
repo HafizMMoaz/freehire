@@ -24,7 +24,14 @@ func LoadSearchDrain() SearchDrain {
 		BatchSize:    envInt("SEARCH_DRAIN_BATCH_SIZE", 500),
 		LeaseSeconds: envInt("SEARCH_DRAIN_LEASE_SECONDS", 180),
 		MaxAttempts:  envInt("SEARCH_DRAIN_MAX_ATTEMPTS", 3),
-		CallTimeout:  time.Duration(envInt("SEARCH_DRAIN_CALL_TIMEOUT_SECONDS", 120)) * time.Second,
+		// Prod measurement (2026-08-05, ~2.7M-doc jobs index): a single push costs
+		// 90-180s+, dominated by Meilisearch's whole-index re-merge, almost
+		// independent of batch size. 120s was too tight — it misclassified normal,
+		// successful-but-slow batches as failed, which (before the timeout/fallback
+		// split in internal/searchdrain.Runner) cascaded into per-item retries and
+		// caused a real outage. This is a genuine backstop against a truly hung call,
+		// not a normal-operation tripwire — set it generously.
+		CallTimeout: time.Duration(envInt("SEARCH_DRAIN_CALL_TIMEOUT_SECONDS", 600)) * time.Second,
 	}
 	// A non-positive batch size would make the claim's LIMIT 0 (silently no-op) or
 	// feed a negative LIMIT to Postgres; floor it so the worker always makes progress.

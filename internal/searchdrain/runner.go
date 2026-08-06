@@ -19,6 +19,7 @@ package searchdrain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -117,20 +118,51 @@ func (rn *run) processBatch(ctx context.Context, entries []Claimed) {
 	defer cancel()
 
 	jobs, err := rn.store.Jobs(callCtx, jobIDs(entries))
-	if err != nil || len(jobs) != len(entries) {
+	if err != nil {
+		if rn.skipOnTimeout(callCtx, entries, "load jobs") {
+			return
+		}
+		rn.fallback(ctx, entries)
+		return
+	}
+	if len(jobs) != len(entries) {
 		rn.fallback(ctx, entries)
 		return
 	}
 	if err := rn.indexer.IndexBatch(callCtx, jobs); err != nil {
+		if rn.skipOnTimeout(callCtx, entries, "index") {
+			return
+		}
 		rn.fallback(ctx, entries)
 		return
 	}
 	if err := rn.store.Complete(callCtx, entries); err != nil {
+		if rn.skipOnTimeout(callCtx, entries, "complete") {
+			return
+		}
 		rn.fallback(ctx, entries)
 		return
 	}
 	rn.stats.Indexed += len(entries)
 	log.Printf("search-drain: indexed batch of %d in %s", len(entries), since(start))
+}
+
+// skipOnTimeout reports whether callCtx expired — a normal-but-slow operation simply
+// outran CallTimeout, not a per-document defect Meilisearch reported — and, if so,
+// logs and leaves the wave claimed for its lease to expire, so a later run retries the
+// WHOLE batch fresh. Falling back to per-item on a mere timeout would be actively
+// harmful here: this Meili index's cost is dominated by a fixed whole-index re-merge,
+// so a single document costs about as much to push as the whole batch (see the package
+// doc), and per-item fallback would turn one slow-but-fine batch into up to
+// len(entries) equally slow calls — exactly what produced the 2026-08-05 outage this
+// guards against.
+func (rn *run) skipOnTimeout(callCtx context.Context, entries []Claimed, stage string) bool {
+	if !errors.Is(callCtx.Err(), context.DeadlineExceeded) {
+		return false
+	}
+	log.Printf("search-drain: batch of %d timed out during %s after %s — leaving claimed for "+
+		"lease-expiry retry, not falling back to per-item", len(entries), stage, rn.opt.CallTimeout)
+	return true
 }
 
 func (rn *run) fallback(ctx context.Context, entries []Claimed) {
