@@ -20,7 +20,7 @@ type aijobsHTTP interface {
 }
 
 // NewAijobs builds the aijobs adapter over the given HTTP client (a cookie-jar-backed
-// client in production, see the registry).
+// client in production, see cookieSessionSource in registry.go).
 func NewAijobs(c aijobsHTTP) Source { return aijobs{http: c} }
 
 func (aijobs) Provider() string { return "aijobs" }

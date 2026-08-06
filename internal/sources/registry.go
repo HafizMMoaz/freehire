@@ -295,22 +295,12 @@ func All(c HTTPClient) map[string]Source {
 	} else if whatjobsID != "" {
 		registry["whatjobs"] = NewWhatJobs(limitedWhatJobsGetter(c), whatjobsID)
 	}
-	// taleo needs a cookie-persisting client (its searchjobs POST requires the session cookie
-	// a careersection GET sets), so it cannot use the shared jar-less client. Build a dedicated
-	// one for a real crawl; on the transport-free listing path (c == nil) register a bare adapter
-	// — Provider()/marker assertions never touch the transport.
-	if c == nil {
-		registry["taleo"] = NewTaleo(nil)
-	} else {
-		registry["taleo"] = NewTaleo(newCookieClient())
-	}
-	// aijobs needs the same cookie-persisting client as taleo: its listing POST is Django
-	// CSRF-protected, authorized by the csrftoken cookie a plain GET sets.
-	if c == nil {
-		registry["aijobs"] = NewAijobs(nil)
-	} else {
-		registry["aijobs"] = NewAijobs(newCookieClient())
-	}
+	// taleo and aijobs both need a cookie-persisting session (a searchjobs POST authorized
+	// by a careersection GET's session cookie; a CSRF-protected listing POST authorized by
+	// a plain GET's csrftoken cookie) rather than the shared jar-less client — see
+	// cookieSessionSource.
+	registry["taleo"] = cookieSessionSource[taleoHTTP](c, NewTaleo)
+	registry["aijobs"] = cookieSessionSource[aijobsHTTP](c, NewAijobs)
 	// meta is NOT served by the shared client: Meta's edge 400s the default Go TLS+HTTP/2
 	// fingerprint, so it needs the shared Chrome-fingerprint transport (fingerprintHTTP, also used
 	// by the bayt/gulftalent aggregators). Build it only when there is a real client to serve (the
@@ -329,6 +319,20 @@ func All(c HTTPClient) map[string]Source {
 		registry["gulftalent"] = NewGulfTalent(fp)
 	}
 	return registry
+}
+
+// cookieSessionSource builds a registry entry for an adapter whose API is session- or
+// CSRF-cookie-authenticated (taleo, aijobs) and so cannot share the shared jar-less
+// client. On a real crawl (c != nil) it hands build a fresh cookie-jar client; on the
+// transport-free taxonomy path (c == nil, e.g. FilterableProviders) it hands build a true
+// nil transport, since T is an interface type parameter and its zero value is nil —
+// Provider()/marker assertions never touch it.
+func cookieSessionSource[T any](c HTTPClient, build func(T) Source) Source {
+	if c == nil {
+		var zero T
+		return build(zero)
+	}
+	return build(any(newCookieClient()).(T))
 }
 
 // reg indexes sources by provider key. A duplicate key means two adapters claim the
