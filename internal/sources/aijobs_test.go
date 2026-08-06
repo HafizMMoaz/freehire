@@ -298,6 +298,27 @@ func TestAijobsDetailIncludesRealPerks(t *testing.T) {
 	}
 }
 
+// TestAijobsPostedTextRecognizesBothLabels guards a real-site discrepancy found only by
+// live smoke-testing task 6's ingest run: a recently-crawled posting reads "Found X ago"
+// (as every fixture elsewhere in this file uses), but an older one — confirmed live
+// against https://aijobs.net/job/statistics-expert-phd-remote-238344/ — reads
+// "Published Xd ago" instead. Both must yield the same relative-time text.
+func TestAijobsPostedTextRecognizesBothLabels(t *testing.T) {
+	cases := map[string]string{
+		`<span>Found 8h ago</span>`:      "8h ago",
+		`<span>Published 15d ago</span>`: "15d ago",
+	}
+	for markup, want := range cases {
+		root, err := html.Parse(strings.NewReader("<html><body>" + markup + "</body></html>"))
+		if err != nil {
+			t.Fatalf("html.Parse: %v", err)
+		}
+		if got := aijobsPostedText(root); got != want {
+			t.Errorf("aijobsPostedText(%q) = %q, want %q", markup, got, want)
+		}
+	}
+}
+
 func TestAijobsCompanyNameFromSlug(t *testing.T) {
 	cases := map[string]string{
 		"/company/medison-pharma-16767/": "Medison Pharma",

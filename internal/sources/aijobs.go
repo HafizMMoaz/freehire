@@ -366,19 +366,30 @@ func aijobsDescription(sections map[string]*html.Node) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// aijobsPostedPrefixes are the two labels observed live for the same relative-time
+// element: "Found X ago" on a posting crawled recently, "Published X ago" on an older one
+// with a recorded original date (confirmed against
+// https://aijobs.net/job/statistics-expert-phd-remote-238344/, which reads "Published
+// 15d ago" — a shape task 4's single-sample fixture never exercised).
+var aijobsPostedPrefixes = []string{"Found ", "Published "}
+
 // aijobsPostedText extracts the detail page's relative-posting-time text (e.g. "8h ago"
-// from "Found 8h ago"), "" if the page carries no such element. Parsing this into an
-// absolute PostedAt is aijobsParsePostedAt's job, not this one.
+// from "Found 8h ago" or "15d ago" from "Published 15d ago"), "" if the page carries no
+// such element. Parsing this into an absolute PostedAt is aijobsParsePostedAt's job, not
+// this one.
 func aijobsPostedText(root *html.Node) string {
-	const prefix = "Found "
 	var text string
 	walk(root, func(n *html.Node) bool {
 		if text != "" {
 			return false
 		}
 		if n.Type == html.ElementNode && n.Data == "span" {
-			if t := strings.TrimSpace(textContent(n)); strings.HasPrefix(t, prefix) {
-				text = strings.TrimSpace(strings.TrimPrefix(t, prefix))
+			t := strings.TrimSpace(textContent(n))
+			for _, prefix := range aijobsPostedPrefixes {
+				if strings.HasPrefix(t, prefix) {
+					text = strings.TrimSpace(strings.TrimPrefix(t, prefix))
+					break
+				}
 			}
 		}
 		return true
