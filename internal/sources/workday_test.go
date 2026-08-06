@@ -3,6 +3,7 @@ package sources
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -42,7 +43,8 @@ func TestWorkdayFetchListsAndFetchesDetail(t *testing.T) {
 			"startDate": "2024-06-11",
 			"externalUrl": "https://acme.wd1.myworkdayjobs.com/en-US/Careers/job/Berlin/Backend_JR-1",
 			"remoteType": "On-site",
-			"timeType": "Full time"
+			"timeType": "Full time",
+			"jobRequisitionLocation": {"country": {"descriptor": "Germany", "alpha2Code": "DE"}}
 		}}`).
 		route("Data_JR-2", `{"jobPostingInfo": {
 			"title": "Data Engineer",
@@ -92,10 +94,17 @@ func TestWorkdayFetchListsAndFetchesDetail(t *testing.T) {
 	if j.EmploymentType != "full_time" {
 		t.Errorf("EmploymentType = %q, want full_time (from timeType)", j.EmploymentType)
 	}
+	if got, want := j.Countries, []string{"de"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Countries = %v, want %v (normalized from jobRequisitionLocation.country.alpha2Code)", got, want)
+	}
 
 	d := byID["/job/Remote/Data_JR-2"]
 	if !d.Remote {
 		t.Error("Remote = false, want true from remoteType")
+	}
+	// This posting's detail carries no jobRequisitionLocation at all.
+	if d.Countries != nil {
+		t.Errorf("Countries = %v, want nil when the detail states no country", d.Countries)
 	}
 	if d.URL != "https://acme.wd1.myworkdayjobs.com/Careers/job/Remote/Data_JR-2" {
 		t.Errorf("URL = %q, want the path constructed from host+site when externalUrl is absent", d.URL)
