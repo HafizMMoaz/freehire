@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -21,6 +22,10 @@ import (
 // than the shared client.
 type aijobs struct {
 	http aijobsHTTP
+	// maxNewPerRun bounds how many unseen postings FetchNew hydrates in one run (see
+	// crawlListing's newBudget and design.md Decision 3). Always positive: NewAijobs
+	// substitutes aijobsDefaultMaxNewPerRun for a zero/negative value.
+	maxNewPerRun int
 }
 
 // aijobsHTTP is the transport aijobs needs: the CSRF-protected listing POST and the
@@ -31,9 +36,22 @@ type aijobsHTTP interface {
 	CookieReader
 }
 
+// aijobsDefaultMaxNewPerRun is AIJOBS_MAX_NEW_PER_RUN's default when unset (see
+// registry.go's aijobsMaxNewPerRunFromEnv): the day-one backlog is aijobs.net's whole
+// ~47k-posting catalogue, and each unseen posting costs one detail-page GET, so a run
+// needs a bound well short of "all of it" (mirrors APPLY_FORM_MAX_PER_RUN's shape in
+// cmd/capture-apply-form for the same kind of backlog).
+const aijobsDefaultMaxNewPerRun = 500
+
 // NewAijobs builds the aijobs adapter over the given HTTP client (a cookie-jar-backed
-// client in production, see cookieSessionSource in registry.go).
-func NewAijobs(c aijobsHTTP) Source { return aijobs{http: c} }
+// client in production, see cookieSessionSource in registry.go). maxNewPerRun <= 0 is
+// replaced with aijobsDefaultMaxNewPerRun.
+func NewAijobs(c aijobsHTTP, maxNewPerRun int) Source {
+	if maxNewPerRun <= 0 {
+		maxNewPerRun = aijobsDefaultMaxNewPerRun
+	}
+	return aijobs{http: c, maxNewPerRun: maxNewPerRun}
+}
 
 func (aijobs) Provider() string { return "aijobs" }
 
@@ -43,9 +61,42 @@ func (aijobs) boardless() {}
 // aijobs aggregates postings from many companies, so it stays in the source facet.
 func (aijobs) aggregator() {}
 
-// Fetch is a placeholder satisfying the Source interface; the real listing walk and
-// hydrating fetch land in later tasks (FetchNew is the path cmd/ingest actually drives).
-func (aijobs) Fetch(context.Context, CompanyEntry) ([]Job, error) { return nil, nil }
+// FetchNew is the hydrating crawl cmd/ingest actually drives: it walks the listing
+// (crawlListing, bounded by maxNewPerRun and the seen-page stop) and fetches detail only
+// for a posting seen reports as not already in the catalogue.
+func (a aijobs) FetchNew(ctx context.Context, _ CompanyEntry, seen func(externalID string) bool) ([]Job, error) {
+	links, err := a.crawlListing(ctx, seen, a.maxNewPerRun)
+	if err != nil {
+		return nil, err
+	}
+	return fetchDetails(links, defaultDetailWorkers, func(href string) (Job, bool) {
+		return a.detail(ctx, href)
+	}), nil
+}
+
+// Fetch is the list-only fallback HydratingSource specifies for a caller that cannot
+// supply a seen predicate. aijobs has no such thing as a list-only Job — the listing
+// carries no company, and Job.Company is required (see detail) — so this hydrates
+// everything the listing yields (as if nothing were seen yet), still bounded by
+// maxNewPerRun.
+func (a aijobs) Fetch(ctx context.Context, e CompanyEntry) ([]Job, error) {
+	return a.FetchNew(ctx, e, func(string) bool { return false })
+}
+
+// aijobsMaxNewPerRunFromEnv reads AIJOBS_MAX_NEW_PER_RUN, falling back to
+// aijobsDefaultMaxNewPerRun when unset or not a positive integer — read once at registry
+// construction (see registry.go), not per crawl.
+func aijobsMaxNewPerRunFromEnv() int {
+	v := os.Getenv("AIJOBS_MAX_NEW_PER_RUN")
+	if v == "" {
+		return aijobsDefaultMaxNewPerRun
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return aijobsDefaultMaxNewPerRun
+	}
+	return n
+}
 
 const aijobsBaseURL = "https://aijobs.net"
 

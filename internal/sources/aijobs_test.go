@@ -6,6 +6,7 @@ import (
 	neturl "net/url"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -384,14 +385,118 @@ func TestAijobsJobID(t *testing.T) {
 	}
 }
 
+const aijobsMinimalDetailHTML = `<html><body><main>
+<h1>Role</h1>
+<a href="/company/acme-1/">@ A...</a>
+<h5>Tasks</h5><ul><li>Do the thing</li></ul>
+</main></body></html>`
+
+func TestAijobsImplementsHydratingSource(t *testing.T) {
+	var _ HydratingSource = aijobs{}
+}
+
+func TestAijobsFetchNewHydratesOnlyUnseenPostings(t *testing.T) {
+	var mu sync.Mutex
+	requestedSeenPosting := false
+	fake := aijobsGetPostFake{
+		postForm: func(url string) (*html.Node, error) {
+			if strings.Contains(url, "page=1") {
+				return html.Parse(strings.NewReader(aijobsListingPage("1", "2")))
+			}
+			return nil, fmt.Errorf("no route for %s", url)
+		},
+		getHTML: func(url string) (*html.Node, error) {
+			if strings.Contains(url, "role-1") {
+				mu.Lock()
+				requestedSeenPosting = true
+				mu.Unlock()
+			}
+			if strings.Contains(url, "/job/role-") {
+				return html.Parse(strings.NewReader(aijobsMinimalDetailHTML))
+			}
+			return html.Parse(strings.NewReader("<html></html>")) // session bootstrap
+		},
+	}
+
+	jobs, err := (aijobs{http: fake, maxNewPerRun: 500}).FetchNew(context.Background(), CompanyEntry{}, seenSet("1"))
+	if err != nil {
+		t.Fatalf("FetchNew: %v", err)
+	}
+
+	mu.Lock()
+	poisoned := requestedSeenPosting
+	mu.Unlock()
+	if poisoned {
+		t.Error("detail fetched for an already-seen posting (role-1)")
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("got %d jobs, want 1 (the unseen posting only)", len(jobs))
+	}
+	if jobs[0].ExternalID != "2" {
+		t.Errorf("ExternalID = %q, want %q", jobs[0].ExternalID, "2")
+	}
+	if jobs[0].Company != "Acme" {
+		t.Errorf("Company = %q, want %q", jobs[0].Company, "Acme")
+	}
+}
+
+func TestAijobsFetchHydratesEverythingWithoutASeenPredicate(t *testing.T) {
+	fake := aijobsGetPostFake{
+		postForm: func(url string) (*html.Node, error) {
+			if strings.Contains(url, "page=1") {
+				return html.Parse(strings.NewReader(aijobsListingPage("1")))
+			}
+			return nil, fmt.Errorf("no route for %s", url)
+		},
+		getHTML: func(url string) (*html.Node, error) {
+			if strings.Contains(url, "/job/role-") {
+				return html.Parse(strings.NewReader(aijobsMinimalDetailHTML))
+			}
+			return html.Parse(strings.NewReader("<html></html>"))
+		},
+	}
+	jobs, err := (aijobs{http: fake, maxNewPerRun: 500}).Fetch(context.Background(), CompanyEntry{})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].ExternalID != "1" {
+		t.Errorf("jobs = %+v, want exactly the one posting hydrated", jobs)
+	}
+}
+
+func TestAijobsMaxNewPerRunFromEnv(t *testing.T) {
+	cases := map[string]int{
+		"":     aijobsDefaultMaxNewPerRun,
+		"0":    aijobsDefaultMaxNewPerRun,
+		"-5":   aijobsDefaultMaxNewPerRun,
+		"abc":  aijobsDefaultMaxNewPerRun,
+		"1234": 1234,
+	}
+	for env, want := range cases {
+		t.Setenv("AIJOBS_MAX_NEW_PER_RUN", env)
+		if got := aijobsMaxNewPerRunFromEnv(); got != want {
+			t.Errorf("AIJOBS_MAX_NEW_PER_RUN=%q: got %d, want %d", env, got, want)
+		}
+	}
+}
+
+func TestAijobsNewAijobsDefaultsNonPositiveBudget(t *testing.T) {
+	for _, n := range []int{0, -1} {
+		a := NewAijobs(nil, n).(aijobs)
+		if a.maxNewPerRun != aijobsDefaultMaxNewPerRun {
+			t.Errorf("NewAijobs(nil, %d).maxNewPerRun = %d, want %d", n, a.maxNewPerRun, aijobsDefaultMaxNewPerRun)
+		}
+	}
+}
+
 func TestAijobsProvider(t *testing.T) {
-	if got := NewAijobs(nil).Provider(); got != "aijobs" {
+	if got := NewAijobs(nil, 0).Provider(); got != "aijobs" {
 		t.Errorf("Provider() = %q, want %q", got, "aijobs")
 	}
 }
 
 func TestAijobsIsBoardlessAggregator(t *testing.T) {
-	s := NewAijobs(nil)
+	s := NewAijobs(nil, 0)
 	if _, ok := s.(boardless); !ok {
 		t.Error("aijobs should implement the boardless marker")
 	}

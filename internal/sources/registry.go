@@ -300,7 +300,10 @@ func All(c HTTPClient) map[string]Source {
 	// a plain GET's csrftoken cookie) rather than the shared jar-less client — see
 	// cookieSessionSource.
 	registry["taleo"] = cookieSessionSource[taleoHTTP](c, NewTaleo)
-	registry["aijobs"] = cookieSessionSource[aijobsHTTP](c, NewAijobs)
+	aijobsMaxNewPerRun := aijobsMaxNewPerRunFromEnv()
+	registry["aijobs"] = cookieSessionSource[aijobsHTTP](c, func(h aijobsHTTP) Source {
+		return NewAijobs(h, aijobsMaxNewPerRun)
+	})
 	// meta is NOT served by the shared client: Meta's edge 400s the default Go TLS+HTTP/2
 	// fingerprint, so it needs the shared Chrome-fingerprint transport (fingerprintHTTP, also used
 	// by the bayt/gulftalent aggregators). Build it only when there is a real client to serve (the
