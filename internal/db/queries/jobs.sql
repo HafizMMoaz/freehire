@@ -1084,18 +1084,24 @@ WHERE id = sqlc.arg(id) AND liveness_strikes <> 0;
 -- name: EnqueueJobEnrichment :execrows
 -- Transactional-outbox enqueue for the ingest write path: queue this one job for
 -- enrichment, gated on the same conditions the backfill uses (unenriched or below the
--- target schema version, and a non-blacklisted category), so an already-enriched job
--- is not re-queued and a confidently non-technical role (exclude_categories =
--- vocab.NonTechCategories) never consumes LLM budget. category is NOT NULL DEFAULT '',
--- so an empty/unrecognized category still enqueues (empty string <> ALL). Idempotent
--- via the outbox's UNIQUE (job_id, target_version). Run in the same transaction as the
--- job's UpsertJob so a newly ingested job is queued atomically with its write.
+-- target schema version, and confirmed technical), so an already-enriched job is not
+-- re-queued and LLM budget is spent only where jobderive.deriveIsTech already found
+-- technical evidence (is_tech = true) — never a confirmed non-tech role (is_tech =
+-- false) and, deliberately, never an unresolved one either (is_tech IS NULL: neither
+-- the title dictionary nor the description found tech OR non-tech evidence). That
+-- unresolved bucket used to enqueue by default — the earlier reasoning was "never
+-- silently skip a tech job the dictionary missed" — but measured at catalogue scale it
+-- was ~65% of the open catalogue and enrichment returned nothing useful for ~91% of it
+-- (broad multi-industry ATS crawls: painters, stockers, drivers), so the LLM spend was
+-- not buying the coverage it cost. Idempotent via the outbox's UNIQUE (job_id,
+-- target_version). Run in the same transaction as the job's UpsertJob so a newly
+-- ingested job is queued atomically with its write.
 INSERT INTO enrichment_outbox (job_id, target_version)
 SELECT id, sqlc.arg(target_version)::int
 FROM jobs
 WHERE id = sqlc.arg(job_id)::bigint
   AND (enriched_at IS NULL OR enrichment_version < sqlc.arg(target_version)::int)
-  AND category <> ALL(COALESCE(sqlc.arg(exclude_categories)::text[], '{}'))
+  AND is_tech IS TRUE
 ON CONFLICT (job_id, target_version) DO NOTHING;
 
 -- name: SetJobEnrichment :exec

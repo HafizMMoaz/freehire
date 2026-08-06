@@ -58,6 +58,28 @@ func TestFromJob_RolesDerivedButIndexOnly(t *testing.T) {
 	}
 }
 
+func TestCategoryUnresolved(t *testing.T) {
+	tests := []struct {
+		name string
+		job  db.Job
+		want bool
+	}{
+		{"dict resolved category wins regardless of enrichment", db.Job{Category: "backend"}, false},
+		{"dict empty, no enrichment at all", db.Job{}, true},
+		{"dict empty, enrichment present but no category", db.Job{Enrichment: []byte(`{"summary":"x"}`)}, true},
+		{"dict empty, LLM also says other", db.Job{Enrichment: []byte(`{"category":"other"}`)}, true},
+		{"dict empty, LLM found a real category", db.Job{Enrichment: []byte(`{"category":"hardware"}`)}, false},
+		{"dict empty, malformed enrichment JSON", db.Job{Enrichment: []byte(`not json`)}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CategoryUnresolved(tt.job); got != tt.want {
+				t.Errorf("CategoryUnresolved(%+v) = %v, want %v", tt.job, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMergeClusterGeography_WidensCanonFacets(t *testing.T) {
 	doc := JobDocument{Job: jobview.Job{
 		Countries: []string{"de"},

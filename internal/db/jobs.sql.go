@@ -351,26 +351,31 @@ SELECT id, $1::int
 FROM jobs
 WHERE id = $2::bigint
   AND (enriched_at IS NULL OR enrichment_version < $1::int)
-  AND category <> ALL(COALESCE($3::text[], '{}'))
+  AND is_tech IS TRUE
 ON CONFLICT (job_id, target_version) DO NOTHING
 `
 
 type EnqueueJobEnrichmentParams struct {
-	TargetVersion     int32    `json:"target_version"`
-	JobID             int64    `json:"job_id"`
-	ExcludeCategories []string `json:"exclude_categories"`
+	TargetVersion int32 `json:"target_version"`
+	JobID         int64 `json:"job_id"`
 }
 
 // Transactional-outbox enqueue for the ingest write path: queue this one job for
 // enrichment, gated on the same conditions the backfill uses (unenriched or below the
-// target schema version, and a non-blacklisted category), so an already-enriched job
-// is not re-queued and a confidently non-technical role (exclude_categories =
-// vocab.NonTechCategories) never consumes LLM budget. category is NOT NULL DEFAULT ”,
-// so an empty/unrecognized category still enqueues (empty string <> ALL). Idempotent
-// via the outbox's UNIQUE (job_id, target_version). Run in the same transaction as the
-// job's UpsertJob so a newly ingested job is queued atomically with its write.
+// target schema version, and confirmed technical), so an already-enriched job is not
+// re-queued and LLM budget is spent only where jobderive.deriveIsTech already found
+// technical evidence (is_tech = true) — never a confirmed non-tech role (is_tech =
+// false) and, deliberately, never an unresolved one either (is_tech IS NULL: neither
+// the title dictionary nor the description found tech OR non-tech evidence). That
+// unresolved bucket used to enqueue by default — the earlier reasoning was "never
+// silently skip a tech job the dictionary missed" — but measured at catalogue scale it
+// was ~65% of the open catalogue and enrichment returned nothing useful for ~91% of it
+// (broad multi-industry ATS crawls: painters, stockers, drivers), so the LLM spend was
+// not buying the coverage it cost. Idempotent via the outbox's UNIQUE (job_id,
+// target_version). Run in the same transaction as the job's UpsertJob so a newly
+// ingested job is queued atomically with its write.
 func (q *Queries) EnqueueJobEnrichment(ctx context.Context, arg EnqueueJobEnrichmentParams) (int64, error) {
-	result, err := q.db.Exec(ctx, enqueueJobEnrichment, arg.TargetVersion, arg.JobID, arg.ExcludeCategories)
+	result, err := q.db.Exec(ctx, enqueueJobEnrichment, arg.TargetVersion, arg.JobID)
 	if err != nil {
 		return 0, err
 	}

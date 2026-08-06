@@ -46,15 +46,21 @@ var (
 		"recruiting", "hr", "finance", "legal", "operations", "customer_success",
 		"other",
 	}
-	// NonTechCategories are the CategoryValues for confidently non-technical roles
-	// that are excluded from AI enrichment: the derived category is a source fact
-	// (internal/classify, from the title), so gating the enrichment enqueue on it
-	// keeps LLM budget off jobs no engineer will see. It is a blacklist, not a
-	// whitelist — only categories we are sure are non-technical are dropped; an
-	// empty/"other"/unrecognized category still enqueues, so a tech job the title
-	// dictionary could not place is never silently skipped. The back-office IT-company
-	// roles (recruiting/hr/finance/legal/operations/customer_success) join this set:
-	// surfaced as facets but kept out of the LLM enrich budget, like marketing/sales.
+	// NonTechCategories are the CategoryValues for confidently non-technical roles: a
+	// member feeds `jobderive.deriveIsTech` to `is_tech = false`, and the enrichment
+	// enqueue gate (`internal/db/queries/jobs.sql`'s EnqueueJobEnrichment /
+	// `enrichment.sql`'s EnqueuePendingJobs) reads `is_tech IS TRUE`, so a confirmed
+	// non-tech role never consumes LLM budget. That gate is stricter than this list
+	// alone: it ALSO excludes `is_tech IS NULL` — a category the title dictionary and
+	// description left unresolved in either direction — which used to enqueue by
+	// default (the reasoning then: "never silently skip a tech job the dictionary
+	// missed"). Measured at catalogue scale that unresolved bucket was ~65% of the
+	// open catalogue and enrichment returned nothing useful for ~91% of it (broad
+	// multi-industry ATS crawls), so the coverage it bought no longer justified the
+	// spend — see the enqueue queries' comments for the full reasoning. The back-office
+	// IT-company roles (recruiting/hr/finance/legal/operations/customer_success) join
+	// this set: surfaced as facets but kept out of the LLM enrich budget, like
+	// marketing/sales.
 	// `engineering_design` — mechanical, electrical, civil and architectural draughting
 	// — joins them for the same reason: it is engineering, but not the IT work this
 	// catalogue serves, so it is filterable without spending LLM or embedding budget on

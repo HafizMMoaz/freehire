@@ -107,7 +107,9 @@ func TestEnqueueJobEnrichmentGating(t *testing.T) {
 
 	t.Run("unenriched job is enqueued, idempotently", func(t *testing.T) {
 		truncate(t, pool)
-		job, err := ingestUpsert(ctx, q, ingestParams("acme:1", "A Job"))
+		p := ingestParams("acme:1", "A Job")
+		p.IsTech = pgtype.Bool{Bool: true, Valid: true}
+		job, err := ingestUpsert(ctx, q, p)
 		if err != nil {
 			t.Fatalf("upsert: %v", err)
 		}

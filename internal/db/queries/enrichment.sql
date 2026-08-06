@@ -1,10 +1,12 @@
 -- name: EnqueuePendingJobs :execrows
 -- Idempotent backfill: enqueue every OPEN job that is unenriched or below the target
 -- schema version. Closed jobs (closed_at IS NOT NULL) are skipped — a dead posting no
--- user will see should not consume LLM budget. Jobs whose derived category is in
--- exclude_categories (vocab.NonTechCategories) are skipped too, so LLM budget stays
--- on technical roles; category is NOT NULL DEFAULT '', so an empty/unrecognized
--- category is never excluded (empty string <> ALL keeps the row). ON CONFLICT keeps
+-- user will see should not consume LLM budget. Gated on the same is_tech = true
+-- condition EnqueueJobEnrichment uses (see that query's comment for why the
+-- is_tech IS NULL bucket — unresolved by both the title dictionary and the
+-- description — is deliberately excluded, not just the confirmed-non-tech
+-- is_tech = false one) so a version bump or a fresh backfill run re-evaluates the
+-- whole catalogue under the identical rule, not a looser one. ON CONFLICT keeps
 -- exactly one entry per (job_id, target_version), so running this every command
 -- invocation never duplicates work.
 INSERT INTO enrichment_outbox (job_id, target_version)
@@ -13,7 +15,7 @@ FROM jobs
 WHERE closed_at IS NULL
   AND duplicate_of IS NULL
   AND (enriched_at IS NULL OR enrichment_version < sqlc.arg(target_version)::int)
-  AND category <> ALL(COALESCE(sqlc.arg(exclude_categories)::text[], '{}'))
+  AND is_tech IS TRUE
 ON CONFLICT (job_id, target_version) DO NOTHING;
 
 -- name: ClaimEnrichmentBatch :many

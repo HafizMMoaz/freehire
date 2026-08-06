@@ -49,7 +49,7 @@ func TestSemanticEnqueue_RepostsExcludedAndRemoved(t *testing.T) {
 	setSemanticStamp(t, pool, embeddedRepost, targetModel, "h1")
 	setDuplicateOf(t, pool, embeddedRepost, canon)
 
-	if _, err := q.EnqueuePendingSemanticJobs(ctx, EnqueuePendingSemanticJobsParams{TargetModel: targetModel}); err != nil {
+	if _, err := q.EnqueuePendingSemanticJobs(ctx, targetModel); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 

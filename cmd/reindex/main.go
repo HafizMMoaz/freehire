@@ -496,20 +496,22 @@ func buildClusterGeoLookup(ctx context.Context, q *db.Queries) (clusterGeoLookup
 }
 
 // splitJobs partitions a batch from the (deliberately unfiltered) reindex feed:
-// open, non-private jobs become index documents (each carrying its reality signal,
-// classified against `now` and its cluster counts), closed or private jobs become
-// deletions so they leave the index (the index contains only open, non-private jobs —
-// see the job-search spec).
+// open, non-private, categorized jobs become index documents (each carrying its
+// reality signal, classified against `now` and its cluster counts); closed, private,
+// or category-unresolved jobs become deletions so they leave the index (the index
+// contains only open, non-private, categorized jobs — see the job-search spec).
 func splitJobs(jobs []db.Job, lookup realityLookup, geo clusterGeoLookup, now time.Time) ([]search.JobDocument, []int64, error) {
 	docs := make([]search.JobDocument, 0, len(jobs))
 	deleteIDs := make([]int64, 0, len(jobs))
 	for _, j := range jobs {
-		// A closed job, a non-canonical repost (duplicate_of set), or a private job (the
-		// jd-tailor-intake path — visible only to its creator) leaves the index: only the
-		// open, non-private canonical row of each role cluster is searchable. Deleting (not
-		// just skipping) removes a row that was indexed before it was closed, demoted, or
-		// marked private.
-		if j.ClosedAt.Valid || j.DuplicateOf.Valid || j.IsPrivate {
+		// A closed job, a non-canonical repost (duplicate_of set), a private job (the
+		// jd-tailor-intake path — visible only to its creator), or a job whose category
+		// neither the title dictionary nor the LLM ever resolved (search.CategoryUnresolved)
+		// leaves the index: only the open, non-private, categorized canonical row of each
+		// role cluster is searchable. Deleting (not just skipping) removes a row that was
+		// indexed before it was closed, demoted, marked private, or — for a job this run
+		// re-evaluates fresh every time — before this exclusion existed.
+		if j.ClosedAt.Valid || j.DuplicateOf.Valid || j.IsPrivate || search.CategoryUnresolved(j) {
 			deleteIDs = append(deleteIDs, j.ID)
 			continue
 		}

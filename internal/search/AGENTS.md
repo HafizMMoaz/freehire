@@ -5,6 +5,20 @@ Meilisearch-backed keyword and hybrid search over jobs and companies. The packag
 
 ## Always true
 
+- **A job whose category is unresolved by both the title dictionary and the LLM never
+  enters the index.** `search.CategoryUnresolved` (`document.go`) reports true when
+  `jobs.category` is empty (`internal/classify` found nothing in the title) AND the raw
+  LLM enrichment's own `category` is also empty or the catch-all `"other"` — read from
+  the raw JSON, not `jobview`'s folded `Enrichment.Category`, which the dictionary
+  column always overwrites (`internal/classify/AGENTS.md`) and so never carries the
+  LLM's answer. Both `cmd/reindex`'s `splitJobs` and `cmd/search-drain`'s `IndexBatch`
+  apply it — added because this bucket was measured at ~65% of the open catalogue
+  (broad multi-industry ATS crawls contribute postings like "Industrial Painter" or
+  "Backhoe Loader Operator" that neither dictionary was ever meant to place), diluting
+  every keyword and category-filtered search with undifferentiated noise. A job later
+  categorized by a dictionary update or a fresh LLM pass is picked up by the next full
+  `cmd/reindex` run, not incrementally — `SetJobEnrichment` does not enqueue
+  `search_outbox`, so there is no faster path today.
 - **Meilisearch has ONE serial task queue.** Two rebuilds do not run concurrently — the
   second queues behind the first and looks like a hang while the engine is genuinely busy.
   Before triggering any rebuild, check `ps aux | grep reindex` and
@@ -19,12 +33,17 @@ Meilisearch-backed keyword and hybrid search over jobs and companies. The packag
   death spiral: ENOSPC → orphan → less disk → ENOSPC. Reclaim with
   `DELETE /indexes/<uid>_rebuild`. `Rebuild.Prepare` also drops a leftover before starting.
 - **Live reads are never affected by a rebuild** — the swap is atomic.
-- Full rebuilds are **content_hash-incremental even at `scope=full`**: `cmd/reindex` scans
-  every row but pushes only documents whose `content_hash` differs (`indexed=X skipped=Y`).
-  A field absent from `jobhash.Of()` therefore never reaches the index on its own —
-  **`is_tech` is deliberately not hashed**, so an is_tech-only flip is invisible to search
-  until the document is pushed for some other reason. There is no `--force` flag; the only
-  way to surface it immediately is a rebuild from empty.
+- A full rebuild (`scope=full`) pushes **every** open, non-private, categorized document
+  unconditionally to the fresh rebuild index — `content_hash` is never read in
+  `cmd/reindex`; the `indexed=X skipped=Y` log line counts rows `ResilientPage` skipped
+  for corruption, not hash-skipped ones. (An older version of this doc claimed
+  content_hash-incremental full rebuilds; that behavior does not exist in the code —
+  verified 2026-08-05.) `content_hash`-gating only exists one layer up, at the
+  ingest→`search_outbox` enqueue decision (`cmd/ingest`'s `needsIndex`) — the reason a
+  full reindex is the correct, if slow, way to surface any change a write path forgot
+  to enqueue, including `is_tech` (deliberately excluded from `jobhash.Of()`, so an
+  is_tech-only flip needs a full reindex or some other change to the same row to reach
+  the index).
 - `SubmitJobs` submits **without awaiting** the Meili task (`internal/linkimport`'s single
   on-demand doc push — `cmd/resolve-url` and the browser extension's "add this page", both
   human-triggered and low-volume, so one unawaited push per action is fine); `IndexJobs`

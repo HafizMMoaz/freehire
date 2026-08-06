@@ -673,12 +673,18 @@ type Querier interface {
 	EnqueueApplyFormCapture(ctx context.Context, jobID int64) (int64, error)
 	// Transactional-outbox enqueue for the ingest write path: queue this one job for
 	// enrichment, gated on the same conditions the backfill uses (unenriched or below the
-	// target schema version, and a non-blacklisted category), so an already-enriched job
-	// is not re-queued and a confidently non-technical role (exclude_categories =
-	// vocab.NonTechCategories) never consumes LLM budget. category is NOT NULL DEFAULT '',
-	// so an empty/unrecognized category still enqueues (empty string <> ALL). Idempotent
-	// via the outbox's UNIQUE (job_id, target_version). Run in the same transaction as the
-	// job's UpsertJob so a newly ingested job is queued atomically with its write.
+	// target schema version, and confirmed technical), so an already-enriched job is not
+	// re-queued and LLM budget is spent only where jobderive.deriveIsTech already found
+	// technical evidence (is_tech = true) — never a confirmed non-tech role (is_tech =
+	// false) and, deliberately, never an unresolved one either (is_tech IS NULL: neither
+	// the title dictionary nor the description found tech OR non-tech evidence). That
+	// unresolved bucket used to enqueue by default — the earlier reasoning was "never
+	// silently skip a tech job the dictionary missed" — but measured at catalogue scale it
+	// was ~65% of the open catalogue and enrichment returned nothing useful for ~91% of it
+	// (broad multi-industry ATS crawls: painters, stockers, drivers), so the LLM spend was
+	// not buying the coverage it cost. Idempotent via the outbox's UNIQUE (job_id,
+	// target_version). Run in the same transaction as the job's UpsertJob so a newly
+	// ingested job is queued atomically with its write.
 	EnqueueJobEnrichment(ctx context.Context, arg EnqueueJobEnrichmentParams) (int64, error)
 	// Idempotent backfill: enqueue every email not yet classified. classified_at is the
 	// "done" marker; ON CONFLICT keeps one entry per email, so running this each worker
@@ -692,21 +698,31 @@ type Querier interface {
 	EnqueuePendingEmailClassification(ctx context.Context) (int64, error)
 	// Idempotent backfill: enqueue every OPEN job that is unenriched or below the target
 	// schema version. Closed jobs (closed_at IS NOT NULL) are skipped — a dead posting no
-	// user will see should not consume LLM budget. Jobs whose derived category is in
-	// exclude_categories (vocab.NonTechCategories) are skipped too, so LLM budget stays
-	// on technical roles; category is NOT NULL DEFAULT '', so an empty/unrecognized
-	// category is never excluded (empty string <> ALL keeps the row). ON CONFLICT keeps
+	// user will see should not consume LLM budget. Gated on the same is_tech = true
+	// condition EnqueueJobEnrichment uses (see that query's comment for why the
+	// is_tech IS NULL bucket — unresolved by both the title dictionary and the
+	// description — is deliberately excluded, not just the confirmed-non-tech
+	// is_tech = false one) so a version bump or a fresh backfill run re-evaluates the
+	// whole catalogue under the identical rule, not a looser one. ON CONFLICT keeps
 	// exactly one entry per (job_id, target_version), so running this every command
 	// invocation never duplicates work.
-	EnqueuePendingJobs(ctx context.Context, arg EnqueuePendingJobsParams) (int64, error)
+	EnqueuePendingJobs(ctx context.Context, targetVersion int32) (int64, error)
 	// Idempotent backfill for the incremental semantic-embedding queue. Enqueues two
 	// kinds of outstanding work at the target embedder model:
 	//   1. OPEN jobs whose stored vector is missing, content-stale, or model-stale —
 	//      i.e. semantic_embedded_model differs from the target OR semantic_embedded_hash
-	//      differs from the job's current content_hash. Jobs whose derived category is in
-	//      exclude_categories (vocab.NonTechCategories) are skipped so embed budget stays
-	//      on technical roles; category is NOT NULL DEFAULT '', so an empty/unrecognized
-	//      category is never excluded (empty string <> ALL keeps the row).
+	//      differs from the job's current content_hash — AND confirmed technical
+	//      (is_tech IS TRUE), the same gate EnqueueJobEnrichment/EnqueuePendingJobs use
+	//      (jobs.sql, enrichment.sql) so embed spend is not wasted on postings that will
+	//      never surface via keyword/category search either (see search.CategoryUnresolved,
+	//      internal/search/document.go). Before this the gate was category-based
+	//      (category <> ALL(NonTechCategories)), a deliberate "category-gated, not
+	//      tech-only" design — measured 2026-07-22 at only 35% of jobs_semantic's ~2.05M
+	//      docs carrying an is_tech tag, i.e. the same undifferentiated bulk the facet-index
+	//      and enrichment gates were tightened against. This enqueue change does not purge
+	//      the existing non-tech vectors already stamped in jobs_semantic — that needs a
+	//      one-time surgical Meili delete-batch (expensive: re-merges the whole index), not
+	//      a code change; this only stops the incremental gate from re-adding them.
 	//   2. UNINDEXABLE jobs that still carry an embed stamp (were embedded while open and
 	//      canonical) — a job now closed OR a non-canonical repost (duplicate_of set) — so
 	//      the worker removes their document from jobs_semantic and clears the stamp. This
@@ -714,7 +730,7 @@ type Querier interface {
 	//      splitJobs), so the incremental path must not re-add them.
 	// ON CONFLICT keeps exactly one entry per (job_id, target_model), so running this every
 	// command invocation never duplicates work.
-	EnqueuePendingSemanticJobs(ctx context.Context, arg EnqueuePendingSemanticJobsParams) (int64, error)
+	EnqueuePendingSemanticJobs(ctx context.Context, targetModel string) (int64, error)
 	// Queue a job for the live facet index. Called by cmd/ingest inside the same
 	// transaction as the job's upsert, only when the write inserted or changed indexed
 	// content (mirrors the gate the old inline SubmitJobs push used). ON CONFLICT keeps

@@ -76,10 +76,7 @@ func TestSemanticEnqueue(t *testing.T) {
 
 	enqueue := func(t *testing.T) {
 		t.Helper()
-		if _, err := q.EnqueuePendingSemanticJobs(ctx, EnqueuePendingSemanticJobsParams{
-			TargetModel:       targetModel,
-			ExcludeCategories: []string{"marketing", "sales", "support", "management"},
-		}); err != nil {
+		if _, err := q.EnqueuePendingSemanticJobs(ctx, targetModel); err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
 	}
@@ -126,19 +123,18 @@ func TestSemanticEnqueue(t *testing.T) {
 		}
 	})
 
-	t.Run("non-tech open job is excluded", func(t *testing.T) {
+	t.Run("only is_tech = true is enqueued", func(t *testing.T) {
 		truncate(t, pool)
-		tech := insertJob(t, pool, "tech")
-		setCategory(t, pool, tech, "backend")
-		sales := insertJob(t, pool, "sales")
-		setCategory(t, pool, sales, "sales")
-		empty := insertJob(t, pool, "empty") // keeps '' default → must pass the gate
+		falseVal := false
+		tech := insertJob(t, pool, "tech") // is_tech = true by default
+		nonTech := insertJob(t, pool, "sales")
+		setIsTech(t, pool, nonTech, &falseVal)
+		unresolved := insertJob(t, pool, "empty")
+		setIsTech(t, pool, unresolved, nil)
 		enqueue(t)
 		got := semanticOutboxJobIDs(t, pool)
-		want := []int64{tech, empty}
-		sort.Slice(want, func(i, j int) bool { return want[i] < want[j] })
-		if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-			t.Errorf("enqueued = %v, want %v (sales excluded, empty kept)", got, want)
+		if len(got) != 1 || got[0] != tech {
+			t.Errorf("enqueued = %v, want [%d] (non-tech and unresolved excluded)", got, tech)
 		}
 	})
 
@@ -196,7 +192,7 @@ func TestSemanticClaim(t *testing.T) {
 
 	enqueue := func(t *testing.T) {
 		t.Helper()
-		if _, err := q.EnqueuePendingSemanticJobs(ctx, EnqueuePendingSemanticJobsParams{TargetModel: targetModel}); err != nil {
+		if _, err := q.EnqueuePendingSemanticJobs(ctx, targetModel); err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
 	}
@@ -330,7 +326,7 @@ func TestSemanticStampClearFailure(t *testing.T) {
 		if _, hash := semanticStamp(t, pool, j); hash != nil {
 			t.Errorf("semantic_embedded_hash = %q, want NULL", *hash)
 		}
-		if _, err := q.EnqueuePendingSemanticJobs(ctx, EnqueuePendingSemanticJobsParams{TargetModel: targetModel}); err != nil {
+		if _, err := q.EnqueuePendingSemanticJobs(ctx, targetModel); err != nil {
 			t.Fatal(err)
 		}
 		if got := semanticOutboxJobIDs(t, pool); len(got) != 0 {
@@ -341,7 +337,7 @@ func TestSemanticStampClearFailure(t *testing.T) {
 	t.Run("delete entry removes the outbox row", func(t *testing.T) {
 		truncate(t, pool)
 		insertJob(t, pool, "del")
-		if _, err := q.EnqueuePendingSemanticJobs(ctx, EnqueuePendingSemanticJobsParams{TargetModel: targetModel}); err != nil {
+		if _, err := q.EnqueuePendingSemanticJobs(ctx, targetModel); err != nil {
 			t.Fatal(err)
 		}
 		claimed, err := q.ClaimSemanticBatch(ctx, ClaimSemanticBatchParams{LeaseSeconds: 3600, BatchSize: 10})
@@ -359,7 +355,7 @@ func TestSemanticStampClearFailure(t *testing.T) {
 	t.Run("attempts reaching max dead-letters the entry", func(t *testing.T) {
 		truncate(t, pool)
 		insertJob(t, pool, "dead")
-		if _, err := q.EnqueuePendingSemanticJobs(ctx, EnqueuePendingSemanticJobsParams{TargetModel: targetModel}); err != nil {
+		if _, err := q.EnqueuePendingSemanticJobs(ctx, targetModel); err != nil {
 			t.Fatal(err)
 		}
 		claimed, err := q.ClaimSemanticBatch(ctx, ClaimSemanticBatchParams{LeaseSeconds: 3600, BatchSize: 10})

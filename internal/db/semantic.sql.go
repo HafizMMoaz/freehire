@@ -110,25 +110,28 @@ WHERE (
         closed_at IS NULL AND duplicate_of IS NULL
         AND (semantic_embedded_model IS DISTINCT FROM $1::text
              OR semantic_embedded_hash IS DISTINCT FROM content_hash)
-        AND category <> ALL(COALESCE($2::text[], '{}'))
+        AND is_tech IS TRUE
       )
    OR ((closed_at IS NOT NULL OR duplicate_of IS NOT NULL) AND semantic_embedded_model IS NOT NULL)
 ON CONFLICT (job_id, target_model) DO NOTHING
 `
 
-type EnqueuePendingSemanticJobsParams struct {
-	TargetModel       string   `json:"target_model"`
-	ExcludeCategories []string `json:"exclude_categories"`
-}
-
 // Idempotent backfill for the incremental semantic-embedding queue. Enqueues two
 // kinds of outstanding work at the target embedder model:
 //  1. OPEN jobs whose stored vector is missing, content-stale, or model-stale —
 //     i.e. semantic_embedded_model differs from the target OR semantic_embedded_hash
-//     differs from the job's current content_hash. Jobs whose derived category is in
-//     exclude_categories (vocab.NonTechCategories) are skipped so embed budget stays
-//     on technical roles; category is NOT NULL DEFAULT ”, so an empty/unrecognized
-//     category is never excluded (empty string <> ALL keeps the row).
+//     differs from the job's current content_hash — AND confirmed technical
+//     (is_tech IS TRUE), the same gate EnqueueJobEnrichment/EnqueuePendingJobs use
+//     (jobs.sql, enrichment.sql) so embed spend is not wasted on postings that will
+//     never surface via keyword/category search either (see search.CategoryUnresolved,
+//     internal/search/document.go). Before this the gate was category-based
+//     (category <> ALL(NonTechCategories)), a deliberate "category-gated, not
+//     tech-only" design — measured 2026-07-22 at only 35% of jobs_semantic's ~2.05M
+//     docs carrying an is_tech tag, i.e. the same undifferentiated bulk the facet-index
+//     and enrichment gates were tightened against. This enqueue change does not purge
+//     the existing non-tech vectors already stamped in jobs_semantic — that needs a
+//     one-time surgical Meili delete-batch (expensive: re-merges the whole index), not
+//     a code change; this only stops the incremental gate from re-adding them.
 //  2. UNINDEXABLE jobs that still carry an embed stamp (were embedded while open and
 //     canonical) — a job now closed OR a non-canonical repost (duplicate_of set) — so
 //     the worker removes their document from jobs_semantic and clears the stamp. This
@@ -137,8 +140,8 @@ type EnqueuePendingSemanticJobsParams struct {
 //
 // ON CONFLICT keeps exactly one entry per (job_id, target_model), so running this every
 // command invocation never duplicates work.
-func (q *Queries) EnqueuePendingSemanticJobs(ctx context.Context, arg EnqueuePendingSemanticJobsParams) (int64, error) {
-	result, err := q.db.Exec(ctx, enqueuePendingSemanticJobs, arg.TargetModel, arg.ExcludeCategories)
+func (q *Queries) EnqueuePendingSemanticJobs(ctx context.Context, targetModel string) (int64, error) {
+	result, err := q.db.Exec(ctx, enqueuePendingSemanticJobs, targetModel)
 	if err != nil {
 		return 0, err
 	}

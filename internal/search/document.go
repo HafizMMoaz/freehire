@@ -1,11 +1,13 @@
 package search
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/strelov1/freehire/internal/db"
+	"github.com/strelov1/freehire/internal/enrich"
 	"github.com/strelov1/freehire/internal/jobview"
 	"github.com/strelov1/freehire/internal/roletag"
 )
@@ -73,6 +75,27 @@ func FromJob(j db.Job) (JobDocument, error) {
 		doc.PostedTS = eff.Time.Unix()
 	}
 	return doc, nil
+}
+
+// CategoryUnresolved reports whether a job's category is unresolved by both the
+// deterministic title dictionary and the LLM: internal/classify's title match left
+// jobs.category empty, and enrichment either never found one or fell back to the
+// catch-all "other". Such a job carries no meaningful category facet, so it is
+// excluded from the index rather than diluting it with the undifferentiated bulk a
+// broad ATS crawl brings in (painters, stockers, drivers — postings no category
+// filter, and often no keyword search, was ever meant to surface). It reads the raw
+// enrichment JSON rather than jobview's folded Enrichment.Category, which the
+// dictionary column always overwrites (see internal/classify/AGENTS.md) and so
+// never carries the LLM's own answer.
+func CategoryUnresolved(j db.Job) bool {
+	if j.Category != "" {
+		return false
+	}
+	var e enrich.Enrichment
+	if len(j.Enrichment) > 0 {
+		_ = json.Unmarshal(j.Enrichment, &e)
+	}
+	return e.Category == "" || e.Category == "other"
 }
 
 // MergeClusterGeography widens a canonical document's geography facets with the union

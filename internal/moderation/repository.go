@@ -10,7 +10,6 @@ import (
 
 	"github.com/strelov1/freehire/internal/db"
 	"github.com/strelov1/freehire/internal/job"
-	"github.com/strelov1/freehire/internal/vocab"
 )
 
 // Compile-time proof that QueriesRepository satisfies Repository.
@@ -50,9 +49,8 @@ func (r *QueriesRepository) Create(ctx context.Context, f job.Fields, actorID in
 		return job.Job{}, job.Extras{}, fmt.Errorf("upsert manual job: %w", err)
 	}
 	if _, err := qtx.EnqueueJobEnrichment(ctx, db.EnqueueJobEnrichmentParams{
-		TargetVersion:     r.targetVersion,
-		JobID:             row.ID,
-		ExcludeCategories: vocab.NonTechCategories,
+		TargetVersion: r.targetVersion,
+		JobID:         row.ID,
 	}); err != nil {
 		return job.Job{}, job.Extras{}, fmt.Errorf("enqueue enrichment: %w", err)
 	}

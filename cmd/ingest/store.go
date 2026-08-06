@@ -17,7 +17,6 @@ import (
 	"github.com/strelov1/freehire/internal/jobdedup"
 	"github.com/strelov1/freehire/internal/pipeline"
 	"github.com/strelov1/freehire/internal/sources"
-	"github.com/strelov1/freehire/internal/vocab"
 )
 
 // dbStore adapts the generated queries + connection pool to pipeline.Store. Save runs
@@ -230,9 +229,8 @@ func (s *dbStore) save(ctx context.Context, j job.Job, form *applyform.Form) err
 	// A duplicate never reaches search, so enriching it pays an LLM for an invisible row.
 	if !deduped {
 		if _, err := qtx.EnqueueJobEnrichment(ctx, db.EnqueueJobEnrichmentParams{
-			TargetVersion:     s.targetVersion,
-			JobID:             saved.id,
-			ExcludeCategories: vocab.NonTechCategories,
+			TargetVersion: s.targetVersion,
+			JobID:         saved.id,
 		}); err != nil {
 			return fmt.Errorf("enqueue enrichment: %w", err)
 		}

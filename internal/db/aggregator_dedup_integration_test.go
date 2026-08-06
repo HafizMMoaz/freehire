@@ -13,6 +13,8 @@ import (
 	"context"
 	"slices"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // aggregators is the provider set treated as aggregators in these tests.
@@ -190,7 +192,9 @@ func TestSuppressedAggregator_HiddenFromListAndEnrichmentButServedBySlug(t *test
 	ctx := context.Background()
 	truncate(t, pool)
 
-	mustUpsert(t, q, atsJob("acme:ats", "Platform Engineer", []string{"US"}))
+	ats := atsJob("acme:ats", "Platform Engineer", []string{"US"})
+	ats.IsTech = pgtype.Bool{Bool: true, Valid: true}
+	mustUpsert(t, q, ats)
 	mustUpsert(t, q, aggJob("acme:agg", "Platform Engineer", []string{"US"}))
 	suppressAggregators(t, q)
 
@@ -217,7 +221,7 @@ func TestSuppressedAggregator_HiddenFromListAndEnrichmentButServedBySlug(t *test
 	}
 
 	// EnqueuePendingJobs enqueues the ATS canon, not the suppressed aggregator copy.
-	if _, err := q.EnqueuePendingJobs(ctx, EnqueuePendingJobsParams{TargetVersion: 1}); err != nil {
+	if _, err := q.EnqueuePendingJobs(ctx, 1); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	if !outboxHas(t, pool, atsID) {

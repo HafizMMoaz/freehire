@@ -203,10 +203,10 @@ func seedJob(t *testing.T, pool *pgxpool.Pool, ext, title string, closed, withHa
 	var id int64
 	err := pool.QueryRow(context.Background(),
 		`INSERT INTO jobs (source, external_id, url, title, company, description, public_slug,
-		                   content_hash, closed_at, enrichment)
+		                   content_hash, closed_at, enrichment, is_tech)
 		 VALUES ('test', $1, 'http://example.test', $2, 'Acme', 'Build things.', 'job-' || $1,
 		         CASE WHEN $3 THEN 'h-' || $1 ELSE NULL END,
-		         CASE WHEN $4 THEN now() ELSE NULL END, '{}')
+		         CASE WHEN $4 THEN now() ELSE NULL END, '{}', true)
 		 RETURNING id`,
 		ext, title, withHash, closed).Scan(&id)
 	if err != nil {

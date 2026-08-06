@@ -27,7 +27,6 @@ import (
 	"github.com/strelov1/freehire/internal/linksource"
 	"github.com/strelov1/freehire/internal/search"
 	"github.com/strelov1/freehire/internal/sources"
-	"github.com/strelov1/freehire/internal/vocab"
 )
 
 // Result identifies the posting an import wrote, under the destination's own catalog
@@ -245,9 +244,8 @@ func (im *Importer) Write(ctx context.Context, r linksource.Resolved) (Result, b
 		}
 	} else if _, err := qtx.EnqueueJobEnrichment(ctx, db.EnqueueJobEnrichmentParams{
 		// A duplicate never reaches search, so enriching it pays an LLM for an invisible row.
-		TargetVersion:     int32(enrich.Version),
-		JobID:             res.Job.ID,
-		ExcludeCategories: vocab.NonTechCategories,
+		TargetVersion: int32(enrich.Version),
+		JobID:         res.Job.ID,
 	}); err != nil {
 		return Result{}, false, err
 	}
@@ -293,10 +291,14 @@ func (im *Importer) unindex(ctx context.Context, id int64) {
 // import is an explicit act on one URL, so a re-import must (re)index an already-present
 // posting rather than silently no-op on an unchanged hash. The Meili upsert is idempotent.
 // A build or push failure is logged and swallowed — the job is already persisted and the
-// batch reindex reconciles. A non-canonical repost or a closed job is never made
-// searchable, matching ingest.
+// batch reindex reconciles. A non-canonical repost, a closed job, or one whose category
+// neither the title dictionary nor the LLM ever resolved (search.CategoryUnresolved) is
+// never made searchable, matching cmd/reindex/cmd/search-drain. The last case is common
+// here specifically: an import is a fresh URL, so enrichment has usually not run yet —
+// the job becomes searchable once the next full reindex re-evaluates it with a category.
 func (im *Importer) index(ctx context.Context, saved db.UpsertJobRow) {
-	if im.idx == nil || saved.Job.DuplicateOf.Valid || saved.Job.ClosedAt.Valid {
+	if im.idx == nil || saved.Job.DuplicateOf.Valid || saved.Job.ClosedAt.Valid ||
+		search.CategoryUnresolved(saved.Job) {
 		return
 	}
 	// The job-reality signal needs this role's cluster counts; a lookup failure degrades

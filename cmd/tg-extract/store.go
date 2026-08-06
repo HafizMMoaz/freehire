@@ -16,7 +16,6 @@ import (
 	"github.com/strelov1/freehire/internal/jobderive"
 	"github.com/strelov1/freehire/internal/pgconv"
 	"github.com/strelov1/freehire/internal/telegram"
-	"github.com/strelov1/freehire/internal/vocab"
 )
 
 // buildParams constructs the UpsertJob params for one Telegram-sourced job through
@@ -126,9 +125,8 @@ func (s *extractStore) Complete(ctx context.Context, post telegram.PendingPost, 
 			return fmt.Errorf("upsert job %s: %w", externalID, err)
 		}
 		if _, err := qtx.EnqueueJobEnrichment(ctx, db.EnqueueJobEnrichmentParams{
-			TargetVersion:     int32(enrich.Version),
-			JobID:             saved.Job.ID,
-			ExcludeCategories: vocab.NonTechCategories,
+			TargetVersion: int32(enrich.Version),
+			JobID:         saved.Job.ID,
 		}); err != nil {
 			return fmt.Errorf("enqueue enrichment %s: %w", externalID, err)
 		}
@@ -178,9 +176,8 @@ func (s *extractStore) CompleteLinks(
 			return fmt.Errorf("upsert job %s/%s: %w", j.Source, j.ExternalID, err)
 		}
 		if _, err := qtx.EnqueueJobEnrichment(ctx, db.EnqueueJobEnrichmentParams{
-			TargetVersion:     int32(enrich.Version),
-			JobID:             saved.Job.ID,
-			ExcludeCategories: vocab.NonTechCategories,
+			TargetVersion: int32(enrich.Version),
+			JobID:         saved.Job.ID,
 		}); err != nil {
 			return fmt.Errorf("enqueue enrichment %s/%s: %w", j.Source, j.ExternalID, err)
 		}

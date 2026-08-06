@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func manualParams(url, title string, createdBy, updatedBy int64) UpsertManualJobParams {
@@ -31,6 +32,10 @@ func manualParams(url, title string, createdBy, updatedBy int64) UpsertManualJob
 		Description: "Build things.",
 		CreatedBy:   createdBy,
 		UpdatedBy:   updatedBy,
+		// The real write path (internal/moderation) derives this from the title via
+		// jobderive same as any other source; fixed true here since this test is about
+		// the enqueue transaction, not the tri-state derivation.
+		IsTech: pgtype.Bool{Bool: true, Valid: true},
 	}
 }
 

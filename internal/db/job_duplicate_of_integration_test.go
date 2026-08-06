@@ -13,6 +13,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -143,7 +144,9 @@ func TestDuplicateReposts_HiddenFromListAndEnrichment(t *testing.T) {
 
 	const fp = "role-dup"
 	for _, ext := range []string{"acme:1", "acme:2"} {
-		if _, err := q.UpsertJob(ctx, withFingerprint(ext, "Staff Engineer", fp)); err != nil {
+		p := withFingerprint(ext, "Staff Engineer", fp)
+		p.IsTech = pgtype.Bool{Bool: true, Valid: true}
+		if _, err := q.UpsertJob(ctx, p); err != nil {
 			t.Fatalf("upsert %s: %v", ext, err)
 		}
 	}
@@ -168,7 +171,7 @@ func TestDuplicateReposts_HiddenFromListAndEnrichment(t *testing.T) {
 	}
 
 	// EnqueuePendingJobs enqueues the canon, not the repost.
-	if _, err := q.EnqueuePendingJobs(ctx, EnqueuePendingJobsParams{TargetVersion: 1}); err != nil {
+	if _, err := q.EnqueuePendingJobs(ctx, 1); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	if !outboxHas(t, pool, canonID) {

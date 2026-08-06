@@ -37,6 +37,9 @@ var techTitleTerms = []string{
 	"cloud engineer", "security engineer", "qa engineer", "test engineer",
 	"network engineer", "mobile engineer", "web engineer", "firmware engineer",
 	"embedded engineer", "infrastructure engineer", "systems software engineer",
+	// "Go Engineer"/"Golang Engineer" is the engineer-titled twin of "go developer"/
+	// "golang developer" below — the same role, the same unambiguous language anchor.
+	"go engineer", "golang engineer",
 	// Developer forms (never bare "developer")
 	"software developer", "web developer", "backend developer", "back-end developer",
 	"frontend developer", "front-end developer", "fullstack developer",
