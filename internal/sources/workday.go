@@ -183,13 +183,18 @@ func (s workday) detail(ctx context.Context, e CompanyEntry, b workdayBoard, p w
 
 	var d struct {
 		JobPostingInfo struct {
-			Title          string `json:"title"`
-			JobDescription string `json:"jobDescription"`
-			Location       string `json:"location"`
-			StartDate      string `json:"startDate"`
-			ExternalURL    string `json:"externalUrl"`
-			RemoteType     string `json:"remoteType"`
-			TimeType       string `json:"timeType"`
+			Title                  string `json:"title"`
+			JobDescription         string `json:"jobDescription"`
+			Location               string `json:"location"`
+			StartDate              string `json:"startDate"`
+			ExternalURL            string `json:"externalUrl"`
+			RemoteType             string `json:"remoteType"`
+			TimeType               string `json:"timeType"`
+			JobRequisitionLocation struct {
+				Country struct {
+					Alpha2Code string `json:"alpha2Code"`
+				} `json:"country"`
+			} `json:"jobRequisitionLocation"`
 		} `json:"jobPostingInfo"`
 	}
 	if err := s.http.GetJSON(ctx, url, &d); err != nil {
@@ -213,6 +218,7 @@ func (s workday) detail(ctx context.Context, e CompanyEntry, b workdayBoard, p w
 		Location:    location,
 		Description: sanitizeHTML(info.JobDescription),
 		Remote:      remote,
+		Countries:   countryFromCode(info.JobRequisitionLocation.Country.Alpha2Code),
 		PostedAt:    parseWorkdayDate(info.StartDate),
 		// timeType is Workday's structured full/part-time enum; the pipeline prefers it
 		// over the free-text employment-type parse. Workday's timeType only distinguishes
