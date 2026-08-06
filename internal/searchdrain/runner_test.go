@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -103,18 +104,31 @@ type fakeIndexer struct {
 	indexed    []int64
 	batchFails bool
 	indexErr   map[int64]error
+	// blockUntilCtxDone makes IndexBatch hang until the call context expires and
+	// return its error — simulating a push that is genuinely still working server-side
+	// (Meilisearch never reported a failure) but outran the caller's CallTimeout.
+	blockUntilCtxDone bool
 }
 
 func newFakeIndexer() *fakeIndexer { return &fakeIndexer{indexErr: map[int64]error{}} }
 
-func (ix *fakeIndexer) IndexBatch(_ context.Context, jobs []db.Job) error {
+func (ix *fakeIndexer) IndexBatch(ctx context.Context, jobs []db.Job) error {
 	ix.mu.Lock()
-	defer ix.mu.Unlock()
 	ids := make([]int64, len(jobs))
 	for i, j := range jobs {
 		ids[i] = j.ID
 	}
 	ix.indexCalls = append(ix.indexCalls, ids)
+	block := ix.blockUntilCtxDone
+	ix.mu.Unlock()
+
+	if block {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
 	if ix.batchFails && len(jobs) > 1 {
 		return errors.New("batch index failed")
 	}
@@ -223,6 +237,52 @@ func TestRunnerFallsBackToPerItemOnBatchFailure(t *testing.T) {
 	}
 	if len(store.failCalls) != 1 || store.failCalls[0].outboxID != 20 {
 		t.Errorf("failCalls = %+v, want one for outbox 20 (job 2)", store.failCalls)
+	}
+}
+
+// TestRunnerSkipsWaveOnBatchTimeoutInsteadOfCascading reproduces the 2026-08-05 prod
+// incident: on this Meilisearch instance a single-document push costs about as much
+// wall-clock time as a whole batch push (both dominated by a fixed whole-index
+// re-merge, not by document count). A batch that merely outran CallTimeout — with
+// Meilisearch still working on it server-side, not actually failed — must NOT cascade
+// into per-item fallback, or one slow-but-fine batch turns into up to BatchSize
+// equally slow individual pushes, each competing for the same disk IO that starved
+// freehire-web's accept() queue and produced nginx 504s.
+func TestRunnerSkipsWaveOnBatchTimeoutInsteadOfCascading(t *testing.T) {
+	store := newFakeStore()
+	ix := newFakeIndexer()
+	ix.blockUntilCtxDone = true // simulates a push that never returns before the deadline
+	for _, id := range []int64{1, 2, 3} {
+		store.jobs[id] = db.Job{ID: id}
+	}
+	store.pending = []Claimed{
+		{OutboxID: 10, JobID: 1},
+		{OutboxID: 20, JobID: 2},
+		{OutboxID: 30, JobID: 3},
+	}
+
+	opts := opt()
+	opts.CallTimeout = 20 * time.Millisecond
+
+	stats, err := Runner{Store: store, Indexer: ix}.Run(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if stats.Indexed != 0 || stats.Failed != 0 || stats.DeadLettered != 0 {
+		t.Fatalf("stats = %+v, want all zero — a timed-out batch is skipped this run, not "+
+			"fallen back to per-item and not counted as a failure", stats)
+	}
+	// The one batch attempt, and NOTHING else: no per-item retries.
+	if len(ix.indexCalls) != 1 {
+		t.Fatalf("IndexBatch calls = %d, want 1 (the batch attempt only) — per-item fallback "+
+			"on a mere timeout would multiply the number of equally-expensive Meili pushes by "+
+			"the batch size", len(ix.indexCalls))
+	}
+	// No attempts burned: the wave stays claimed and becomes retryable once its lease
+	// expires, so a later run retries the WHOLE batch fresh rather than spending the
+	// entry's limited attempt budget on a timeout that says nothing about the document.
+	if len(store.failCalls) != 0 {
+		t.Errorf("failCalls = %+v, want none — a timeout must not burn the retry budget", store.failCalls)
 	}
 }
 
