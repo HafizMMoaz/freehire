@@ -304,6 +304,13 @@ func All(c HTTPClient) map[string]Source {
 	} else {
 		registry["taleo"] = NewTaleo(newCookieClient())
 	}
+	// aijobs needs the same cookie-persisting client as taleo: its listing POST is Django
+	// CSRF-protected, authorized by the csrftoken cookie a plain GET sets.
+	if c == nil {
+		registry["aijobs"] = NewAijobs(nil)
+	} else {
+		registry["aijobs"] = NewAijobs(newCookieClient())
+	}
 	// meta is NOT served by the shared client: Meta's edge 400s the default Go TLS+HTTP/2
 	// fingerprint, so it needs the shared Chrome-fingerprint transport (fingerprintHTTP, also used
 	// by the bayt/gulftalent aggregators). Build it only when there is a real client to serve (the
