@@ -48,12 +48,16 @@ aijobs.net combines all three pressures at once, at a larger scale than any exis
 ## Decisions
 
 **1. `HydratingSource.FetchNew`, not a plain `Fetch`.**
-Like `justjoin`, the adapter implements both: `Fetch` is the list-only fallback (used only if
-a caller cannot supply a `seen` predicate), and `FetchNew(ctx, e, seen)` is the real path
+Like `justjoin`, the adapter implements both: `FetchNew(ctx, e, seen)` is the real path
 `cmd/ingest` drives — the listing walk always runs, but the per-job detail `GET` is skipped
-for any external ID `seen` already reports as ingested. This is the existing mechanism built
-for exactly this cost shape (see `justjoin.go`'s `FetchNew` doc comment); no new plumbing
-needed for the "only fetch what's new" half of the problem.
+for any external ID `seen` already reports as ingested. `Fetch` is the fallback for a caller
+that cannot supply a `seen` predicate, but unlike `justjoin`'s (genuinely list-only, since its
+list carries company inline) it has nothing list-only to fall back to: aijobs's listing carries
+no company, and a company-less posting is dropped (Decision 5), so `Fetch` delegates to
+`FetchNew` with a predicate reporting everything unseen — hydrating everything the listing
+yields, bounded by the same per-run budget as a real crawl (Decision 3). `HydratingSource` is
+still the right mechanism for the "only fetch what's new" half of the problem — `Fetch` existing
+at all is just interface plumbing this adapter has little use for.
 
 **2. Listing pagination stops on the first page that is entirely already-seen, not just
 on a page with no within-run-duplicate links.**

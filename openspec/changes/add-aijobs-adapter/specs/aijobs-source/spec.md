@@ -45,8 +45,11 @@ CSRF error), not retried without it.
 
 The system SHALL implement the hydrating fetch path (`FetchNew`), issuing a per-posting detail
 `GET` only for a posting whose external id the supplied `seen` predicate reports as not yet
-ingested. The plain `Fetch` path (used only when no `seen` predicate is available) SHALL return
-list-only jobs without a detail fetch.
+ingested. The plain `Fetch` path (used only when no `seen` predicate is available) has no
+list-only shape to fall back to — the listing carries no company, and a posting with no company
+is dropped (see "Company display name is derived from the company profile URL slug") — so
+`Fetch` SHALL delegate to `FetchNew` with a predicate that reports every posting as unseen,
+hydrating everything the listing yields up to the same per-run budget as a real crawl.
 
 #### Scenario: An already-ingested posting is not re-fetched
 

@@ -24,7 +24,9 @@ type aijobs struct {
 	http aijobsHTTP
 	// maxNewPerRun bounds how many unseen postings FetchNew hydrates in one run (see
 	// crawlListing's newBudget and design.md Decision 3). Always positive: NewAijobs
-	// substitutes aijobsDefaultMaxNewPerRun for a zero/negative value.
+	// substitutes aijobsDefaultMaxNewPerRun for a zero/negative value, because
+	// crawlListing reads newBudget <= 0 as "unlimited," not "nothing" — forwarding a raw
+	// zero here would mean "crawl the whole backlog in one run," not "crawl nothing new."
 	maxNewPerRun int
 }
 
