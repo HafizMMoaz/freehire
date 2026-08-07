@@ -7756,5 +7756,359 @@
   board: surge-ai
 - company: Bedrock Talent
   board: bedrock-talent
+- company: A1 Garage Door Service
+  board: A1 Garage Door Service
+- company: AION Biosciences
+  board: AION Biosciences
+- company: American Terawatt
+  board: American Terawatt
+- company: Applied Compute
+  board: Applied Compute
+- company: Axel
+  board: Axel
+- company: Blackpoint Cyber
+  board: Blackpoint Cyber
+- company: Capable Labs
+  board: Capable
+- company: Cirrus Systems, Inc.
+  board: Cirrus Systems
+- company: Citizen Health
+  board: Citizen Health
+- company: Civic Roundtable
+  board: Civic Roundtable
+- company: CoachHub
+  board: CoachHub Careers
+- company: Twenty Labs
+  board: Compound Jobs
+- company: Dominion Dynamics
+  board: Dominion Dynamics
+- company: Edison Scientific
+  board: Edison Scientific
+- company: Eon Systems
+  board: Eon Systems
+- company: Meraki-Labs
+  board: Fermi AI
+- company: Flock
+  board: Flock Safety
+- company: Fort Health
+  board: Fort Health
+- company: Forward Financing
+  board: Forward Financing
+- company: Grindr
+  board: Grindr LLC
+- company: GrowthX AI
+  board: GrowthX AI
+- company: Hamming AI
+  board: Hamming AI
+- company: Hippocratic AI
+  board: Hippocratic AI
+- company: Honey Homes
+  board: Honey Homes
+- company: Hyperliquid Labs
+  board: Hyperliquid Labs
+- company: Ideal Dental
+  board: Ideal Dental
+- company: Infinite Lambda
+  board: Infinite Lambda
+- company: Jasper
+  board: Jasper AI
+- company: Local Infusion
+  board: Local Infusion
+- company: Merge Labs
+  board: Merge Labs
+- company: Multitude Insights
+  board: Multitude Insights
+- company: Nautilus Biotechnology
+  board: Nautilus Biotechnology
+- company: Neon
+  board: Neon Money Talks
+- company: New Story
+  board: New Story
+- company: P-1 AI
+  board: P-1 AI
+- company: PAR Technology
+  board: PAR Technology
+- company: Phinity Labs
+  board: Phinitylabs
+- company: Pocket Worlds
+  board: Pocket Worlds
+- company: Protex AI
+  board: Protex AI
+- company: Pulsora, Inc.
+  board: Pulsora Inc
+- company: Redesign Health
+  board: Redesign Health
+- company: Resilience Care
+  board: Resilience Care
+- company: Resolve AI
+  board: Resolve AI
+- company: Ricursive Intelligence
+  board: Ricursive Intelligence
+- company: Sentradel
+  board: Sentradel
 - company: SignalFire
-  board: signalfire
+  board: SignalFire
+- company: Solana Foundation
+  board: Solana Foundation
+- company: Stony Creek Homes
+  board: Stony Creek Homes
+- company: Sunday
+  board: Sunday-GmbH
+- company: Symmetry AI
+  board: Symmetry
+- company: The Agency Fund
+  board: The Agency Fund
+- company: The Job Sauce
+  board: The Job Sauce
+- company: The Zebra
+  board: The Zebra
+- company: Theori
+  board: Theori
+- company: Thrive Alliance Group
+  board: Thrive-Alliance-Group
+- company: Tools for Humanity
+  board: Tools for Humanity
+- company: Trexo Robotics
+  board: Trexo Robotics
+- company: Trunk Tools, Inc.
+  board: Trunk Tools
+- company: TwoStep Therapeutics
+  board: TwoStepTx
+- company: US Health Partners
+  board: US Health Partners
+- company: Verne Robotics
+  board: Verne Robotics
+- company: Voya Energy
+  board: Voya Energy
+- company: Vytalize Health
+  board: Vytalize Health
+- company: Worktrace AI
+  board: Worktrace AI
+- company: Zip Security
+  board: Zip Security
+- company: Abstraction
+  board: abstraction.games
+- company: Abusix
+  board: abusix
+- company: Aceve
+  board: aceve
+- company: Aditude
+  board: aditude
+- company: Airspeed
+  board: airspeed
+- company: aka (fka mem protocol)
+  board: aka
+- company: Alloy Enterprises
+  board: alloyenterprises
+- company: ChipAgents
+  board: alpha-design-ai-inc
+- company: Anuvaya Labs
+  board: anuvaya
+- company: applike group
+  board: applike-group
+- company: Arca
+  board: arca
+- company: Argon AI
+  board: argon-ai
+- company: ArtosAI
+  board: artosai
+- company: AthenaHQ
+  board: athena-hq
+- company: Atira
+  board: atira
+- company: Atlas Privacy
+  board: atlas-privacy
+- company: Parallel
+  board: beparallel
+- company: BetterCloud, Inc.
+  board: bettercloud
+- company: Blank Instance
+  board: blankexampleinstance
+- company: BRM
+  board: brm.ai
+- company: CareSwift
+  board: careswift
+- company: Careway Health
+  board: careway
+- company: Carolina Complete Health Network
+  board: cchn
+- company: ClickHouse
+  board: clickhouse
+- company: Cold Start Ventures
+  board: coldstartventures
+- company: DataSnipper
+  board: datasnipper
+- company: deepset
+  board: deepsetai
+- company: Del Playa Group
+  board: delplayagroup
+- company: Discern Inc.
+  board: discern
+- company: Displai
+  board: displai
+- company: Drogue
+  board: drogue
+- company: The Electric Plant
+  board: electricplant
+- company: Eleos AI Research
+  board: eleos
+- company: ERP•AI
+  board: erp.ai
+- company: Ethereum Foundation
+  board: ethereum-foundation
+- company: Everstar
+  board: everstar
+- company: Ferry
+  board: ferryhealth
+- company: fomo Labs
+  board: fomo-labs
+- company: Gamut
+  board: gamut
+- company: Garage Door Doctor
+  board: garage-door-doctor
+- company: General Context
+  board: general-context
+- company: Getting Attention
+  board: getting-attention
+- company: Guide Labs
+  board: guidelabs.ai
+- company: Harmony
+  board: harmony
+- company: Heirloom Carbon
+  board: heirloomcarbon
+- company: Pinnacle
+  board: heypinnacle
+- company: HIVED
+  board: hived
+- company: Inherent
+  board: inherent
+- company: interface.ai
+  board: interface-ai
+- company: Intology
+  board: intology
+- company: justDice
+  board: justDice
+- company: justtrack
+  board: justtrack
+- company: Kalibri Labs
+  board: kalibri-labs
+- company: Kelluu
+  board: kelluu
+- company: Kled AI
+  board: kled-ai
+- company: Kranz Consulting
+  board: kranz-consulting
+- company: Krew
+  board: krew
+- company: Latitude
+  board: latitude-global
+- company: Leveraged Media
+  board: leveragedmedia
+- company: Lighthouse
+  board: lighthousehq
+- company: Live it Up
+  board: liveitup
+- company: Lua Global
+  board: lua
+- company: Mandrel
+  board: mandrel
+- company: Mast
+  board: mast
+- company: Mem
+  board: mem.ai
+- company: Meridio
+  board: meridio
+- company: Minerva
+  board: minerva
+- company: Mirror Physics
+  board: mirror-physics
+- company: Misfits & Machines
+  board: misfitsandmachines
+- company: Monarch
+  board: monarchcrops
+- company: Movement
+  board: movement
+- company: Neighborly Software
+  board: neighborly-software
+- company: NetBird
+  board: netbird
+- company: Neudata
+  board: neudata
+- company: Nuclearn
+  board: nuclearn
+- company: OpenLoop Health Partners
+  board: openlooppartners
+- company: Origin
+  board: originhq
+- company: Outro Health USA Inc.
+  board: outro-health
+- company: Payflip
+  board: payflip
+- company: Pensive
+  board: pensive
+- company: Plasiv Inc
+  board: plasiv
+- company: Poseidon Aerospace
+  board: poseidonaero
+- company: Possible Finance
+  board: possible-finance
+- company: Protera Health
+  board: proterahealth
+- company: Red Metals
+  board: redmetals
+- company: Resolution
+  board: resolution
+- company: Resorcer
+  board: resorcer.com
+- company: Saltz Marketplace
+  board: saltz
+- company: Security Level 5
+  board: security-level-5
+- company: Sentient Foundation
+  board: sentient-foundation
+- company: Shared Context Lab
+  board: sharedcontextlab
+- company: Sintra
+  board: sintra
+- company: Soter
+  board: soterinsure
+- company: SOVRA
+  board: sovra
+- company: Squad
+  board: squadai
+- company: STNDRD
+  board: stndrd
+- company: Strange Loop Labs
+  board: strange-loop-labs
+- company: Sunday Natural
+  board: sunday-natural
+- company: Supa
+  board: supa
+- company: Synergy Pet Group
+  board: synergy pet group
+- company: Taxwire
+  board: taxwire
+- company: The Biological Computing Co.
+  board: tbc
+- company: Tenderly
+  board: tenderly
+- company: Thaleron
+  board: thaleron
+- company: Tomo
+  board: tomo.ai
+- company: Roam
+  board: tryroam
+- company: Vals AI
+  board: vals-ai
+- company: Vanna Health, Inc
+  board: vanna-health-inc
+- company: Vorto
+  board: vorto
+- company: Warren
+  board: warren
+- company: Welborn Garage
+  board: welborne-garage
+- company: Pace
+  board: withpace
+- company: WorkHero
+  board: workhero
