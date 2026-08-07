@@ -172,8 +172,10 @@ func (p nofluffjobsPosting) toJob() (Job, bool) {
 		Company:    strings.TrimSpace(p.Name),
 		Location:   nofluffjobsLocation(p),
 		Remote:     p.FullyRemote,
-		Skills:     skilltag.Parse(p.Technology),
-		Seniority:  nofluffjobsSeniority(p.Seniority),
+		// Canonicalize, not Parse: p.Technology is the platform's own single structured
+		// tag, an asserted name rather than prose to mine.
+		Skills:    skilltag.Canonicalize([]string{p.Technology}),
+		Seniority: nofluffjobsSeniority(p.Seniority),
 	}
 	if p.FullyRemote {
 		job.WorkMode = "remote"

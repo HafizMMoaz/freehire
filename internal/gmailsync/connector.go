@@ -94,7 +94,7 @@ func (c *Connector) CalendarAuthCodeURL(state string) string {
 // Exchange turns the callback code into a refresh token and the connected Gmail
 // address. It errors if Google returned no refresh token (consent not offline).
 func (c *Connector) Exchange(ctx context.Context, code string) (refreshToken, email string, scopes []string, err error) {
-	ctx = guardedContext(ctx)
+	ctx = safehttp.GuardedOAuth2Context(ctx, gmailHTTPTimeout)
 	tok, err := c.cfg.Exchange(ctx, code)
 	if err != nil {
 		return "", "", nil, fmt.Errorf("gmail: exchange code: %w", err)
@@ -134,7 +134,7 @@ func (c *Connector) ExchangeCalendar(ctx context.Context, code string) (refreshT
 	cfg := *c.cfg
 	cfg.Scopes = []string{CalendarScope}
 	cfg.RedirectURL = c.calendarRedirect
-	tok, err := cfg.Exchange(guardedContext(ctx), code)
+	tok, err := cfg.Exchange(safehttp.GuardedOAuth2Context(ctx, gmailHTTPTimeout), code)
 	if err != nil {
 		return "", nil, fmt.Errorf("calendar: exchange code: %w", err)
 	}
@@ -147,14 +147,14 @@ func (c *Connector) ExchangeCalendar(ctx context.Context, code string) (refreshT
 // TokenSource mints access tokens from a stored refresh token (used by the sync
 // worker), refreshing transparently.
 func (c *Connector) TokenSource(ctx context.Context, refreshToken string) oauth2.TokenSource {
-	return c.cfg.TokenSource(guardedContext(ctx), &oauth2.Token{RefreshToken: refreshToken})
+	return c.cfg.TokenSource(safehttp.GuardedOAuth2Context(ctx, gmailHTTPTimeout), &oauth2.Token{RefreshToken: refreshToken})
 }
 
 // HTTPClient returns a token-bearing HTTP client for the Gmail API, minting and
 // refreshing access tokens from the stored refresh token. Used to build a live
 // GmailReader per user in the sync worker.
 func (c *Connector) HTTPClient(ctx context.Context, refreshToken string) *http.Client {
-	gctx := guardedContext(ctx)
+	gctx := safehttp.GuardedOAuth2Context(ctx, gmailHTTPTimeout)
 	return oauth2.NewClient(gctx, c.cfg.TokenSource(gctx, &oauth2.Token{RefreshToken: refreshToken}))
 }
 
@@ -205,13 +205,4 @@ func (c *Connector) fetchEmail(ctx context.Context, client *http.Client) (string
 		return "", fmt.Errorf("gmail: profile decode: %w", err)
 	}
 	return body.EmailAddress, nil
-}
-
-// guardedContext routes the OAuth exchange and API calls through the SSRF-guarded
-// client, matching every other outbound fetch in this service (defense in depth).
-func guardedContext(ctx context.Context) context.Context {
-	if _, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok {
-		return ctx
-	}
-	return context.WithValue(ctx, oauth2.HTTPClient, safehttp.NewClient(gmailHTTPTimeout))
 }

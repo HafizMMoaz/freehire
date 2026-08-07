@@ -87,9 +87,18 @@ func newService(repo Repository) *Service {
 	return New(repo, nil)
 }
 
-// submit is the shorthand for one website intake, so a test states only the link it is about.
+// submit is the shorthand for one website intake, so a test states only the link it is
+// about. It calls Inspect then RecordIntake — the same two calls the real intake handler
+// makes (internal/handler/intake.go) — rather than a standalone convenience method, so
+// these tests exercise the actual production path.
 func submit(svc *Service, userID int64, url string) (SubmitResult, error) {
-	return svc.Submit(context.Background(), SubmitInput{SubmittedBy: userID, URL: url, Surface: SurfaceWeb})
+	ctx := context.Background()
+	in := SubmitInput{SubmittedBy: userID, URL: url, Surface: SurfaceWeb}
+	it, err := svc.Inspect(ctx, url)
+	if err != nil {
+		return SubmitResult{}, err
+	}
+	return svc.RecordIntake(ctx, in, it)
 }
 
 func TestSubmitRecordsUnknownHostForReview(t *testing.T) {
@@ -202,19 +211,27 @@ func TestSubmitStoresTheSurfaceItArrivedThrough(t *testing.T) {
 	// to a channel and not only to a user. An unknown tag degrades to "unknown", never a refusal.
 	repo := &fakeRepo{}
 	svc := newService(repo)
-	if _, err := svc.Submit(context.Background(), SubmitInput{
-		SubmittedBy: 7, URL: "https://jobs.ashbyhq.com/blitzy", Surface: SurfaceCLI,
-	}); err != nil {
-		t.Fatalf("Submit: %v", err)
+	ctx := context.Background()
+
+	in := SubmitInput{SubmittedBy: 7, URL: "https://jobs.ashbyhq.com/blitzy", Surface: SurfaceCLI}
+	it, err := svc.Inspect(ctx, in.URL)
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if _, err := svc.RecordIntake(ctx, in, it); err != nil {
+		t.Fatalf("RecordIntake: %v", err)
 	}
 	if repo.recorded.Surface != SurfaceCLI {
 		t.Errorf("recorded surface = %q, want %q", repo.recorded.Surface, SurfaceCLI)
 	}
 
-	if _, err := svc.Submit(context.Background(), SubmitInput{
-		SubmittedBy: 7, URL: "https://example.com/careers/1", Surface: "carrier-pigeon",
-	}); err != nil {
-		t.Fatalf("Submit with an unknown surface: %v", err)
+	in = SubmitInput{SubmittedBy: 7, URL: "https://example.com/careers/1", Surface: "carrier-pigeon"}
+	it, err = svc.Inspect(ctx, in.URL)
+	if err != nil {
+		t.Fatalf("Inspect with an unknown surface: %v", err)
+	}
+	if _, err := svc.RecordIntake(ctx, in, it); err != nil {
+		t.Fatalf("RecordIntake with an unknown surface: %v", err)
 	}
 	if repo.reviewedSurf != SurfaceUnknown {
 		t.Errorf("unknown surface stored as %q, want %q", repo.reviewedSurf, SurfaceUnknown)

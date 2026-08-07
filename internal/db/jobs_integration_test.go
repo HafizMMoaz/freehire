@@ -156,6 +156,41 @@ func TestEnqueueJobEnrichmentGating(t *testing.T) {
 			t.Errorf("outbox rows = %d, want 0", got)
 		}
 	})
+
+	// A recrawl of an already-deduped repost reaches this call as an UPDATE, not the
+	// clustering INSERT — the write path's own dedup check (cmd/ingest's clustersByRole)
+	// never fires for it, so this gate is the only thing standing between the recrawl and
+	// an outbox row ClaimEnrichmentBatch's duplicate_of IS NULL filter can never claim.
+	t.Run("job already marked a duplicate is not enqueued", func(t *testing.T) {
+		truncate(t, pool)
+		canon, err := ingestUpsert(ctx, q, ingestParams("acme:3", "Canonical Job"))
+		if err != nil {
+			t.Fatalf("upsert canon: %v", err)
+		}
+		p := ingestParams("acme:4", "Reposted Job")
+		p.IsTech = pgtype.Bool{Bool: true, Valid: true}
+		repost, err := ingestUpsert(ctx, q, p)
+		if err != nil {
+			t.Fatalf("upsert repost: %v", err)
+		}
+		if _, err := q.MarkJobDuplicateOf(ctx, MarkJobDuplicateOfParams{
+			ID:          repost.ID,
+			DuplicateOf: pgtype.Int8{Int64: canon.ID, Valid: true},
+		}); err != nil {
+			t.Fatalf("mark duplicate: %v", err)
+		}
+
+		n, err := q.EnqueueJobEnrichment(ctx, EnqueueJobEnrichmentParams{TargetVersion: 1, JobID: repost.ID})
+		if err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+		if n != 0 {
+			t.Errorf("enqueue affected %d rows, want 0 (job is a known duplicate)", n)
+		}
+		if got := outboxCount(); got != 0 {
+			t.Errorf("outbox rows = %d, want 0 — a duplicate must never reach ClaimEnrichmentBatch", got)
+		}
+	})
 }
 
 // A failed detail fetch makes an adapter yield a job with an empty description while

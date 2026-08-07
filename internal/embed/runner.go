@@ -12,6 +12,7 @@ package embed
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -148,21 +149,51 @@ func (rn *run) processOpenBatch(ctx context.Context, entries []Claimed) {
 	defer cancel()
 
 	jobs, err := rn.store.Jobs(callCtx, jobIDs(entries))
-	if err != nil || len(jobs) != len(entries) {
+	if err != nil {
+		if rn.skipOnTimeout(callCtx, entries, "load jobs") {
+			return
+		}
+		rn.fallbackOpen(ctx, entries)
+		return
+	}
+	if len(jobs) != len(entries) {
 		rn.fallbackOpen(ctx, entries)
 		return
 	}
 	vectors, err := rn.indexer.IndexOpen(callCtx, jobs)
 	if err != nil {
+		if rn.skipOnTimeout(callCtx, entries, "embed/index") {
+			return
+		}
 		rn.fallbackOpen(ctx, entries)
 		return
 	}
 	if err := rn.store.CompleteOpen(callCtx, entries, rn.opt.TargetModel, vectors); err != nil {
+		if rn.skipOnTimeout(callCtx, entries, "complete open") {
+			return
+		}
 		rn.fallbackOpen(ctx, entries)
 		return
 	}
 	rn.stats.Indexed += len(entries)
 	log.Printf("embed: indexed batch of %d in %s", len(entries), since(start))
+}
+
+// skipOnTimeout reports whether callCtx expired — a normal-but-slow operation simply
+// outran CallTimeout, not a per-document defect the semantic index reported — and, if
+// so, logs and leaves the wave claimed for its lease to expire, so a later run retries
+// the WHOLE batch fresh. Falling back to per-item on a mere timeout would be actively
+// harmful here: this index's cost is dominated by a fixed whole-index re-merge (the
+// same mechanism internal/searchdrain guards against, see its skipOnTimeout), so a
+// single document costs about as much to push as the whole batch, and per-item fallback
+// would turn one slow-but-fine batch into up to len(entries) equally slow calls.
+func (rn *run) skipOnTimeout(callCtx context.Context, entries []Claimed, stage string) bool {
+	if !errors.Is(callCtx.Err(), context.DeadlineExceeded) {
+		return false
+	}
+	log.Printf("embed: batch of %d timed out during %s after %s — leaving claimed for "+
+		"lease-expiry retry, not falling back to per-item", len(entries), stage, rn.opt.CallTimeout)
+	return true
 }
 
 func (rn *run) fallbackOpen(ctx context.Context, entries []Claimed) {
@@ -215,10 +246,16 @@ func (rn *run) processClosedBatch(ctx context.Context, entries []Claimed) {
 	defer cancel()
 
 	if err := rn.indexer.RemoveClosed(callCtx, jobIDs(entries)); err != nil {
+		if rn.skipOnTimeout(callCtx, entries, "remove closed") {
+			return
+		}
 		rn.fallbackClosed(ctx, entries)
 		return
 	}
 	if err := rn.store.CompleteClosed(callCtx, entries); err != nil {
+		if rn.skipOnTimeout(callCtx, entries, "complete closed") {
+			return
+		}
 		rn.fallbackClosed(ctx, entries)
 		return
 	}

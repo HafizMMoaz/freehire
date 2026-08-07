@@ -190,11 +190,20 @@ func Recognize(rawURL string) (source, board, canonical string, ok bool) {
 
 	switch mode {
 	case modeSubdomain, modeSubdomainChain, modeHost:
+		// The vendor's own product host must not be read as a tenant, regardless of which of
+		// the three modes matched: all three derive the board from host's leftmost DNS label
+		// (bare, chained, or as the whole host), and a platform label like "app" or "help" sits
+		// in that exact position for a subdomain tenant just as much as for a bare-host one —
+		// e.g. app.recruitee.com and help.bamboohr.com are the vendor's own login/support hosts,
+		// not a company named "app" or "help".
+		if platformHost(host) {
+			return "", "", "", false
+		}
 		if mode == modeSubdomain {
 			board = subdomainLabel(host, apex)
 		} else if mode == modeSubdomainChain {
 			board = subdomainChain(host, apex)
-		} else if !platformHost(host) {
+		} else {
 			board = host // the whole careers host is the tenant identity
 		}
 		if board == "" {

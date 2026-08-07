@@ -141,7 +141,7 @@ func (a *Atom) Sanitize() {
 	a.Context = clip(a.Context, maxContextRunes)
 	a.SourceRef = clip(a.SourceRef, maxShortRunes)
 	a.Metrics = orEmpty(limit(nonEmpty(mapStrings(a.Metrics, maxShortRunes)), maxMetrics))
-	a.Skills = orEmpty(limit(skilltag.Canonicalize(a.Skills), maxSkills))
+	a.Skills = orEmpty(limit(skilltag.Canonicalize(a.Skills, skilltag.WithResumeAcronyms()), maxSkills))
 }
 
 // Validate reports the first reason this atom cannot be persisted. It runs after
@@ -164,7 +164,7 @@ func (e *Employment) Sanitize() {
 	e.Start = clip(e.Start, maxShortRunes)
 	e.End = clip(e.End, maxShortRunes)
 	e.Summary = clip(e.Summary, maxSummaryRunes)
-	e.Stack = orEmpty(limit(skilltag.Canonicalize(e.Stack), maxSkills))
+	e.Stack = orEmpty(limit(skilltag.Canonicalize(e.Stack, skilltag.WithResumeAcronyms()), maxSkills))
 }
 
 // Validate reports the first reason this employment cannot be persisted.

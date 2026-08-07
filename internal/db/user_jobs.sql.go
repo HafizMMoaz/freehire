@@ -339,7 +339,7 @@ func (q *Queries) ListSavedJobSlugs(ctx context.Context, userID int64) ([]string
 }
 
 const listUserJobs = `-- name: ListUserJobs :many
-SELECT jobs.id, jobs.public_slug, jobs.title, jobs.company_slug, jobs.closed_at,
+SELECT jobs.id, jobs.public_slug, jobs.title, jobs.company, jobs.company_slug, jobs.closed_at,
        jobs.work_mode, jobs.seniority, jobs.employment_type,
        jobs.countries, jobs.regions, jobs.skills, jobs.collections,
        jobs.posted_at, jobs.created_at,
@@ -426,6 +426,7 @@ type ListUserJobsRow struct {
 	ID                   int64              `json:"id"`
 	PublicSlug           string             `json:"public_slug"`
 	Title                string             `json:"title"`
+	Company              string             `json:"company"`
 	CompanySlug          string             `json:"company_slug"`
 	ClosedAt             pgtype.Timestamptz `json:"closed_at"`
 	WorkMode             string             `json:"work_mode"`
@@ -501,6 +502,7 @@ func (q *Queries) ListUserJobs(ctx context.Context, arg ListUserJobsParams) ([]L
 			&i.ID,
 			&i.PublicSlug,
 			&i.Title,
+			&i.Company,
 			&i.CompanySlug,
 			&i.ClosedAt,
 			&i.WorkMode,

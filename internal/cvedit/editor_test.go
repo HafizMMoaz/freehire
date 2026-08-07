@@ -84,11 +84,12 @@ func (r *fakeRepo) Insert(_ context.Context, rev Revision) (Revision, error) {
 	return rev, nil
 }
 
-func (r *fakeRepo) Amend(_ context.Context, id uuid.UUID, ops []Op, title string) (Revision, error) {
+func (r *fakeRepo) Amend(_ context.Context, id uuid.UUID, ops []Op, title, note string) (Revision, error) {
 	for i, rev := range r.revisions {
 		if rev.ID == id {
 			r.revisions[i].Ops = ops
 			r.revisions[i].Title = title
+			r.revisions[i].Note = note
 			r.revisions[i].UpdatedAt = r.updatedAt
 			return r.revisions[i], nil
 		}
@@ -224,6 +225,40 @@ func TestTypingIntoOnePlaceCoalescesIntoOneRevision(t *testing.T) {
 	// The inverse still leads back to where the burst started, not to the previous keystroke.
 	if got := repo.revisions[0].Inverse[0].Value; got != "Ten years of Go" {
 		t.Fatalf("inverse = %v, want the text from before the first save", got)
+	}
+}
+
+// Amend replaces the ops and the title with the coalesced batch's current state — the note
+// must follow the same rule, or the revision keeps citing the first edit's reason for content
+// that is actually the second edit's.
+func TestCoalescingReplacesTheNoteWithTheLatestOne(t *testing.T) {
+	repo := newFakeRepo()
+	e, c := newEditor(repo, nil)
+	batchID := uuid.New()
+
+	_, _, err := e.Commit(context.Background(), repo.cvID, 1, Change{
+		Actor: ActorAgent, Origin: OriginTailorAgent, BatchID: batchID,
+		Note: "Added the cloud-migration line for Requirement A",
+		Ops:  []Op{{Kind: OpSet, Path: mustParse(t, "summary"), Value: "Distributed"}},
+	})
+	if err != nil {
+		t.Fatalf("first Commit: %v", err)
+	}
+	c.at = c.at.Add(2 * time.Second)
+	_, _, err = e.Commit(context.Background(), repo.cvID, 1, Change{
+		Actor: ActorAgent, Origin: OriginTailorAgent, BatchID: batchID,
+		Note: "Reworded for Requirement B",
+		Ops:  []Op{{Kind: OpSet, Path: mustParse(t, "summary"), Value: "Distributed systems"}},
+	})
+	if err != nil {
+		t.Fatalf("second Commit: %v", err)
+	}
+
+	if len(repo.revisions) != 1 {
+		t.Fatalf("got %d revisions, want one for the coalesced batch", len(repo.revisions))
+	}
+	if got := repo.revisions[0].Note; got != "Reworded for Requirement B" {
+		t.Errorf("note = %q, want the second edit's reason, not the stale first one", got)
 	}
 }
 

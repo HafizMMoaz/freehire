@@ -3,7 +3,6 @@ package sources
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/strelov1/freehire/internal/skilltag"
 )
@@ -161,8 +160,11 @@ func (p fourDayWeekPosting) toJob() (Job, bool) {
 		WorkMode:   fourDayWeekWorkMode(p.WorkArrangement),
 		Seniority:  fourDayWeekSeniority(p.Level),
 		Category:   fourDayWeekCategory(p.Category),
-		Skills:     skilltag.Parse(strings.Join(names, " ")),
-		PostedAt:   parseEpochSeconds(p.Posted),
+		// Canonicalize, not Parse: names are already-discrete asserted tech names, not
+		// prose — Parse's corroboration rule would drop an unambiguous single-word name
+		// for lack of a second strong term.
+		Skills:   skilltag.Canonicalize(names),
+		PostedAt: parseEpochSeconds(p.Posted),
 	}, true
 }
 

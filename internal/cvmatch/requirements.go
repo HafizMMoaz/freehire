@@ -170,7 +170,10 @@ func requirementSkills(text string, jobSkills []string) []string {
 const requirementPunctuation = ",;:!?()[]{}\"'“”«»·•/\\|"
 
 func requirementWords(text string) []string {
-	fields := strings.Fields(strings.ToLower(text))
+	// Case is preserved: skilltag.Canonicalize tries case-preserved acronyms (ML, K8s) before
+	// its own lowercase normalization, and lowercasing here would defeat that tier before the
+	// token ever reaches it.
+	fields := strings.Fields(text)
 	out := make([]string, 0, len(fields))
 	for _, f := range fields {
 		w := strings.TrimRight(strings.Trim(f, requirementPunctuation), ".")

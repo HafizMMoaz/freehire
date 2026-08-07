@@ -36,6 +36,17 @@ func TestJustJoinHydrateMapsDetail(t *testing.T) {
 	}
 }
 
+// justjoin's required_skills entries are already-discrete asserted names, not prose — a lone
+// ambiguous word like "React" (which Parse's corroboration rule would drop without a second
+// strong tech term in the same text) must still resolve, because the platform is the one
+// asserting it, not a sentence justJoinSkills is mining.
+func TestJustJoinSkillsResolvesALoneAmbiguousSkill(t *testing.T) {
+	got := justJoinSkills([]justJoinSkill{{Name: "React"}})
+	if !slices.Contains(got, "react") {
+		t.Errorf("justJoinSkills([React]) = %v, want [react] — a platform-asserted skill must not need corroboration", got)
+	}
+}
+
 // TestJustJoinDescription covers the exported backfill helper: it derives the slug from a stored
 // job URL, fetches the detail, and returns the sanitized body — or ok=false when the URL is not a
 // justjoin offer URL, the fetch fails, or the body is empty.

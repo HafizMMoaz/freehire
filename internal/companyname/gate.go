@@ -48,11 +48,13 @@ func SlugLike(name string) bool {
 	return hasLetter
 }
 
-// ExtractTitleName pulls a company name out of a careers-page <title>. It
-// handles the shapes ATS careers pages use — a "<lead-in> at {Name}" prefix
-// (Jobs/Careers/Employment Opportunities at …) and a trailing "{Name} Careers" —
-// then cleans a stray "| …" section and collapsed whitespace off the result.
-// Returns "" when no shape matches.
+// ExtractTitleName pulls a company name out of a Pinpoint careers-page <title>: the shapes
+// validated against real Pinpoint boards (PR #825) — a "<lead-in> at {Name}" prefix
+// (Jobs/Careers/Employment Opportunities at …) and a trailing "{Name} Careers" — then cleans
+// a stray "| …" section and collapsed whitespace off the result. Returns "" when neither shape
+// matches. Other ATSes title their careers pages differently (see ExtractSuffixName,
+// ExtractBareTitle) — this is Pinpoint-specific despite the generic name, kept for the
+// callers/tests already using it.
 func ExtractTitleName(title string) string {
 	title = strings.TrimSpace(html.UnescapeString(title))
 	switch {
@@ -64,6 +66,24 @@ func ExtractTitleName(title string) string {
 		}
 		return ""
 	}
+}
+
+// ExtractSuffixName pulls a company name out of a careers-page <title> that names itself
+// "{Name}{suffix}" with no lead-in prefix — Ashby's storefront titles itself "{Name} Jobs".
+// Returns "" when the title does not carry that exact suffix, rather than guessing.
+func ExtractSuffixName(title, suffix string) string {
+	title = strings.TrimSpace(html.UnescapeString(title))
+	if rest, ok := cutSuffixFold(title, suffix); ok {
+		return clean(rest)
+	}
+	return ""
+}
+
+// ExtractBareTitle pulls a company name out of a careers-page <title> that carries nothing
+// but the name itself — Lever's storefront titles the page with the company name alone, no
+// lead-in and no suffix. Only "| …" trimming and whitespace collapsing apply.
+func ExtractBareTitle(title string) string {
+	return clean(strings.TrimSpace(html.UnescapeString(title)))
 }
 
 // clean drops a trailing "| …" fragment (careers titles append a section name

@@ -8,6 +8,8 @@ import (
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/endpoints"
+
+	"github.com/strelov1/freehire/internal/safehttp"
 )
 
 // githubProvider implements GitHub sign-in. GitHub is plain OAuth2 (no OIDC
@@ -39,7 +41,7 @@ func (p *githubProvider) AuthCodeURL(state string) string {
 }
 
 func (p *githubProvider) FetchIdentity(ctx context.Context, code string) (Identity, error) {
-	ctx = guardedOAuthContext(ctx)
+	ctx = safehttp.GuardedOAuth2Context(ctx, userinfoTimeout)
 	tok, err := p.cfg.Exchange(ctx, code)
 	if err != nil {
 		return Identity{}, fmt.Errorf("github: exchange code: %w", err)

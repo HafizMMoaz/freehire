@@ -76,6 +76,8 @@ func (s *Store) Retrieve(ctx context.Context, userID int64, q Query, limit int) 
 		byID[employments[i].ID] = &employments[i]
 	}
 
+	// No WithResumeAcronyms: q.Skills names a VACANCY requirement's skills (see Query's doc
+	// comment), not the candidate's own — the résumé-scoped acronym tier must stay off here.
 	q.Skills = skilltag.Canonicalize(q.Skills)
 
 	matches := make([]Match, 0, len(atoms))

@@ -60,12 +60,22 @@ func ashbyJobID(rawURL string) (string, bool) {
 	return "", false
 }
 
-// stripQueryFragment returns rawURL without its query or fragment; the raw string on parse error.
+// stripQueryFragment returns rawURL without its query or fragment, and without a trailing
+// path slash; the raw string on parse error.
+//
+// The trailing-slash trim matters because this is the canonicalization RecordReview keys
+// its dedup on (migrations/0037_link_contributions_review.sql's partial unique index on
+// url WHERE source IS NULL): two people pasting the same unrecognized page that differ
+// only by a trailing slash (".../title" vs ".../title/") must land as the SAME review-queue
+// row, not two. It stops short of internal/atsboard's fuller canonicalization (which also
+// drops a trailing "/apply" segment) — that extra trim is meaningful for a recognized ATS
+// board and would be over-reaching for an arbitrary unrecognized URL here.
 func stripQueryFragment(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return rawURL
 	}
 	u.RawQuery, u.Fragment = "", ""
+	u.Path = strings.TrimSuffix(u.Path, "/")
 	return u.String()
 }

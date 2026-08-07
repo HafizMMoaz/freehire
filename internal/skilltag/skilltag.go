@@ -129,7 +129,7 @@ func wordTokens(norm string) []string {
 	return wordTokenRE.FindAllString(norm, -1)
 }
 
-// Option configures a Parse call. The zero set is job-safe (default).
+// Option configures a Parse or Canonicalize call. The zero set is job-safe (default).
 type Option func(*options)
 
 type options struct {
@@ -137,8 +137,10 @@ type options struct {
 }
 
 // WithResumeAcronyms enables the résumé-scoped acronym tier (resumeAcronyms, e.g.
-// RAG) for a Parse call. Job callers omit it so those acronyms never tag job
-// facets; the résumé path (handler.ExtractResumeProfile) sets it.
+// RAG) for a Parse or Canonicalize call. Job/vacancy callers omit it so those
+// acronyms never tag job facets; a caller resolving a candidate's own asserted
+// skills (handler.ExtractResumeProfile, an experience atom's Skills/Stack, a
+// profile's claimed skills) sets it.
 func WithResumeAcronyms() Option {
 	return func(o *options) { o.resumeAcronyms = true }
 }

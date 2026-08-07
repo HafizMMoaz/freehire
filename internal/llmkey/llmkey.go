@@ -35,13 +35,6 @@ var ErrUpstream = errors.New("llm gateway")
 // throwing it away would orphan a live credential.
 var ErrUnknownKey = fmt.Errorf("%w: key not recognised", ErrUpstream)
 
-// errUnauthorized is a refused credential, and what it means depends entirely on WHICH
-// credential was refused. On a self-read it is the user's own key and means exactly
-// "unknown, re-mint". On an administrative call it is our configured admin key and means
-// the deployment is misconfigured — reading that as a stale user key would turn one
-// wrong environment variable into a re-minting storm across every account.
-var errUnauthorized = fmt.Errorf("%w: credential refused", ErrUpstream)
-
 // requestTimeout bounds one admin call. It is short because these calls sit in front of
 // a user's request: minting is what stands between somebody pressing send and their
 // answer starting, so a slow gateway must give up quickly and let the call proceed
@@ -55,15 +48,6 @@ const (
 	// gateway serves more than one product, so a bare id would collide with another's.
 	ownerPrefix = "freehire-"
 )
-
-// Spend is what the gateway says an account has spent in the current window. Limit is 0
-// when no ceiling is configured and ResetsAt is zero when the gateway reports no window —
-// both are the ordinary state of a deployment that has not chosen a budget.
-type Spend struct {
-	Amount   float64
-	Limit    float64
-	ResetsAt time.Time
-}
 
 // Config is the gateway's administrative endpoint and the policy applied to new keys.
 // MaxBudget, RPMLimit and BudgetWindow are omitted from the mint request when unset,
@@ -134,48 +118,6 @@ func (c *Client) Mint(ctx context.Context, userID int64) (string, error) {
 		return "", fmt.Errorf("%w: minted an empty key", ErrUpstream)
 	}
 	return out.Key, nil
-}
-
-// Spend reports what a credential has spent in the current window.
-//
-// The read authenticates as the credential itself rather than as the administrator, for
-// two reasons. It keeps the secret out of the request URL — the gateway logs
-// `$request_uri`, so a query parameter would file a live credential into an access log on
-// every usage read, in plaintext, forever. And it needs no administrative rights to
-// perform, so the one path a user's request can reach cannot do anything but read that
-// user's own line. A key cannot mint keys (verified: the gateway answers 401).
-func (c *Client) Spend(ctx context.Context, secret string) (Spend, error) {
-	if c == nil {
-		return Spend{}, fmt.Errorf("%w: no admin API configured", ErrUpstream)
-	}
-	var out struct {
-		Info struct {
-			Spend     float64  `json:"spend"`
-			MaxBudget *float64 `json:"max_budget"`
-			ResetAt   *string  `json:"budget_reset_at"`
-		} `json:"info"`
-	}
-	err := c.get(ctx, "/key/info", secret, &out)
-	// Refused here means the gateway does not know this key, because the key IS the
-	// credential being checked. That is the signal to replace it.
-	if errors.Is(err, errUnauthorized) {
-		return Spend{}, ErrUnknownKey
-	}
-	if err != nil {
-		return Spend{}, err
-	}
-	spend := Spend{Amount: out.Info.Spend}
-	if out.Info.MaxBudget != nil {
-		spend.Limit = *out.Info.MaxBudget
-	}
-	if out.Info.ResetAt != nil {
-		// An unparseable instant is not worth failing a usage readout over: the amount is
-		// the answer, and the reset is decoration beside it.
-		if at, err := time.Parse(time.RFC3339, *out.Info.ResetAt); err == nil {
-			spend.ResetsAt = at
-		}
-	}
-	return spend, nil
 }
 
 // Activity is what an account did over a window: how many model calls it made, how many
@@ -285,10 +227,9 @@ func (c *Client) get(ctx context.Context, path, bearer string, out any) error {
 
 // do carries out one call and decodes its answer.
 //
-// 404 and 401 are singled out, but only 404 is classified here: the gateway answers it
-// for a key it does not know regardless of who asked. A 401 depends on whose credential
-// was refused, which only the caller knows, so it comes back as errUnauthorized for them
-// to interpret. Every other non-2xx is the gateway's own problem.
+// 404 is singled out: the gateway answers it for a key it does not know regardless of who
+// asked, which is the signal a caller (Block, Delete) treats as already done. Every other
+// non-2xx, including a 401, is the gateway's own problem.
 //
 // Error messages carry the path and never the query or the credential.
 func (c *Client) do(req *http.Request, bearer string, out any) error {
@@ -301,9 +242,6 @@ func (c *Client) do(req *http.Request, bearer string, out any) error {
 
 	if resp.StatusCode == http.StatusNotFound {
 		return ErrUnknownKey
-	}
-	if resp.StatusCode == http.StatusUnauthorized {
-		return errUnauthorized
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return fmt.Errorf("%w: %s: status %d", ErrUpstream, req.URL.Path, resp.StatusCode)

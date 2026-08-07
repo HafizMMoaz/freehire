@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"reflect"
 	"strings"
 
 	"github.com/strelov1/freehire/internal/hardconstraint"
@@ -208,6 +209,19 @@ const stageAttempts = 2
 // events for the given stage, and unmarshals the accumulated JSON into out. A parse
 // failure and a timed-out stage are each retried once; anything else returns at once.
 func (a *Analyzer) streamStage(ctx context.Context, stage int, system, user string, emit func(Event), out any) error {
+	// A snapshot of out exactly as the caller handed it in — the zero value for stages 1
+	// and 2, or Stage 2's verdict for Stage 3's seed-and-merge audit (see Analyze: Stage 3
+	// pre-populates out so a field the audit's JSON omits keeps its Stage 2 value, since
+	// json.Unmarshal only overwrites the keys present in the source). Every attempt
+	// restores out to this snapshot before decoding into it: encoding/json does not roll
+	// back a partial decode, so a failed attempt can leave the fields it reached before
+	// erroring still set, and without restoring first a later attempt's valid-but-partial
+	// JSON would silently inherit that stale, never-validated value instead of the seed
+	// (zero, or Stage 2's) it should have started from.
+	dst := reflect.ValueOf(out).Elem()
+	seed := reflect.New(dst.Type()).Elem()
+	seed.Set(dst)
+
 	var parseErr error
 	for attempt := 1; attempt <= stageAttempts; attempt++ {
 		raw, err := a.client.GenerateJSONStream(ctx, system, user, func(t string) {
@@ -225,6 +239,7 @@ func (a *Analyzer) streamStage(ctx context.Context, stage int, system, user stri
 			}
 			return err // transport error, or a caller who is gone — retrying wouldn't help
 		}
+		dst.Set(seed)
 		if parseErr = json.Unmarshal([]byte(strings.TrimSpace(raw)), out); parseErr == nil {
 			return nil
 		}
@@ -473,18 +488,22 @@ func writeLocation(b *strings.Builder, in Input) {
 	b.WriteString("\n")
 }
 
-// remoteWithinReach reports whether the job is remote AND its region falls within the
-// candidate's stated remote reach (their location_preferences remote.regions). A reach of
-// "global", or one naming the job's region, covers the posting regardless of the posted
-// office city/country — a remote worker in that region can take it without relocating. This
-// is deterministic on purpose: it stops the model from reading a remote role's HQ city (e.g.
-// a LATAM-remote job posted from Santo Domingo) as a relocation requirement and scoring
-// location_fit 0. Unset/unparseable prefs or a non-remote job → false (the model judges).
+// remoteWithinReach reports whether the job is remote AND its region or country falls
+// within the candidate's stated remote reach (their location_preferences remote.regions
+// and remote.countries — two independent fields the profile editor lets a candidate set
+// separately, e.g. reach scoped to specific countries with no region picked at all). A
+// reach of "global", or one naming the job's region or country, covers the posting
+// regardless of the posted office city — a remote worker within that reach can take it
+// without relocating. This is deterministic on purpose: it stops the model from reading a
+// remote role's HQ city (e.g. a LATAM-remote job posted from Santo Domingo) as a
+// relocation requirement and scoring location_fit 0. Unset/unparseable prefs or a
+// non-remote job → false (the model judges).
 func remoteWithinReach(in Input) bool {
 	if !in.JobRemote && !strings.EqualFold(in.JobWorkMode, "remote") {
 		return false
 	}
-	for _, r := range candidateRemoteReach(in.LocationPreferences) {
+	regions, countries := candidateRemoteReach(in.LocationPreferences)
+	for _, r := range regions {
 		if strings.EqualFold(r, "global") {
 			return true
 		}
@@ -494,21 +513,30 @@ func remoteWithinReach(in Input) bool {
 			}
 		}
 	}
+	for _, c := range countries {
+		for _, jc := range in.JobCountries {
+			if strings.EqualFold(c, jc) {
+				return true
+			}
+		}
+	}
 	return false
 }
 
-// candidateRemoteReach pulls the remote.regions list out of the raw location_preferences
-// JSON. Empty on unset/unparseable input (the caller then degrades to model judgement).
-func candidateRemoteReach(prefsJSON string) []string {
+// candidateRemoteReach pulls the remote.regions and remote.countries lists out of the raw
+// location_preferences JSON — the same shape userprofile.GeoSet writes. Both empty on
+// unset/unparseable input (the caller then degrades to model judgement).
+func candidateRemoteReach(prefsJSON string) (regions, countries []string) {
 	var p struct {
 		Remote struct {
-			Regions []string `json:"regions"`
+			Regions   []string `json:"regions"`
+			Countries []string `json:"countries"`
 		} `json:"remote"`
 	}
 	if json.Unmarshal([]byte(strings.TrimSpace(prefsJSON)), &p) != nil {
-		return nil
+		return nil, nil
 	}
-	return p.Remote.Regions
+	return p.Remote.Regions, p.Remote.Countries
 }
 
 func writeRequirements(b *strings.Builder, reqs []Requirement) {

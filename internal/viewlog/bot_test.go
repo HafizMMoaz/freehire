@@ -20,6 +20,9 @@ func TestIsBot(t *testing.T) {
 		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
 		"curl/8.4.0",
 		"",
+		// A real phone brand, not a crawler — the reason bare "bot" is excluded from
+		// botMarkers (mirrors internal/tracerlink's classifier, tested the same way).
+		"Mozilla/5.0 (Linux; Android 10; CUBOT_X30) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
 	}
 	for _, ua := range humans {
 		if isBot(ua) {

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"sort"
 	"strings"
@@ -29,6 +30,9 @@ type cvRepo struct {
 	written []byte
 	// report is what an autopilot run leaves behind: its account of each requirement.
 	report []byte
+	// autopilotErr, when set, is what SetAutopilotReport returns instead of succeeding —
+	// simulating a report write that fails after the document edit has already landed.
+	autopilotErr error
 }
 
 func (r *cvRepo) Get(_ context.Context, id uuid.UUID, userID int64) (db.GetCVByIDRow, error) {
@@ -77,6 +81,9 @@ func (r *cvRepo) GetTailoredForJob(_ context.Context, userID, jobID int64) (db.G
 }
 
 func (r *cvRepo) SetAutopilotReport(_ context.Context, id uuid.UUID, userID int64, report []byte) (int64, error) {
+	if r.autopilotErr != nil {
+		return 0, r.autopilotErr
+	}
 	if id != r.id || userID != r.userID {
 		return 0, nil
 	}
@@ -187,11 +194,12 @@ func (m *memRevisions) Insert(_ context.Context, rev cvedit.Revision) (cvedit.Re
 	return rev, nil
 }
 
-func (m *memRevisions) Amend(_ context.Context, id uuid.UUID, ops []cvedit.Op, title string) (cvedit.Revision, error) {
+func (m *memRevisions) Amend(_ context.Context, id uuid.UUID, ops []cvedit.Op, title, note string) (cvedit.Revision, error) {
 	for i, r := range m.revisions {
 		if r.ID == id {
 			m.revisions[i].Ops = ops
 			m.revisions[i].Title = title
+			m.revisions[i].Note = note
 			return m.revisions[i], nil
 		}
 	}
@@ -554,6 +562,29 @@ func TestCVEditToolReplacesAnExistingOpenReportEntry(t *testing.T) {
 	}
 	if report[1].Requirement != "Team leadership" || report[1].Status != cv.AutopilotClosedBank {
 		t.Errorf("unrelated entry was disturbed: %+v", report[1])
+	}
+}
+
+// A report-merge failure arrives strictly AFTER cvedit.Commit has already durably landed the
+// document edit. Failing the whole tool call at that point would tell the model the edit never
+// happened; a well-behaved model retries, and Commit has no content-level dedup against a
+// retried insert — so the merge must be best-effort, the same way UndoCVRevisionBatch treats
+// the sibling SetAutopilotReport call after RevertBatch has already succeeded.
+func TestCVEditToolSucceedsWhenTheReportMergeFailsAfterTheEditLands(t *testing.T) {
+	bank := newStubBank()
+	atom := bank.add(3, experience.Atom{Claim: "Senior backend engineer", Provenance: experience.ProvenanceStatedInChat})
+	a, repo := cvToolsAPIWithBank(t, oneExperienceCV, bank)
+	repo.autopilotErr = errors.New("connection reset")
+
+	tool := toolByName(t, a.assistantCVTools(testCVID, 9, uuid.New()), "cv_edit")
+	_, err := tool.Run(context.Background(), 3, json.RawMessage(
+		`{"ops":[{"kind":"set","path":"summary","value":"Senior backend engineer","evidence_id":"`+atom.ID.String()+`"}],`+
+			`"requirement":"PostgreSQL experience","requirement_status":"closed_bank"}`))
+	if err != nil {
+		t.Fatalf("cv_edit returned an error for a report-merge failure after a successful edit: %v", err)
+	}
+	if repo.written == nil {
+		t.Fatal("the edit did not land — Commit should have run before the failing merge")
 	}
 }
 

@@ -483,14 +483,17 @@ func (h *assistantHandlers) cvEditTool(cvID uuid.UUID, batchID uuid.UUID) assist
 				return nil, cvToolError(err)
 			}
 			// Merged only after Commit succeeds: a refused batch must not leave the report
-			// claiming a requirement was closed by an edit that never landed.
+			// claiming a requirement was closed by an edit that never landed. But once Commit
+			// has landed, this merge is best-effort — the document already carries the edit, and
+			// failing the whole tool call now would tell the model the edit never happened,
+			// inviting a retry that reapplies ops Commit has no content-level dedup against.
 			if requirement != "" {
 				if err := h.cv.cvStore.MergeAutopilotEntry(ctx, cvID, userID, cv.AutopilotEntry{
 					Requirement: requirement,
 					Status:      status,
 					Note:        in.Note,
 				}); err != nil {
-					return nil, cvToolError(err)
+					log.Printf("assistant: recording autopilot entry for requirement %q: %v", requirement, err)
 				}
 			}
 			// A receipt, not the document: a tool result is replayed into the model's

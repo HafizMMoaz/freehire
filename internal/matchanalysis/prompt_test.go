@@ -77,6 +77,23 @@ func TestWriteLocation_RemoteOutsideReachNoNote(t *testing.T) {
 	}
 }
 
+// The profile editor lets a candidate scope their remote reach by country independently
+// of region (ProfileForm's "Remote reach" block: region pills + a country search, each
+// toggled on its own). A candidate who picked only countries, no regions, must still get
+// the deterministic vouch for a job in one of those countries.
+func TestWriteLocation_RemoteWithinReachByCountryAddsNote(t *testing.T) {
+	in := Input{
+		JobRemote:           true,
+		JobLocation:         "Berlin, Germany",
+		JobCountries:        []string{"de"},
+		LocationPreferences: `{"remote":{"countries":["de","pl"]}}`,
+	}
+	got := stage2UserPrompt(in, nil, candidateContext(in.StructuredResume))
+	if !strings.Contains(got, "within the candidate's stated remote reach") {
+		t.Errorf("expected remote-reach NOTE for a job in a country the candidate's reach names:\n%s", got)
+	}
+}
+
 func TestStage2SystemPrompt_RemoteLocationRule(t *testing.T) {
 	sp := stage2SystemPrompt()
 	if !strings.Contains(sp, "remote reach") || !strings.Contains(sp, "Relocation matters only for onsite") {

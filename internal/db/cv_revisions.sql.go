@@ -15,7 +15,7 @@ import (
 
 const amendCVRevision = `-- name: AmendCVRevision :one
 UPDATE cv_revisions
-SET ops = $3, title = $4, updated_at = now()
+SET ops = $3, title = $4, note = $5, updated_at = now()
 WHERE id = $1 AND user_id = $2
 RETURNING id, cv_id, user_id, actor, origin, batch_id, title, note, ops, inverse, base_version, reverts_id, reverted_at, created_at, updated_at
 `
@@ -25,17 +25,20 @@ type AmendCVRevisionParams struct {
 	UserID int64           `json:"user_id"`
 	Ops    json.RawMessage `json:"ops"`
 	Title  string          `json:"title"`
+	Note   pgtype.Text     `json:"note"`
 }
 
-// Fold a follow-on edit into the newest revision: replace what it does and restate its
-// description, but LEAVE inverse alone. The inverse still leads back to the state before the
-// first of the coalesced edits, which is what makes undo mean something for typed text.
+// Fold a follow-on edit into the newest revision: replace what it does, restate its
+// description and the reason for the change, but LEAVE inverse alone. The inverse still leads
+// back to the state before the first of the coalesced edits, which is what makes undo mean
+// something for typed text.
 func (q *Queries) AmendCVRevision(ctx context.Context, arg AmendCVRevisionParams) (CvRevision, error) {
 	row := q.db.QueryRow(ctx, amendCVRevision,
 		arg.ID,
 		arg.UserID,
 		arg.Ops,
 		arg.Title,
+		arg.Note,
 	)
 	var i CvRevision
 	err := row.Scan(

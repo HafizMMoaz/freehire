@@ -131,6 +131,12 @@ func TestRecognize(t *testing.T) {
 		// takes the first recognized ATS URL in a page, recorded it as the employer's board.
 		{"teamtailor platform app host not a tenant", "https://app.teamtailor.com/companies/1/jobs", "", "", "", false},
 		{"teamtailor platform dashboard host not a tenant", "https://dashboard.teamtailor.com/", "", "", "", false},
+		// The same platform-host guard applies to subdomain mode, not just host mode: Recruitee's
+		// own employer app lives at app.recruitee.com and BambooHR's own support center at
+		// help.bamboohr.com — both real, public vendor hosts, neither a tenant named "app" or
+		// "help". Before this guard was wired into modeSubdomain, both resolved as false boards.
+		{"recruitee platform app host not a tenant", "https://app.recruitee.com/", "", "", "", false},
+		{"bamboohr platform help host not a tenant", "https://help.bamboohr.com/s/article/x", "", "", "", false},
 		{"unknown host", "https://example.com/careers/1", "", "", "", false},
 		{"not http", "ftp://acme.recruitee.com", "", "", "", false},
 		{"garbage", "not a url", "", "", "", false},

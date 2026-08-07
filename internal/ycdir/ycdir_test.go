@@ -112,3 +112,16 @@ func TestMapMissingOptionalsOmitted(t *testing.T) {
 		t.Errorf("subindustry = %q, want empty (no subindustry given)", r.Subindustry)
 	}
 }
+
+// A multi-office entry lists all_locations HQ first, semicolon-separated. hqCountry must
+// resolve the FIRST office's country, not the alphabetically-first one location.Parse's
+// sorted, whole-string result would otherwise surface for a later office.
+func TestMapMultiOfficeUsesTheFirstListedLocation(t *testing.T) {
+	r, ok := Map(Entry{Name: "CleverDeck", AllLocations: "San Francisco, CA, USA; Istanbul, Istanbul, Turkey"})
+	if !ok {
+		t.Fatal("ok = false")
+	}
+	if r.HQCountry != "us" {
+		t.Errorf("hq_country = %q, want us (the first-listed office, not alphabetically-first tr)", r.HQCountry)
+	}
+}
