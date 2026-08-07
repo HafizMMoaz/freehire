@@ -147,11 +147,21 @@ documents on the table behind every CV page.
 ## Bullet ceiling
 
 `cv.MaxBullets` (default 20, override with `CV_MAX_BULLETS`) is enforced by `Sanitize`,
-which keeps the first N and drops the rest. Commit refuses that class of loss up front
-(`ErrListCap` / `bullet_cap`) so an insert into a full list cannot look like a successful
-add while trailing originals vanish. The guard is on by default; `Editor.SetRefuseListCap(false)`
-(env `CV_EDIT_ALLOW_BULLET_TRUNCATION=true` on the server) restores the old sanitize-and-drop
-behaviour without a code change.
+which keeps the first N and drops the rest. Both `Commit` (an ops batch — cv_edit, template
+picks) and `CommitDocument` (a whole-document save — the editor's PATCH autosave, Reset from
+résumé) refuse that class of loss up front (`ErrListCap` / `bullet_cap`) so neither an
+agent's insert into a full list nor a pasted/seeded document that is itself over the cap can
+look like a successful write while content vanishes. The guard is on by default;
+`Editor.SetRefuseListCap(false)` (env `CV_EDIT_ALLOW_BULLET_TRUNCATION=true` on the server)
+restores the old sanitize-and-drop behaviour without a code change, for both paths.
+
+`CommitDocument` checks the RAW incoming document, before its own pre-diff `Sanitize()` call
+— that Sanitize existed first (so the diff is against what will actually be stored) and would
+otherwise erase the overflow before the guard ever saw it, making the refuse a no-op for
+every whole-document save. Get this ordering backwards again and the guard silently stops
+protecting PATCH /me/cvs/:id and Reset from résumé while still working for cv_edit —
+`TestCommitDocumentRefusesAWholeDocumentSaveOverTheCap` and
+`TestUpdateCV_RefusesAWholeDocumentSaveOverTheBulletCap` pin it.
 
 Sibling Sanitize `limit()`s — experience/education/skills/languages/projects/certifications
 counts, skill items, links — still drop trailing entries silently. Extending refuse to those
