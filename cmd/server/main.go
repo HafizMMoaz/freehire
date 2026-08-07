@@ -17,6 +17,7 @@ import (
 	"github.com/strelov1/freehire/internal/blobstore"
 	"github.com/strelov1/freehire/internal/config"
 	"github.com/strelov1/freehire/internal/credits"
+	"github.com/strelov1/freehire/internal/cv"
 	"github.com/strelov1/freehire/internal/database"
 	"github.com/strelov1/freehire/internal/gmailsync"
 	"github.com/strelov1/freehire/internal/handler"
@@ -31,6 +32,7 @@ import (
 
 func main() {
 	cfg := config.Load()
+	cv.SetMaxBullets(cfg.CVMaxBullets)
 
 	// Never boot the auth surface with a guessable signing key. HS256 security rests
 	// entirely on secret entropy, so a short secret is brute-forceable offline against
@@ -205,26 +207,28 @@ func main() {
 	creditsConfig := credits.Config(config.LoadCredits())
 
 	handler.Register(app, handler.Config{
-		Pool:              pool,
-		FrontendOrigin:    cfg.FrontendOrigin,
-		JWTSecret:         cfg.JWTSecret,
-		JWTTTL:            cfg.JWTTTL,
-		CookieSecure:      cfg.CookieSecure,
-		CookieDomains:     cfg.CookieDomains,
-		OAuthRegistry:     oauthRegistry,
-		GmailConnector:    gmailConnector,
-		GmailCipher:       gmailCipher,
-		MailboxDomain:     cfg.MailboxDomain,
-		Search:            searchClient,
-		Blob:              blobStore,
-		TypstBin:          cfg.TypstBin,
-		TracerLinkSalt:    cfg.TracerLinkSalt,
-		LLM:               llmClient,
-		AssistantLLM:      assistantLLM,
-		AssistantMaxSteps: cfg.AssistantMaxSteps,
-		LLMKeys:           llmKeys,
-		Speech:            speechClient,
-		PIIDetector:       piiDetector,
+		Pool:                        pool,
+		FrontendOrigin:              cfg.FrontendOrigin,
+		JWTSecret:                   cfg.JWTSecret,
+		JWTTTL:                      cfg.JWTTTL,
+		CookieSecure:                cfg.CookieSecure,
+		CookieDomains:               cfg.CookieDomains,
+		OAuthRegistry:               oauthRegistry,
+		GmailConnector:              gmailConnector,
+		GmailCipher:                 gmailCipher,
+		MailboxDomain:               cfg.MailboxDomain,
+		Search:                      searchClient,
+		Blob:                        blobStore,
+		TypstBin:                    cfg.TypstBin,
+		CVEditAllowBulletTruncation: cfg.CVEditAllowBulletTruncation,
+		TracerLinkSalt:              cfg.TracerLinkSalt,
+		LLM:                         llmClient,
+		AssistantLLM:                assistantLLM,
+		AssistantMaxSteps:           cfg.AssistantMaxSteps,
+		AssistantMaxPrompt:          cfg.AssistantMaxPrompt,
+		LLMKeys:                     llmKeys,
+		Speech:                      speechClient,
+		PIIDetector:                 piiDetector,
 
 		TelegramBotToken:      cfg.TelegramBotToken,
 		TelegramBotUsername:   cfg.TelegramBotUsername,

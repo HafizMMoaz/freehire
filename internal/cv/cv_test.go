@@ -5,6 +5,20 @@ import (
 	"testing"
 )
 
+func TestSetMaxBulletsRejectsNonPositive(t *testing.T) {
+	prev := MaxBullets
+	t.Cleanup(func() { SetMaxBullets(prev) })
+
+	SetMaxBullets(0)
+	if MaxBullets != DefaultMaxBullets {
+		t.Fatalf("MaxBullets = %d after SetMaxBullets(0), want DefaultMaxBullets %d", MaxBullets, DefaultMaxBullets)
+	}
+	SetMaxBullets(50)
+	if MaxBullets != 50 {
+		t.Fatalf("MaxBullets = %d, want 50", MaxBullets)
+	}
+}
+
 func TestSanitizeBoundsStrings(t *testing.T) {
 	doc := Document{
 		Header: Header{
@@ -35,6 +49,10 @@ func TestSanitizeBoundsStrings(t *testing.T) {
 }
 
 func TestSanitizeCapsArrays(t *testing.T) {
+	prev := MaxBullets
+	SetMaxBullets(20)
+	t.Cleanup(func() { SetMaxBullets(prev) })
+
 	doc := Document{}
 	for i := 0; i < maxExperience+10; i++ {
 		doc.Experience = append(doc.Experience, ExperienceItem{Role: "eng"})
@@ -42,7 +60,7 @@ func TestSanitizeCapsArrays(t *testing.T) {
 	for i := 0; i < maxSkillGroups+10; i++ {
 		doc.Skills = append(doc.Skills, SkillGroup{Group: "g", Items: []string{"go"}})
 	}
-	bullets := make([]string, maxBullets+10)
+	bullets := make([]string, MaxBullets+10)
 	for i := range bullets {
 		bullets[i] = "did a thing"
 	}
@@ -57,7 +75,7 @@ func TestSanitizeCapsArrays(t *testing.T) {
 		t.Errorf("Skills not capped: %d", len(doc.Skills))
 	}
 	for _, e := range doc.Experience {
-		if len(e.Bullets) > maxBullets {
+		if len(e.Bullets) > MaxBullets {
 			t.Errorf("Bullets not capped: %d", len(e.Bullets))
 		}
 	}

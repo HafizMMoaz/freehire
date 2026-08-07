@@ -89,6 +89,7 @@ has not replaced it yet:
 | `GET /assistant/sessions/:id` | one conversation with its stored transcript, for replay |
 | `DELETE /assistant/sessions/:id` | remove a conversation and its transcript |
 | `POST /assistant/sessions/:id/messages` | run one turn, streamed as named SSE events |
+| `POST /assistant/sessions/:id/retry` | resume after a failed turn without appending another user message (same SSE stream) |
 | `POST /assistant/sessions/:id/autopilot` | run the tailoring pass unattended — same stream, server-owned brief and ceiling (**cookie-only**) |
 
 A session the caller does not own is a 404, never a 403, so ids stay unprobeable.

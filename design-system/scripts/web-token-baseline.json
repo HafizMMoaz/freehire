@@ -82,7 +82,7 @@
   "web/src/lib/server/og/card.ts": 3,
   "web/src/lib/server/og/company.ts": 3,
   "web/src/lib/server/og/shared.ts": 7,
-  "web/src/lib/tailor/ArtifactPanel.svelte": 2,
+  "web/src/lib/tailor/ArtifactPanel.svelte": 1,
   "web/src/lib/tailor/AtsDelta.svelte": 3,
   "web/src/lib/tailor/AutopilotReport.svelte": 2,
   "web/src/lib/tailor/CvHtmlPreview.svelte": 27,

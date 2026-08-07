@@ -134,6 +134,44 @@ func TestProfessionalWithholdsUnpublishableAtoms(t *testing.T) {
 	}
 }
 
+// Chronological re-sort must not widen what reaches a CV: agent_inferred stays bank-only
+// while free-form period labels still order roles correctly for Reset / stale-base reseed.
+func TestWorkHistory_ChronologyKeepsProvenanceGate(t *testing.T) {
+	s := seedBank(t, []Employment{
+		{Kind: KindJob, Company: "Northwind", Role: "Staff", Start: "October 2018", End: "2024"},
+		{Kind: KindJob, Company: "Fabrikam", Role: "Staff", Start: "2024", End: "2025"},
+	}, []Atom{
+		{Claim: "Confirmed at Fabrikam", Provenance: ProvenanceCVImport},
+		{Claim: "Model paraphrase at Fabrikam", Provenance: ProvenanceAgentInferred},
+		{Claim: "Confirmed at Northwind", Provenance: ProvenanceStatedInChat},
+		{Claim: "Unplaced model guess", Provenance: ProvenanceAgentInferred},
+		{Claim: "Unplaced confirmed cert", Provenance: ProvenanceManual},
+	}, []int{1, 1, 0, -1, -1})
+
+	hist, err := s.WorkHistory(context.Background(), owner)
+	if err != nil {
+		t.Fatalf("WorkHistory: %v", err)
+	}
+	if len(hist) != 3 {
+		t.Fatalf("roles = %d, want Fabrikam + Northwind + placeless bucket", len(hist))
+	}
+	if hist[0].Company != "Fabrikam" || hist[1].Company != "Northwind" {
+		t.Fatalf("order = [%s, %s], want Fabrikam then Northwind (not lexicographic label order)", hist[0].Company, hist[1].Company)
+	}
+	if len(hist[0].Highlights) != 1 || hist[0].Highlights[0] != "Confirmed at Fabrikam" {
+		t.Errorf("Fabrikam highlights = %q, want only the confirmed claim", hist[0].Highlights)
+	}
+	if len(hist[1].Highlights) != 1 || hist[1].Highlights[0] != "Confirmed at Northwind" {
+		t.Errorf("Northwind highlights = %q, want only the confirmed claim", hist[1].Highlights)
+	}
+	if hist[2].Company != "" || hist[2].Title != "" {
+		t.Errorf("placeless entry = %+v, want blank place", hist[2])
+	}
+	if len(hist[2].Highlights) != 1 || hist[2].Highlights[0] != "Unplaced confirmed cert" {
+		t.Errorf("placeless highlights = %q, want only the confirmed claim", hist[2].Highlights)
+	}
+}
+
 // Evidence with no place is still evidence. Dropping it would defeat the change's whole
 // claim — that the fit analysis begins to see what a candidate confirmed in chat — so it
 // is carried in an entry that names no place rather than a fabricated one.

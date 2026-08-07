@@ -49,7 +49,9 @@ type Store struct{ repo Repository }
 // NewStore builds a Store over an owner-scoped Repository.
 func NewStore(repo Repository) *Store { return &Store{repo: repo} }
 
-// ListEmployments returns the owner's places of work, current roles first.
+// ListEmployments returns the owner's places of work in reverse chronological order
+// (current roles first). Free-form period labels are sorted via a parsed key — not raw
+// `ORDER BY period_start` text order.
 func (s *Store) ListEmployments(ctx context.Context, userID int64) ([]Employment, error) {
 	rows, err := s.repo.ListEmployments(ctx, userID)
 	if err != nil {
@@ -59,6 +61,10 @@ func (s *Store) ListEmployments(ctx context.Context, userID int64) ([]Employment
 	for _, row := range rows {
 		out = append(out, employmentFromRow(row))
 	}
+	// SQL ORDER BY period_start is lexicographic on free-form labels ("October 2018"
+	// ranks above "2024"). Re-sort here so every bank reader (WorkHistory, seed,
+	// Professional) sees reverse-chronological roles.
+	sortEmploymentsChronological(out)
 	return out, nil
 }
 

@@ -71,6 +71,13 @@ func (h *cvHandlers) TailorCV(c *fiber.Ctx) error {
 	if bal := h.match.creditsBalance(c.Context(), userID); bal != nil && bal.Remaining < h.credits.Cost(credits.FeatureTailor) {
 		return creditsError(c, *bal)
 	}
+	// When the base CV is behind the latest résumé upload, refresh it from the seed before
+	// Tailor copies it into a new vacancy-bound row. Reload of an existing tailored copy
+	// still returns that copy unchanged (Tailor is idempotent); the base refresh is a no-op
+	// once updated_at catches the upload stamp.
+	if err := h.reseedBaseIfStaleVsUpload(c, userID); err != nil {
+		return err
+	}
 	base, tailored, err := h.cvStore.Tailor(c.Context(), userID, job.ID, tailoredCVTitle(job.Title), h.seedSource())
 	if errors.Is(err, cv.ErrNoResume) {
 		return fiber.NewError(fiber.StatusConflict, "add a résumé before tailoring")

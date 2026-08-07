@@ -107,6 +107,12 @@ class ProfileStore extends UserResource<UserProfile | null> {
     return this.#queue(() => this.#writeSkills((sets) => withoutAvoidedSkill(sets, skill)));
   }
 
+  /** Merge many skills into the profile in one write — what the tailor "Add new skills to
+   *  profile" control does after confirm. Same queue as single-skill edits. */
+  addSkills(skills: string[]): Promise<UserProfile> {
+    return this.#queue(() => this.#writeSkills((sets) => withSkills(sets, skills)));
+  }
+
   /** Re-save the profile with edited skill sets. Reads `#profile` at call time — inside the
    *  queue — so it sees whatever the preceding write applied rather than a copy that
    *  predates it. */

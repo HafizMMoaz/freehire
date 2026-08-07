@@ -143,3 +143,17 @@ read, and an operation addressing a path that has since disappeared is refused w
 The feed is capped at 100 revisions per CV, trimmed in the same transaction as the insert: this is
 an aid to the candidate's current work, not an archive, and each row carries two operation
 documents on the table behind every CV page.
+
+## Bullet ceiling
+
+`cv.MaxBullets` (default 20, override with `CV_MAX_BULLETS`) is enforced by `Sanitize`,
+which keeps the first N and drops the rest. Commit refuses that class of loss up front
+(`ErrListCap` / `bullet_cap`) so an insert into a full list cannot look like a successful
+add while trailing originals vanish. The guard is on by default; `Editor.SetRefuseListCap(false)`
+(env `CV_EDIT_ALLOW_BULLET_TRUNCATION=true` on the server) restores the old sanitize-and-drop
+behaviour without a code change.
+
+Sibling Sanitize `limit()`s — experience/education/skills/languages/projects/certifications
+counts, skill items, links — still drop trailing entries silently. Extending refuse to those
+lists is a follow-up if an incident appears; it is intentionally out of scope for the bullet
+fix.

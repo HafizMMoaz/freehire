@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -549,4 +550,151 @@ func TestTailorCVBootstrapIsIdempotentPerVacancy(t *testing.T) {
 	if debits != 1 {
 		t.Errorf("tailor debits = %d, want 1 — a reload is not a second purchase", debits)
 	}
+}
+
+// TestTailorCVBootstrap_ReseedsStaleBaseAfterUpload: base predates a newer résumé
+// upload → first tailor for a new vacancy refreshes base + tailored from the seed.
+func TestTailorCVBootstrap_ReseedsStaleBaseAfterUpload(t *testing.T) {
+	h, iss, pool := newTailorAPI(t)
+	app := buildTailorApp(h, iss)
+	ctx := context.Background()
+
+	user := seedAccount(t, pool, "stale-base@example.test", true)
+	tok, _ := iss.Issue(user, testTokenVersion)
+
+	// Old seed stamp + base content that predates the later upload.
+	oldAt := time.Now().Add(-2 * time.Hour).Truncate(time.Microsecond)
+	oldBlob, _ := json.Marshal(resumeextract.Structured{FullName: "Old Name", Summary: "before upload", Skills: []string{"Go"}})
+	if _, err := pool.Exec(ctx,
+		`UPDATE users SET resume_object_key = 'k', resume_uploaded_at = $2,
+		 resume_structured = $3, resume_structured_uploaded_at = $2, resume_structured_model = 'test'
+		 WHERE id = $1`, user, oldAt, oldBlob); err != nil {
+		t.Fatalf("seed old résumé: %v", err)
+	}
+	base, err := h.cvStore.Create(ctx, user, "My CV", cv.DefaultTemplateID, cv.Document{
+		Header:  cv.Header{FullName: "Old Name"},
+		Summary: "before upload",
+	})
+	if err != nil {
+		t.Fatalf("create base: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE cvs SET updated_at = $2 WHERE id = $1`, base.ID, oldAt); err != nil {
+		t.Fatalf("backdate base: %v", err)
+	}
+
+	// Newer upload + structure (seed source moves; cvs intentionally untouched).
+	newAt := time.Now().Truncate(time.Microsecond)
+	newBlob, _ := json.Marshal(resumeextract.Structured{FullName: "Ada Lovelace", Summary: "after upload", Skills: []string{"Go", "Kafka"}})
+	if _, err := pool.Exec(ctx,
+		`UPDATE users SET resume_uploaded_at = $2,
+		 resume_structured = $3, resume_structured_uploaded_at = $2 WHERE id = $1`,
+		user, newAt, newBlob); err != nil {
+		t.Fatalf("seed new résumé: %v", err)
+	}
+
+	jobID := seedJobSlug(t, pool, "stale-base-job")
+	seedAnalysis(t, h, user, jobID)
+
+	resp := doCV(t, app, fiber.MethodPost, "/api/v1/me/cvs/tailor", tok, tailorCVRequest{JobSlug: "stale-base-job"})
+	if resp.StatusCode != fiber.StatusCreated {
+		t.Fatalf("bootstrap = %d, want 201", resp.StatusCode)
+	}
+	var got struct {
+		Data tailorCVResponse `json:"data"`
+	}
+	json.NewDecoder(resp.Body).Decode(&got)
+	resp.Body.Close()
+
+	tailored, err := h.cvStore.Get(ctx, mustParseUUID(t, got.Data.TailorCVID), user)
+	if err != nil {
+		t.Fatalf("get tailored: %v", err)
+	}
+	if tailored.Document.Summary != "after upload" || tailored.Document.Header.FullName != "Ada Lovelace" {
+		t.Fatalf("tailored = %+v / %q, want after-upload seed", tailored.Document.Header, tailored.Document.Summary)
+	}
+	refreshed, ok, err := h.cvStore.BaseCV(ctx, user)
+	if err != nil || !ok {
+		t.Fatalf("BaseCV: ok=%v err=%v", ok, err)
+	}
+	if refreshed.ID != base.ID {
+		t.Fatalf("base id changed: %s → %s", base.ID, refreshed.ID)
+	}
+	if refreshed.Document.Summary != "after upload" {
+		t.Fatalf("base summary = %q, want after upload", refreshed.Document.Summary)
+	}
+
+	// Idempotent reload keeps the same tailored id and does not wipe content.
+	resp2 := doCV(t, app, fiber.MethodPost, "/api/v1/me/cvs/tailor", tok, tailorCVRequest{JobSlug: "stale-base-job"})
+	if resp2.StatusCode != fiber.StatusCreated {
+		t.Fatalf("reload = %d", resp2.StatusCode)
+	}
+	var got2 struct {
+		Data tailorCVResponse `json:"data"`
+	}
+	json.NewDecoder(resp2.Body).Decode(&got2)
+	resp2.Body.Close()
+	if got2.Data.TailorCVID != got.Data.TailorCVID {
+		t.Fatalf("reload minted new tailored CV")
+	}
+}
+
+func TestTailorCVBootstrap_KeepsBaseEditedAfterUpload(t *testing.T) {
+	h, iss, pool := newTailorAPI(t)
+	app := buildTailorApp(h, iss)
+	ctx := context.Background()
+
+	user := seedAccount(t, pool, "edited-base@example.test", true)
+	tok, _ := iss.Issue(user, testTokenVersion)
+
+	uploadAt := time.Now().Add(-time.Hour).Truncate(time.Microsecond)
+	blob, _ := json.Marshal(resumeextract.Structured{FullName: "From Seed", Summary: "from seed", Skills: []string{"Go"}})
+	if _, err := pool.Exec(ctx,
+		`UPDATE users SET resume_object_key = 'k', resume_uploaded_at = $2,
+		 resume_structured = $3, resume_structured_uploaded_at = $2 WHERE id = $1`,
+		user, uploadAt, blob); err != nil {
+		t.Fatalf("seed résumé: %v", err)
+	}
+
+	base, err := h.cvStore.Create(ctx, user, "My CV", cv.DefaultTemplateID, cv.Document{
+		Header:  cv.Header{FullName: "Hand Edited"},
+		Summary: "hand edited",
+	})
+	if err != nil {
+		t.Fatalf("create base: %v", err)
+	}
+	// Ensure updated_at is after the upload stamp.
+	if _, err := pool.Exec(ctx, `UPDATE cvs SET updated_at = $2 WHERE id = $1`,
+		base.ID, uploadAt.Add(time.Minute)); err != nil {
+		t.Fatalf("stamp base: %v", err)
+	}
+
+	jobID := seedJobSlug(t, pool, "edited-base-job")
+	seedAnalysis(t, h, user, jobID)
+
+	resp := doCV(t, app, fiber.MethodPost, "/api/v1/me/cvs/tailor", tok, tailorCVRequest{JobSlug: "edited-base-job"})
+	if resp.StatusCode != fiber.StatusCreated {
+		t.Fatalf("bootstrap = %d, want 201", resp.StatusCode)
+	}
+	var got struct {
+		Data tailorCVResponse `json:"data"`
+	}
+	json.NewDecoder(resp.Body).Decode(&got)
+	resp.Body.Close()
+
+	tailored, err := h.cvStore.Get(ctx, mustParseUUID(t, got.Data.TailorCVID), user)
+	if err != nil {
+		t.Fatalf("get tailored: %v", err)
+	}
+	if tailored.Document.Summary != "hand edited" {
+		t.Fatalf("tailored summary = %q, want hand edited (no forced reseed)", tailored.Document.Summary)
+	}
+}
+
+func mustParseUUID(t *testing.T, s string) uuid.UUID {
+	t.Helper()
+	id, err := uuid.Parse(s)
+	if err != nil {
+		t.Fatalf("uuid: %v", err)
+	}
+	return id
 }

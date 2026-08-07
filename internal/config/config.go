@@ -96,6 +96,10 @@ type Settings struct {
 	// zero uses the package default.
 	AssistantModel    string
 	AssistantMaxSteps int
+	// AssistantMaxPrompt is the max rune length of one user message to the
+	// assistant. Default 8000; override with ASSISTANT_MAX_PROMPT. Values below 1
+	// fall back to the default so a typo cannot erase the ceiling.
+	AssistantMaxPrompt int
 
 	// STTModel transcribes dictated audio, through the same gateway and key the LLM
 	// settings above name — an OpenAI-compatible endpoint serves /chat/completions and
@@ -129,6 +133,18 @@ type Settings struct {
 	// exec.LookPath(TYPST_BIN|"typst") so "disabled" means the binary is genuinely
 	// absent, not merely misconfigured — enforced at the cmd/server call site, not here.
 	TypstBin string
+
+	// CVEditAllowBulletTruncation restores the old Sanitize behaviour that keeps the
+	// first MaxBullets and silently drops the rest. Default false — Commit refuses
+	// that class of loss. Set CV_EDIT_ALLOW_BULLET_TRUNCATION=true as an ops kill
+	// switch (restart required). Named as the escape hatch so an unset Go bool keeps
+	// the safety on.
+	CVEditAllowBulletTruncation bool
+
+	// CVMaxBullets is the per-experience / per-project bullet ceiling (cv.MaxBullets).
+	// Default 20. Override with CV_MAX_BULLETS; values below 1 fall back to the
+	// package default so a typo cannot erase the ceiling.
+	CVMaxBullets int
 
 	// TracerLinkSalt keys the visitor hash of a click on a traced CV link. Empty disables the
 	// feature's consent toggle outright: without a salt there is no way to tell one visitor from
@@ -201,9 +217,13 @@ type OAuthCredentials struct {
 // environment (OAUTH_<PROVIDER>_CLIENT_ID / OAUTH_<PROVIDER>_CLIENT_SECRET).
 var oauthProviders = []string{"google", "github", "linkedin"}
 
+// defaultAssistantMaxPrompt is the rune ceiling on one user message when
+// ASSISTANT_MAX_PROMPT is unset or invalid.
+const defaultAssistantMaxPrompt = 8000
+
 // Load reads configuration from the environment, falling back to sensible defaults.
 func Load() Settings {
-	return Settings{
+	s := Settings{
 		LLM:            LoadLLM(),
 		Port:           env("PORT", "8080"),
 		DatabaseURL:    env("DATABASE_URL", "postgres://hire:hire@localhost:5432/hire?sslmode=disable"),
@@ -224,8 +244,9 @@ func Load() Settings {
 		LLMUserRPMLimit:     envInt("LLM_USER_RPM_LIMIT", 0),
 		LLMUserBudgetWindow: env("LLM_USER_BUDGET_WINDOW", "30d"),
 
-		AssistantModel:    os.Getenv("ASSISTANT_MODEL"),
-		AssistantMaxSteps: envInt("ASSISTANT_MAX_STEPS", 0),
+		AssistantModel:     os.Getenv("ASSISTANT_MODEL"),
+		AssistantMaxSteps:  envInt("ASSISTANT_MAX_STEPS", 0),
+		AssistantMaxPrompt: envInt("ASSISTANT_MAX_PROMPT", defaultAssistantMaxPrompt),
 
 		STTModel: os.Getenv("STT_MODEL"),
 
@@ -236,7 +257,9 @@ func Load() Settings {
 		S3AccessKey: os.Getenv("S3_ACCESS_KEY"),
 		S3SecretKey: os.Getenv("S3_SECRET_KEY"),
 
-		TypstBin: resolveTypstBin(env("TYPST_BIN", "typst")),
+		TypstBin:                    resolveTypstBin(env("TYPST_BIN", "typst")),
+		CVEditAllowBulletTruncation: envBool("CV_EDIT_ALLOW_BULLET_TRUNCATION", false),
+		CVMaxBullets:                envInt("CV_MAX_BULLETS", 20),
 
 		SentryDSN:         os.Getenv("SENTRY_DSN"),
 		SentryEnvironment: env("SENTRY_ENVIRONMENT", "development"),
@@ -257,6 +280,10 @@ func Load() Settings {
 		TracerLinkSalt:             os.Getenv("TRACER_LINK_SALT"),
 		ExtensionRedirectAllowlist: splitCSV(os.Getenv("EXTENSION_REDIRECT_ALLOWLIST")),
 	}
+	if s.AssistantMaxPrompt < 1 {
+		s.AssistantMaxPrompt = defaultAssistantMaxPrompt
+	}
+	return s
 }
 
 // splitCSV parses a comma-separated env value into trimmed, non-empty entries.

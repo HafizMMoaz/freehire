@@ -33,9 +33,28 @@ const (
 	maxLanguages      = 20
 	maxProjects       = 30
 	maxCertifications = 30
-	maxBullets        = 20
 	maxLinks          = 20
+
+	// DefaultMaxBullets is the per-experience / per-project bullet ceiling when
+	// CV_MAX_BULLETS is unset. Writers must refuse growth past MaxBullets rather
+	// than let Sanitize drop trailing content silently.
+	DefaultMaxBullets = 20
 )
+
+// MaxBullets is the hard ceiling on bullets per experience (and per project).
+// Sanitize keeps the first MaxBullets and drops the rest. Mutable so a deployment
+// can raise or lower it via CV_MAX_BULLETS without a code change; SetMaxBullets
+// is the only writer.
+var MaxBullets = DefaultMaxBullets
+
+// SetMaxBullets sets the per-role bullet ceiling. Values below 1 fall back to
+// DefaultMaxBullets — a typo must not erase the ceiling.
+func SetMaxBullets(n int) {
+	if n < 1 {
+		n = DefaultMaxBullets
+	}
+	MaxBullets = n
+}
 
 // Page margins are in inches. Sanitize clamps each side to this résumé-sane band and
 // defaults a zero (unset) side to defaultMargin, so a fresh skeleton and an old document
@@ -276,7 +295,7 @@ func sanitizeExperience(e ExperienceItem) (ExperienceItem, bool) {
 	e.Start = clip(e.Start, maxShortRunes)
 	e.End = clip(e.End, maxShortRunes)
 	e.Summary = clip(e.Summary, maxBulletRunes)
-	e.Bullets = limit(nonEmpty(mapStrings(e.Bullets, maxBulletRunes)), maxBullets)
+	e.Bullets = limit(nonEmpty(mapStrings(e.Bullets, maxBulletRunes)), MaxBullets)
 	e.Stack = limit(nonEmpty(mapStrings(e.Stack, maxShortRunes)), maxSkillItems)
 	keep := e.Role != "" || e.Company != "" || e.Location != "" ||
 		e.Start != "" || e.End != "" || e.Summary != "" || len(e.Bullets) > 0
@@ -309,7 +328,7 @@ func sanitizeLanguage(l Language) (Language, bool) {
 func sanitizeProject(p Project) (Project, bool) {
 	p.Name = clip(p.Name, maxShortRunes)
 	p.Link = clip(p.Link, maxShortRunes)
-	p.Bullets = limit(nonEmpty(mapStrings(p.Bullets, maxBulletRunes)), maxBullets)
+	p.Bullets = limit(nonEmpty(mapStrings(p.Bullets, maxBulletRunes)), MaxBullets)
 	return p, p.Name != "" || p.Link != "" || len(p.Bullets) > 0
 }
 

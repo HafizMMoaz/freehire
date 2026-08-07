@@ -2355,6 +2355,21 @@ ${BASE_URL}/auth/oauth/google/start`,
         responseExample: `{ "data": { "tailor_cv_id": "7d1a…", "base_cv_id": "0f2c…", "session_id": "s_9f…" } }`,
       },
       {
+        method: 'POST',
+        path: '/me/cvs/{id}/reset-from-resume',
+        auth: 'cookie',
+        summary: 'Rebuild this tailored CV from your résumé.',
+        description:
+          'Replaces the tailored document\'s content from the current résumé seed ' +
+          '(experience bank + structured extract) and refreshes your base CV from the ' +
+          'same seed. Keeps the same tailored id and agent session; preserves template ' +
+          'and typography on each row. 409 when the CV is not tailored or there is no ' +
+          'usable résumé seed. Upload alone does not do this — this is the explicit apply.',
+        pathParams: [{ name: 'id', type: 'string (uuid)', required: true, description: 'The tailored CV id.' }],
+        curl: `curl -X POST "${BASE_URL}/me/cvs/7d1a…/reset-from-resume" -b cookies.txt`,
+        responseExample: `{ "data": { "id": "7d1a…", "title": "Tailored for …", "template_id": "classic-ats", "document": { … } } }`,
+      },
+      {
         method: 'GET',
         path: '/me/cvs/{id}/tailor-context',
         auth: 'cookie-or-key',

@@ -47,6 +47,9 @@
     onPreviewRevision,
     onUndoRevision,
     onUndoRevisionRun,
+    onResetFromResume,
+    resetBusy = false,
+    resetError = '',
   }: {
     job: Job;
     analysis: Analysis | null;
@@ -71,6 +74,12 @@
      *  first, and the re-read that follows. */
     onUndoRevision: (revision: RevisionView) => Promise<void>;
     onUndoRevisionRun: (batchId: string) => Promise<void>;
+    /** Rebuild this tailored CV from the current résumé seed. Page owns confirm + flush. */
+    onResetFromResume?: () => Promise<void>;
+    /** True while a reset round-trip (or a turn) is in flight — disables the control. */
+    resetBusy?: boolean;
+    /** Last reset failure message; cleared by the page on a new attempt. */
+    resetError?: string;
   } = $props();
 
   const tabs: [Tab, string][] = [
@@ -193,7 +202,29 @@
 
   <div class="min-h-0 flex-1 overflow-auto">
     {#if tab === 'history'}
-      <RevisionHistory {revisions} onPreview={onPreviewRevision} onUndo={onUndoRevision} onUndoRun={onUndoRevisionRun} />
+      <div>
+        {#if onResetFromResume}
+          <div class="border-b border-border px-4 py-3">
+            <p class="text-xs leading-snug text-muted-foreground">
+              Replace this CV’s content from your current uploaded résumé / seed (and refresh
+              your base CV). Template and typography stay; this is not “undo last agent edit”
+              alone — History undo covers that. Edits are undoable from the history below.
+            </p>
+            <button
+              type="button"
+              disabled={resetBusy || autopilotBusy}
+              onclick={() => void onResetFromResume()}
+              class="mt-2 inline-flex items-center rounded-md border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {resetBusy ? 'Resetting…' : 'Reset Changes'}
+            </button>
+            {#if resetError}
+              <p class="mt-1.5 text-xs text-destructive">{resetError}</p>
+            {/if}
+          </div>
+        {/if}
+        <RevisionHistory {revisions} onPreview={onPreviewRevision} onUndo={onUndoRevision} onUndoRun={onUndoRevisionRun} />
+      </div>
     {:else if tab === 'jd'}
       <div class="p-4">
         {#if job.description}
@@ -219,7 +250,7 @@
              this surface as a whole. -->
         <div class="mb-3 rounded-lg border border-border bg-muted/30 px-2.5 py-2">
           <h3 class="text-sm font-semibold text-foreground">Fit analysis</h3>
-          <p class="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+          <p class="mt-0.5 text-xs leading-snug text-muted-foreground">
             A snapshot of your base profile against this vacancy. It does not move as you edit
             this CV — recompute it below to take it again.
           </p>

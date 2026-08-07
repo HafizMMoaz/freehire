@@ -101,6 +101,21 @@ export function openRehearsal(sessionId: string, onEvent: (e: TurnEvent) => void
   );
 }
 
+/**
+ * Resume after a failed turn without re-sending the user's message. The server continues
+ * from the existing transcript (healing any dangling tool calls), so the model's context
+ * is not polluted with a duplicate prompt.
+ */
+export function retryTurn(sessionId: string, onEvent: (e: TurnEvent) => void): Turn {
+  return streamTurn(
+    sessionId,
+    `${BASE}/sessions/${encodeURIComponent(sessionId)}/retry`,
+    {},
+    'could not retry the turn',
+    onEvent,
+  );
+}
+
 /** POST a turn and stream its frames. Shared by every way of starting one, so cancellation
  *  and frame decoding have a single implementation. */
 function streamTurn(

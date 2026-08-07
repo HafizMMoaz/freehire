@@ -116,6 +116,10 @@ type Editor struct {
 	policy Policy
 	gate   EvidenceGate
 	now    func() time.Time
+	// refuseListCap refuses a commit that would leave more than cv.MaxBullets
+	// non-empty bullets on one role — otherwise Sanitize silently drops the rest.
+	// On by default; SetRefuseListCap(false) is the ops escape hatch.
+	refuseListCap bool
 }
 
 // NewEditor builds the editor over its repository and the gate an agent's claims answer
@@ -126,7 +130,15 @@ type Editor struct {
 // who is the source the bank exists to record. It is what the candidate-only test editors
 // pass, and it is not a configuration an agent write path may be built on.
 func NewEditor(repo Repository, gate EvidenceGate) *Editor {
-	return &Editor{repo: repo, policy: DefaultPolicy(), gate: gate, now: time.Now}
+	return &Editor{repo: repo, policy: DefaultPolicy(), gate: gate, now: time.Now, refuseListCap: true}
+}
+
+// SetRefuseListCap turns the over-cap refuse on or off. When off, Sanitize may drop
+// trailing bullets again — the pre-refuse behaviour. Returns the editor so callers can
+// chain it at construction (e.g. NewEditor(...).SetRefuseListCap(cfg.On)).
+func (e *Editor) SetRefuseListCap(on bool) *Editor {
+	e.refuseListCap = on
+	return e
 }
 
 // Commit applies a batch and records it. The document and its revision are written in one
@@ -178,6 +190,16 @@ func (e *Editor) commit(ctx context.Context, tx Tx, cvID uuid.UUID, userID int64
 	// has: a change states what was asked for, and the sanitizer decides what is kept.
 	after := applied
 	after.Document.Sanitize()
+
+	// Sanitize used to silently keep the first MaxBullets and drop the rest. An
+	// agent insert into a full list then looked like a successful "add" while
+	// original trailing bullets vanished. Refuse that class of loss before Save
+	// unless an operator turned the guard off (SetRefuseListCap(false)).
+	if e.refuseListCap {
+		if err := refuseIfSanitizeDropsContent(applied, after); err != nil {
+			return cv.Meta{}, Revision{}, err
+		}
+	}
 
 	// Which inverse to store depends on whether the sanitizer moved anything.
 	//

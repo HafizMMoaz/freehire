@@ -17,6 +17,13 @@ is one piece of evidence at the grain of a CV bullet.
 - **Import is additive.** Employments match case-insensitively on `(company, role)` and only
   their BLANK fields are filled; atoms match on the normalized claim and duplicates are
   skipped. A user who uploads a trimmed one-page CV must not lose the bank they built.
+- **Listing is reverse-chronological in the domain, not via `ORDER BY period_start`.** Dates
+  stay free-form display labels (`"October 2018"`, `"2024"`). Lexicographic SQL order puts
+  month names above years; `ListEmployments` re-sorts with a best-effort parsed key
+  (`internal/experience/period_sort.go`) so WorkHistory / CV seed / Professional agree.
+  Placeless publishable atoms are appended **after** dated roles (empty company/title,
+  highlights only) — they are not a titled job. A role-only row with empty company is a
+  normal employment from import/edit, not that placeless path.
 - **`is_current` is never written by import.** A CV that still reads "Present" for a role
   the user has ended would otherwise resurrect it.
 - **Ownership is a `WHERE user_id = $1`.** An entry the caller does not own is reported as

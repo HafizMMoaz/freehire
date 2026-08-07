@@ -1,0 +1,66 @@
+---
+title: Tailor picks up your latest CV — and stops quiet edits
+date: 2026-08-07
+summary: Fresh tailor after upload, chronological work history, an explicit profile-skills control, Reset from your résumé, Continue for interrupted assistant turns, and no more silent bullet truncation.
+type: changelog
+tags:
+  - cv
+  - tailor
+  - profile
+  - ai
+draft: false
+---
+
+Several tailor fixes landed together. None of them rewrite an open tailored CV behind
+your back — each one either starts you from the right document, or asks before a lasting
+change.
+
+### Your latest résumé on a new job
+
+Uploading a new PDF used to leave a quiet trap: tailor for a **new** job could still
+copy an older base CV until you found **Reset Changes**. That first open now checks
+whether your base is behind the upload. When it is, freehire refreshes the base from
+your current résumé seed, then opens the tailored copy from that — so the workspace
+matches what you just uploaded without an extra step.
+
+An open tailor for a job you already started still behaves as before. Upload alone does
+not rewrite it.
+
+### Reset Changes
+
+**Reset Changes** (History tab) rebuilds the open tailored CV — and your base — from the
+current uploaded résumé / experience-bank seed. Template and typography stay. It is not
+“undo the last agent edit” alone; History undo still covers that. Reset does not touch
+your search profile.
+
+### Work history in real date order
+
+Roles seeded from your experience bank are ordered by real time — current roles first,
+then newest to oldest — even when the printed dates are free-form labels like
+`October 2018` and `2024`. Existing tailored CVs pick up the order on Reset (or on that
+fresh first bootstrap after upload).
+
+### Skills go to the profile only when you say so
+
+Skills you add while tailoring stay on that CV until you choose otherwise. When the open
+document lists skills that are not yet on your search profile, the preview toolbar
+(next to zoom) offers **Add N skills to profile**. Confirm, and they merge into the
+profile that drives filters and match. Saving, downloading the PDF, and Reset never do
+that quietly.
+
+### No more silent bullet truncation
+
+If a role or project is already at the per-role bullet ceiling, a new insert past that
+cap is **refused** instead of Sanitize quietly dropping the oldest bullets. The tailor
+UI surfaces the cap when that happens. The default ceiling stays **20** bullets per
+role; deployments can raise it with `CV_MAX_BULLETS`.
+
+### Continue an interrupted assistant turn
+
+If a tailor assistant turn stops mid-flight (connection drop, closed tab), the chat can
+**Continue** from where it left off instead of stranding a half-applied run. Continue
+does **not** append another copy of your request — the transcript already holds the
+prompt and any partial tool work — so the model is not asked the same thing twice.
+Half-finished tool calls from the interrupted turn are healed on the next history
+rebuild (the same path every other turn uses). You still own Undo for anything already
+written to the CV.
