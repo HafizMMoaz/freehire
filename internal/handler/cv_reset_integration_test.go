@@ -5,6 +5,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 
 	"github.com/strelov1/freehire/internal/auth"
 	"github.com/strelov1/freehire/internal/cv"
+	"github.com/strelov1/freehire/internal/experience"
 	"github.com/strelov1/freehire/internal/resumeextract"
 )
 
@@ -232,5 +234,78 @@ func TestResetCVFromResume_DoesNotChangeProfile(t *testing.T) {
 	}
 	if len(skills) != 1 || skills[0] != "go" {
 		t.Fatalf("profile skills = %v, want [go] unchanged (Reset must not merge)", skills)
+	}
+}
+
+// A bank role with more banked, publishable claims than cv.MaxBullets is exactly the seed
+// CommitDocument used to truncate silently (it sanitizes before diffing, so the refuse
+// guard never saw the overflow). Reset must refuse instead — and because the tailored
+// target now commits before the base refresh, a refusal must leave BOTH untouched rather
+// than a base already rewritten under a request that reports failure.
+func TestResetCVFromResume_RefusesWhenTheBankSeedExceedsTheBulletCap(t *testing.T) {
+	prevMax := cv.MaxBullets
+	cv.SetMaxBullets(20)
+	t.Cleanup(func() { cv.SetMaxBullets(prevMax) })
+
+	h, iss, pool := newTailorAPI(t)
+	bank := experience.NewStore(experience.NewQueriesRepository(h.queries))
+	h.seeder = bankedSeeder{resume: h.resume, bank: bank}
+
+	userID := seedAccount(t, pool, "overcap-reset@example.com", false)
+	tok, _ := iss.Issue(userID, 1)
+	ctx := context.Background()
+
+	emp, err := bank.CreateEmployment(ctx, userID, experience.Employment{
+		Kind: experience.KindJob, Company: "Neon", Role: "Staff Engineer",
+		Start: "2018", End: "2024",
+	})
+	if err != nil {
+		t.Fatalf("CreateEmployment: %v", err)
+	}
+	for i := 0; i < cv.MaxBullets+1; i++ {
+		if _, err := bank.AddAtom(ctx, userID, experience.Atom{
+			EmploymentID: &emp.ID,
+			Claim:        fmt.Sprintf("Banked achievement %d", i+1),
+			Provenance:   experience.ProvenanceStatedInChat,
+		}); err != nil {
+			t.Fatalf("AddAtom %d: %v", i, err)
+		}
+	}
+
+	store := h.cvStore
+	base, err := store.Create(ctx, userID, "My CV", cv.DefaultTemplateID, cv.Document{
+		Header: cv.Header{FullName: "Old Base"}, Summary: "old base summary",
+	})
+	if err != nil {
+		t.Fatalf("create base: %v", err)
+	}
+	jobID := seedJobSlug(t, pool, "overcap-reset-job")
+	tailored, err := store.CreateTailored(ctx, userID, jobID, "Tailored for Role", cv.DefaultTemplateID, cv.Document{
+		Header: cv.Header{FullName: "Old Tailored"}, Summary: "old tailored summary",
+	})
+	if err != nil {
+		t.Fatalf("create tailored: %v", err)
+	}
+
+	app := buildResetApp(h, iss)
+	resp := doCV(t, app, fiber.MethodPost, "/api/v1/me/cvs/"+tailored.ID.String()+"/reset-from-resume", tok, nil)
+	if resp.StatusCode != fiber.StatusConflict {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 409: %s", resp.StatusCode, body)
+	}
+
+	gotTailored, err := store.Get(ctx, tailored.ID, userID)
+	if err != nil {
+		t.Fatalf("get tailored: %v", err)
+	}
+	if gotTailored.Document.Summary != "old tailored summary" {
+		t.Fatalf("tailored summary = %q, want untouched by a refused reset", gotTailored.Document.Summary)
+	}
+	gotBase, ok, err := store.BaseCV(ctx, userID)
+	if err != nil || !ok {
+		t.Fatalf("BaseCV: ok=%v err=%v", ok, err)
+	}
+	if gotBase.ID != base.ID || gotBase.Document.Summary != "old base summary" {
+		t.Fatalf("base = %+v, want untouched — the target failed before the base refresh ran", gotBase.Document)
 	}
 }

@@ -345,6 +345,17 @@ func (e *Editor) CommitDocument(ctx context.Context, cvID uuid.UUID, userID int6
 		if err != nil {
 			return err
 		}
+		// Refuse BEFORE Sanitize can truncate what the caller sent. Sanitize below keeps the
+		// first cv.MaxBullets and drops the rest; checking after it ran would see a document
+		// that already lost the excess and could never trip ErrListCap. This is the same
+		// guard commit() applies to an agent's Ops batch, extended to a whole-document save —
+		// PATCH /me/cvs/:id (the editor's autosave) and Reset from résumé both go through
+		// here, and a pasted section or a bank seed can carry more than the cap.
+		if e.refuseListCap {
+			if err := refuseIfSanitizeDropsContent(next, State{}); err != nil {
+				return err
+			}
+		}
 		// Sanitize the incoming state first, so the diff is against what would be stored
 		// rather than against what was sent — otherwise a value the sanitizer clamps would
 		// show up as an edit on every save.

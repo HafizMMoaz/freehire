@@ -10,6 +10,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -510,5 +512,54 @@ func TestEveryEntryPointLeavesARevision(t *testing.T) {
 	}
 	if after := count(); after != before+1 {
 		t.Errorf("the template pick left %d revisions, want one more than %d", after, before)
+	}
+}
+
+// UpdateCV (PUT /me/cvs/:id, the editor's autosave) goes through CommitDocument, which used
+// to sanitize the incoming document before diffing — so an over-cap experience was silently
+// truncated to cv.MaxBullets with no error, the exact loss cv_edit's ErrListCap refuses for
+// an agent's insert. This pins that the whole-document save path refuses it too.
+func TestUpdateCV_RefusesAWholeDocumentSaveOverTheBulletCap(t *testing.T) {
+	pool := startPostgres(t)
+	queries := db.New(pool)
+	if _, err := pool.Exec(context.Background(), "TRUNCATE cvs, users RESTART IDENTITY CASCADE"); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	iss := auth.NewIssuer("test-secret", time.Hour)
+	h := &cvHandlers{queries: queries, jobReader: queries,
+		cvStore: cv.NewStore(cv.NewQueriesRepository(queries)),
+		editor:  cvedit.NewEditor(cvedit.NewRepository(pool, queries), bankGate{bank: experience.NewStore(experience.NewQueriesRepository(queries))}),
+		resume:  resume.New(nil, resume.NewQueriesRepository(queries))}
+	app := buildCVApp(h, iss)
+	tok, _ := iss.Issue(seedAccount(t, pool, "bulletcap@example.test", true), testTokenVersion)
+
+	resp := doCV(t, app, fiber.MethodPost, "/api/v1/me/cvs", tok, createCVRequest{Title: "General"})
+	var created struct {
+		Data cvResponse `json:"data"`
+	}
+	decodeJSON(t, resp, &created)
+	id := created.Data.ID
+
+	bullets := make([]string, cv.MaxBullets+1)
+	for i := range bullets {
+		bullets[i] = fmt.Sprintf("Pasted bullet %d", i+1)
+	}
+	overCap := cv.Document{
+		Header:     cv.Header{FullName: "Ada Lovelace"},
+		Experience: []cv.ExperienceItem{{Role: "Engineer", Company: "Acme", Bullets: bullets}},
+	}
+	upPath := "/api/v1/me/cvs/" + id
+	putResp := doCV(t, app, fiber.MethodPut, upPath, tok, updateCVRequest{Title: "General", Document: overCap})
+	if putResp.StatusCode != fiber.StatusConflict {
+		body, _ := io.ReadAll(putResp.Body)
+		t.Fatalf("over-cap save = %d, want 409: %s", putResp.StatusCode, body)
+	}
+
+	var got struct {
+		Data cvResponse `json:"data"`
+	}
+	decodeJSON(t, doCV(t, app, fiber.MethodGet, upPath, tok, nil), &got)
+	if len(got.Data.Document.Experience) != 0 {
+		t.Fatalf("a refused save must not have written anything: %+v", got.Data.Document.Experience)
 	}
 }

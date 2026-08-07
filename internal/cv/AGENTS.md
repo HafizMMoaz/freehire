@@ -145,7 +145,15 @@ Three things that follow, and are easy to get backwards:
 current résumé seed (`bankedSeeder`: experience bank + `resume_structured`) and refreshes the
 base CV from the same seed. Same tailored id and agent session; template/margins/style on each
 row are preserved. Upload alone does **not** write `cvs` — it only refreshes the seed source;
-this endpoint is the explicit apply. 409 when the target is not tailored or the seed is unusable.
+this endpoint is the explicit apply. 409 when the target is not tailored, the seed is unusable,
+or the seed itself exceeds the bullet ceiling (see `internal/cvedit/AGENTS.md`).
+
+The tailored copy commits **before** the base refresh, not after: these are two separate
+`CommitDocument` calls, not one transaction, so ordering decides which one a mid-request
+failure leaves stale. Committing the caller's actual target first means a refused/failed
+write touches nothing at all; a failure in the base refresh after that leaves only the base
+stale (self-heals on the next bootstrap freshness check or Reset) rather than a request that
+reports failure while having silently rewritten a CV nobody asked to touch.
 
 **Bootstrap freshness:** `POST /me/cvs/tailor` refreshes a base whose `updated_at` is strictly
 before `resume_uploaded_at` (when the seed is usable) before copying into a **new** tailored

@@ -44,10 +44,12 @@ func (h *cvHandlers) ResetCVFromResume(c *fiber.Ctx) error {
 	}
 	seeded := cv.Seed(st)
 
-	if err := h.reseedBaseFromSeed(c, userID, seeded); err != nil {
-		return err
-	}
-
+	// The requested target commits first: if the tailored copy is what the seed cannot
+	// satisfy (e.g. a role over the bullet cap refuses the whole-document write), nothing
+	// is written at all. Refreshing the base second means a failure there after the target
+	// already succeeded leaves the base merely stale — the same state a plain page reload
+	// would find it in before this call — rather than a request that "failed" while having
+	// silently rewritten a CV the caller did not ask to touch.
 	_, _, err = h.editor.CommitDocument(c.Context(), id, userID,
 		cvedit.ActorCandidate, cvedit.OriginImport,
 		applySeedContent(cvedit.State{
@@ -57,6 +59,10 @@ func (h *cvHandlers) ResetCVFromResume(c *fiber.Ctx) error {
 		}, seeded))
 	if err != nil {
 		return mapCVError(err)
+	}
+
+	if err := h.reseedBaseFromSeed(c, userID, seeded); err != nil {
+		return err
 	}
 
 	out, err := h.cvStore.Get(c.Context(), id, userID)
