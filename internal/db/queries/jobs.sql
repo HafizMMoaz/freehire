@@ -1124,8 +1124,12 @@ WHERE id = sqlc.arg(id) AND liveness_strikes <> 0;
 -- (broad multi-industry ATS crawls: painters, stockers, drivers), so the LLM spend was
 -- not buying the coverage it cost. Also requires a non-empty description: the LLM has
 -- nothing to extract from a blank one regardless of category, and a 2026-08-06 prod
--- sweep found ~53K such rows already sitting in the queue for no reason. Idempotent via
--- the outbox's UNIQUE (job_id, target_version). Run in the same transaction as the
+-- sweep found ~53K such rows already sitting in the queue for no reason. Also requires
+-- duplicate_of IS NULL, matching EnqueuePendingJobs: the write path's own dedup only
+-- sets duplicate_of on the INSERT that first clusters a repost, so a later recrawl of
+-- an already-deduped job reaches this call as an UPDATE and would otherwise queue a
+-- row ClaimEnrichmentBatch's duplicate_of IS NULL filter can never claim. Idempotent
+-- via the outbox's UNIQUE (job_id, target_version). Run in the same transaction as the
 -- job's UpsertJob so a newly ingested job is queued atomically with its write.
 INSERT INTO enrichment_outbox (job_id, target_version)
 SELECT id, sqlc.arg(target_version)::int
@@ -1134,6 +1138,7 @@ WHERE id = sqlc.arg(job_id)::bigint
   AND (enriched_at IS NULL OR enrichment_version < sqlc.arg(target_version)::int)
   AND is_tech IS TRUE
   AND description <> ''
+  AND duplicate_of IS NULL
 ON CONFLICT (job_id, target_version) DO NOTHING;
 
 -- name: SetJobEnrichment :exec

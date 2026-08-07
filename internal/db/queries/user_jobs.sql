@@ -258,7 +258,7 @@ SELECT u.user_id, u.job_id, u.viewed_at,
 -- Only the geography arrives raw: the wire value is a dict-then-LLM hybrid, so both sides have
 -- to reach the projection. They are pulled out of the enrichment by key instead of shipping
 -- the whole JSONB.
-SELECT jobs.id, jobs.public_slug, jobs.title, jobs.company_slug, jobs.closed_at,
+SELECT jobs.id, jobs.public_slug, jobs.title, jobs.company, jobs.company_slug, jobs.closed_at,
        jobs.work_mode, jobs.seniority, jobs.employment_type,
        jobs.countries, jobs.regions, jobs.skills, jobs.collections,
        jobs.posted_at, jobs.created_at,

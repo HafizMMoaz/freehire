@@ -73,13 +73,15 @@ func (f *fakeQueries) ClearUserLLMKey(_ context.Context, arg db.ClearUserLLMKeyP
 	return nil
 }
 
-// routedGateway answers /key/generate with successive secrets and records every deletion,
-// so a test can prove an abandoned key was cleaned up rather than orphaned.
+// routedGateway answers /key/generate with successive secrets and records every deletion
+// and block, so a test can prove an abandoned key was cleaned up (or, for a refused live
+// credential, merely retired) rather than orphaned.
 type routedGateway struct {
 	mu       sync.Mutex
 	mints    []string
 	minted   int
 	deleted  []string
+	blocked  []string
 	mintFail bool
 }
 
@@ -109,6 +111,14 @@ func (g *routedGateway) server(t *testing.T) *httptest.Server {
 			_ = json.Unmarshal(raw, &body)
 			g.deleted = append(g.deleted, body.Keys...)
 			_, _ = io.WriteString(w, `{"deleted_keys":[]}`)
+		case "/key/block":
+			var body struct {
+				Key string `json:"key"`
+			}
+			raw, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(raw, &body)
+			g.blocked = append(g.blocked, body.Key)
+			_, _ = io.WriteString(w, `{}`)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -225,7 +235,11 @@ func TestNilResolverIsUnattributed(t *testing.T) {
 // Forget is what a rejected credential triggers. Clearing the row comes first: that is
 // what lets the very next call mint a working replacement, and the gateway delete is
 // mopping up something it has usually already forgotten.
-func TestForgetClearsTheRowAndRevokesTheKey(t *testing.T) {
+// Forget must BLOCK, not delete: a refused credential looks identical whether the gateway
+// has simply forgotten it (the ordinary case) or a concurrent Revoke just blocked it for
+// account deletion — and only the latter has spend history worth keeping. Deleting on that
+// ambiguity would occasionally erase exactly the history Revoke blocked the key to preserve.
+func TestForgetClearsTheRowAndBlocksTheKey(t *testing.T) {
 	q := newFakeQueries()
 	q.stored[7] = "sk-stale"
 	g := &routedGateway{}
@@ -236,8 +250,11 @@ func TestForgetClearsTheRowAndRevokesTheKey(t *testing.T) {
 	if q.stored[7] != "" {
 		t.Errorf("stored %q, want the stale credential cleared so the next call re-mints", q.stored[7])
 	}
-	if len(g.deleted) != 1 || g.deleted[0] != "sk-stale" {
-		t.Errorf("deleted %v, want the stale credential revoked", g.deleted)
+	if len(g.blocked) != 1 || g.blocked[0] != "sk-stale" {
+		t.Errorf("blocked %v, want the stale credential blocked", g.blocked)
+	}
+	if len(g.deleted) != 0 {
+		t.Errorf("deleted %v, want nothing deleted — Forget must not erase spend history", g.deleted)
 	}
 }
 

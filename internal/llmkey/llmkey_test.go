@@ -154,45 +154,6 @@ func TestMintReportsAnEmptyKeyAsAnError(t *testing.T) {
 	}
 }
 
-func TestSpendReadsThePeriodBack(t *testing.T) {
-	srv, got := gateway(t, http.StatusOK, `{"info":{"spend":1.25,"max_budget":10,"budget_reset_at":"2026-09-01T00:00:00Z"}}`)
-	c := New(Config{BaseURL: srv.URL, AdminKey: "sk-admin"})
-
-	spend, err := c.Spend(context.Background(), "sk-user")
-	if err != nil {
-		t.Fatalf("Spend: %v", err)
-	}
-	if spend.Amount != 1.25 || spend.Limit != 10 {
-		t.Errorf("Spend = %+v, want the amount and the ceiling", spend)
-	}
-	if spend.ResetsAt.IsZero() || spend.ResetsAt.Year() != 2026 || spend.ResetsAt.Month() != 9 {
-		t.Errorf("ResetsAt = %v, want the parsed reset instant", spend.ResetsAt)
-	}
-	if got.path != "/key/info" || got.method != http.MethodGet {
-		t.Errorf("called %s %s, want GET /key/info", got.method, got.path)
-	}
-	// The read authenticates AS the key, and the key must never travel in the URL: the
-	// gateway logs the request URI, so a query parameter would file a live credential
-	// into an access log in plaintext on every usage read.
-	if got.query != "" {
-		t.Errorf("query = %q, want none — a credential in a URL lands in access logs", got.query)
-	}
-	if got.authz != "Bearer sk-user" {
-		t.Errorf("authorization = %q, want the caller's own key, not the administrator's", got.authz)
-	}
-}
-
-// A self-read is authenticated by the very key being asked about, so a refusal means the
-// gateway has forgotten it — the signal to mint a replacement.
-func TestSpendReportsARefusedSelfReadAsAnUnknownKey(t *testing.T) {
-	srv, _ := gateway(t, http.StatusUnauthorized, `{"error":"invalid key"}`)
-	c := New(Config{BaseURL: srv.URL, AdminKey: "sk-admin"})
-
-	if _, err := c.Spend(context.Background(), "sk-forgotten"); !errors.Is(err, ErrUnknownKey) {
-		t.Errorf("error = %v, want ErrUnknownKey so the caller can re-mint", err)
-	}
-}
-
 // The same status on an ADMINISTRATIVE call means our own admin credential is wrong.
 // Reading that as a stale user key would turn one bad environment variable into a
 // re-minting storm across every account — so the two must never be conflated.
@@ -206,33 +167,6 @@ func TestARefusedAdminCallIsNotAnUnknownUserKey(t *testing.T) {
 	}
 	if !errors.Is(err, ErrUpstream) {
 		t.Errorf("error = %v, want it to wrap ErrUpstream", err)
-	}
-}
-
-// A gateway that reports no ceiling and no reset is the default deployment, not an error.
-func TestSpendToleratesAnAbsentCeiling(t *testing.T) {
-	srv, _ := gateway(t, http.StatusOK, `{"info":{"spend":0.5,"max_budget":null,"budget_reset_at":null}}`)
-	c := New(Config{BaseURL: srv.URL, AdminKey: "sk-admin"})
-
-	spend, err := c.Spend(context.Background(), "sk-user")
-	if err != nil {
-		t.Fatalf("Spend: %v", err)
-	}
-	if spend.Amount != 0.5 || spend.Limit != 0 || !spend.ResetsAt.IsZero() {
-		t.Errorf("Spend = %+v, want the amount with an absent ceiling and reset", spend)
-	}
-}
-
-// The gateway answers 404 for a key it does not know. That is the signal to re-mint, and
-// it has to be distinguishable from "the gateway is down" — one heals itself, the other
-// must not throw away a good credential.
-func TestSpendReportsAnUnknownKeyDistinctly(t *testing.T) {
-	srv, _ := gateway(t, http.StatusNotFound, `{"error":"key not found"}`)
-	c := New(Config{BaseURL: srv.URL, AdminKey: "sk-admin"})
-
-	_, err := c.Spend(context.Background(), "sk-forgotten")
-	if !errors.Is(err, ErrUnknownKey) {
-		t.Errorf("error = %v, want ErrUnknownKey so the caller can re-mint", err)
 	}
 }
 
@@ -370,9 +304,6 @@ func TestNilClientIsSafe(t *testing.T) {
 	var c *Client
 	if _, err := c.Mint(context.Background(), 1); err == nil {
 		t.Error("Mint on an unconfigured gateway must fail rather than return a usable key")
-	}
-	if _, err := c.Spend(context.Background(), "sk-user"); err == nil {
-		t.Error("Spend on an unconfigured gateway must fail rather than report a false zero")
 	}
 	if err := c.Delete(context.Background(), "sk-user"); err != nil {
 		t.Errorf("Delete on an unconfigured gateway = %v, want nil — there is nothing to erase", err)

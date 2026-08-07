@@ -129,12 +129,19 @@ func (r *Resolver) mint(ctx context.Context, userID int64) string {
 	}
 }
 
-// Forget drops a credential the gateway no longer recognises so the next call mints a
-// replacement. Nil-safe.
+// Forget drops a credential the gateway refused so the next call mints a replacement.
+// Nil-safe.
 //
-// The row is cleared first: that is what makes the very next call work. Revoking at the
-// gateway is mopping up something it has usually already forgotten, which is exactly why
-// this is called at all.
+// The row is cleared first: that is what makes the very next call work. The gateway side
+// BLOCKS rather than deletes, and deliberately does not distinguish why the refusal
+// happened: a credential the gateway has plainly forgotten (the ordinary case) and one
+// this same account's Revoke just BLOCKED moments ago for account deletion look
+// identical from here — both answer 401. Deleting on that ambiguity would occasionally
+// erase the very spend history Revoke blocked the key specifically to keep, if a
+// request already in flight (a second tab, a running assistant turn) gets refused in the
+// window between the block and the row's own removal by the deletion cascade. Blocking an
+// already-blocked or already-unknown key is a safe no-op either way (Client.Block), so
+// there is no case where the gentler action costs anything Delete would have bought.
 func (r *Resolver) Forget(ctx context.Context, userID int64, secret string) {
 	if r == nil || r.q == nil {
 		return
@@ -146,7 +153,9 @@ func (r *Resolver) Forget(ctx context.Context, userID int64, secret string) {
 	if err != nil {
 		log.Printf("llmkey: clear credential for user %d: %v", userID, err)
 	}
-	r.revoke(ctx, secret)
+	if err := r.gateway.Block(ctx, secret); err != nil {
+		log.Printf("llmkey: block refused credential: %v", err)
+	}
 }
 
 // Revoke stops this account's credential from spending, without erasing it and without

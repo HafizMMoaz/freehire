@@ -199,14 +199,15 @@ func (d justJoinDetail) apply(base Job) Job {
 }
 
 // justJoinSkills canonicalizes the required skills through the skilltag dictionary, keeping
-// only resolved technologies. The names are joined into one blob so skilltag.Parse applies the
-// same matching it uses on a description.
+// only resolved technologies. Canonicalize, not Parse: these are already-discrete asserted
+// names from a structured field, not prose to mine, so the corroboration rule Parse applies
+// to free text must not drop an unambiguous single-word name for lack of a second strong term.
 func justJoinSkills(skills []justJoinSkill) []string {
 	names := make([]string, 0, len(skills))
 	for _, s := range skills {
 		names = append(names, s.Name)
 	}
-	return skilltag.Parse(strings.Join(names, " "))
+	return skilltag.Canonicalize(names)
 }
 
 // justJoinSeniority maps justjoin's experience level to freehire's seniority vocabulary.

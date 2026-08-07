@@ -27,7 +27,11 @@ func LoadEmbed() Embed {
 		BatchSize:    envInt("EMBED_BATCH_SIZE", 500),
 		LeaseSeconds: envInt("EMBED_LEASE_SECONDS", 300),
 		MaxAttempts:  envInt("EMBED_MAX_ATTEMPTS", 3),
-		CallTimeout:  time.Duration(envInt("EMBED_CALL_TIMEOUT_SECONDS", 300)) * time.Second,
+		// 600s, matching SEARCH_DRAIN_CALL_TIMEOUT_SECONDS: both push into a Meili index
+		// whose cost is a fixed whole-index re-merge, so a normal-but-slow batch under load
+		// is the same failure class the search-drain outage was raised to 600s to absorb —
+		// see internal/config/search_drain.go and Runner.skipOnTimeout in both packages.
+		CallTimeout: time.Duration(envInt("EMBED_CALL_TIMEOUT_SECONDS", 600)) * time.Second,
 	}
 	// A non-positive batch size would make the claim's LIMIT 0 (silently no-op) or feed a
 	// negative LIMIT to Postgres; floor it so the worker always makes progress.

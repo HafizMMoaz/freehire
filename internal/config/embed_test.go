@@ -7,7 +7,9 @@ func TestLoadEmbed_defaultsAndOverrides(t *testing.T) {
 		t.Setenv(k, "")
 	}
 	got := LoadEmbed()
-	if got.BatchSize != 500 || got.LeaseSeconds != 300 || got.MaxAttempts != 3 || got.CallTimeout.Seconds() != 300 {
+	// LeaseSeconds' own default (300) is floored up to CallTimeout's default (600): a lease
+	// shorter than one batch's processing would re-claim it mid-flight.
+	if got.BatchSize != 500 || got.LeaseSeconds != 600 || got.MaxAttempts != 3 || got.CallTimeout.Seconds() != 600 {
 		t.Errorf("defaults wrong: %+v", got)
 	}
 

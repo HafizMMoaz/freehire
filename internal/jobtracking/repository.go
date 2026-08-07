@@ -319,7 +319,7 @@ func (r *QueriesRepository) ListInteractions(
 		card := jobview.NewCard(jobview.CardInput{
 			PublicSlug:     row.PublicSlug,
 			Title:          row.Title,
-			Company:        row.CompanySlug,
+			Company:        row.Company,
 			ClosedAt:       pgconv.TimePtr(row.ClosedAt),
 			WorkMode:       row.WorkMode,
 			Seniority:      row.Seniority,

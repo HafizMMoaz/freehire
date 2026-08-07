@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -97,6 +98,35 @@ func (s boardKeyedSource) Fetch(_ context.Context, e sources.CompanyEntry) ([]so
 		return nil, errors.New("board down")
 	}
 	return []sources.Job{{ExternalID: "1", Title: "Dev", Company: e.Company}}, nil
+}
+
+// hydratingSpySource implements sources.HydratingSource and counts FetchNew calls per
+// board, so a test can prove a board the recovery probe answered is not hydrated a
+// second time by the main loop — the exact cost the real HydratingSource adapters (e.g.
+// workday) pay for twice when a probe's fetch is discarded instead of reused.
+type hydratingSpySource struct {
+	provider string
+	mu       sync.Mutex
+	calls    map[string]int // board -> FetchNew call count
+}
+
+func (s *hydratingSpySource) Provider() string { return s.provider }
+func (s *hydratingSpySource) Fetch(ctx context.Context, e sources.CompanyEntry) ([]sources.Job, error) {
+	return s.FetchNew(ctx, e, func(string) bool { return false })
+}
+func (s *hydratingSpySource) FetchNew(_ context.Context, e sources.CompanyEntry, _ func(string) bool) ([]sources.Job, error) {
+	s.mu.Lock()
+	if s.calls == nil {
+		s.calls = map[string]int{}
+	}
+	s.calls[e.Board]++
+	s.mu.Unlock()
+	return []sources.Job{{ExternalID: "1", Title: "Dev", Company: e.Company}}, nil
+}
+func (s *hydratingSpySource) callsFor(board string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls[board]
 }
 
 // spySource counts Fetch calls (and can error), so a test can tell a probe fetch from a
@@ -229,6 +259,54 @@ func TestRecoverProbeTriesPastDeadBoard(t *testing.T) {
 	}
 	if len(health.successes) != 1 || health.successes[0] != "join/live" {
 		t.Errorf("successes = %v, want [join/live]", health.successes)
+	}
+}
+
+// TestRecoverProbeReusesTheAnsweringBoardsFetchInsteadOfCrawlingItTwice guards the exact
+// gap the two tests above leave open: both use a Source whose Fetch is a cheap single
+// call, so they cannot tell a probe fetch from a genuine double-crawl. A HydratingSource
+// (workday and friends) pays for FetchNew with a full paginated re-crawl plus per-posting
+// detail hydration — running it once to answer the probe and once more, moments later,
+// for the same board is the double-crawl this test would have caught.
+func TestRecoverProbeReusesTheAnsweringBoardsFetchInsteadOfCrawlingItTwice(t *testing.T) {
+	src := &hydratingSpySource{provider: "workday"}
+	health := &fakeHealth{cooldowns: map[string]time.Time{
+		"workday/acme": time.Now().Add(24 * time.Hour), // probed first (soonest to expire, tie-break by name)
+		"workday/beta": time.Now().Add(24 * time.Hour),
+	}}
+	store := &fakeStore{}
+	r := Runner{Registry: registry(src), Store: store, BoardHealth: health}
+
+	stats, err := r.Run(context.Background(), []sources.CompanyEntry{
+		{Company: "Acme", Provider: "workday", Board: "acme"},
+		{Company: "Beta", Provider: "workday", Board: "beta"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(health.cleared) != 1 || health.cleared[0] != "workday" {
+		t.Fatalf("cleared = %v, want [workday]", health.cleared)
+	}
+	// The board that answered the probe (acme) must be hydrated exactly once — by the
+	// probe itself — not again by the main loop. The board the probe never tried (beta)
+	// is hydrated exactly once by the main loop, same as any normal crawl.
+	if got := src.callsFor("acme"); got != 1 {
+		t.Errorf("FetchNew(acme) called %d times, want 1 (the probe's fetch must be reused, not repeated)", got)
+	}
+	if got := src.callsFor("beta"); got != 1 {
+		t.Errorf("FetchNew(beta) called %d times, want 1", got)
+	}
+	// Both boards still ingest — reusing the probe's fetch must not lose its jobs.
+	if stats.Total().Ingested != 2 {
+		t.Errorf("stats = %+v, want Ingested=2 (the probed board's fetch must still be saved, not discarded)", stats.Total())
+	}
+	if len(store.saved) != 2 {
+		t.Errorf("saved %d jobs, want 2", len(store.saved))
+	}
+	// recordSuccess must fire exactly once for the reused board too — from inside the
+	// probe's ingestFetched — not once there and once more from a (skipped) main-loop call.
+	if len(health.successes) != 2 {
+		t.Errorf("successes = %v, want exactly 2 (workday/acme once, workday/beta once)", health.successes)
 	}
 }
 

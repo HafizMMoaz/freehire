@@ -245,8 +245,11 @@ func (p getroPosting) toJob() (Job, bool) {
 		WorkMode:   workMode,
 		Remote:     workMode == "remote" || isRemote(location),
 		Seniority:  getroSeniority(p.Seniority),
-		Skills:     skilltag.Parse(strings.Join(p.Skills, " ")),
-		PostedAt:   parseEpochSeconds(p.CreatedAt),
+		// Canonicalize, not Parse: p.Skills is already a discrete list of asserted names,
+		// not prose — Parse's corroboration rule would drop an unambiguous single-word
+		// skill for lack of a second strong term.
+		Skills:   skilltag.Canonicalize(p.Skills),
+		PostedAt: parseEpochSeconds(p.CreatedAt),
 	}, true
 }
 

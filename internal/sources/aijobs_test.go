@@ -79,13 +79,26 @@ func TestAijobsCrawlListingStopsWhenAPageIsFullySeen(t *testing.T) {
 		4: aijobsListingPage("99"),     // poison: must never be fetched
 	})
 
-	unseen, err := aijobs{http: fake}.crawlListing(context.Background(), seenSet("4", "5"), 0)
+	unseen, refreshed, err := aijobs{http: fake}.crawlListing(context.Background(), seenSet("4", "5"), 0)
 	if err != nil {
 		t.Fatalf("crawlListing: %v", err)
 	}
 	want := []string{"/job/role-1/", "/job/role-2/", "/job/role-3/"}
 	if !slices.Equal(unseen, want) {
 		t.Errorf("unseen = %v, want %v", unseen, want)
+	}
+	// The page that stopped the walk is still-live postings, not garbage: both of its ids
+	// must come back as a liveness refresh, or a still-open aijobs.net posting would never
+	// have its last_seen_at advanced past its first crawl.
+	gotIDs := make([]string, len(refreshed))
+	for i, j := range refreshed {
+		gotIDs[i] = j.ExternalID
+		if !j.SeenRefresh {
+			t.Errorf("refreshed[%d].SeenRefresh = false, want true", i)
+		}
+	}
+	if wantIDs := []string{"4", "5"}; !slices.Equal(gotIDs, wantIDs) {
+		t.Errorf("refreshed ids = %v, want %v", gotIDs, wantIDs)
 	}
 }
 
@@ -95,7 +108,7 @@ func TestAijobsCrawlListingStopsAtNewBudget(t *testing.T) {
 		2: aijobsListingPage("99"), // poison: must never be fetched
 	})
 
-	unseen, err := aijobs{http: fake}.crawlListing(context.Background(), seenSet(), 2)
+	unseen, _, err := aijobs{http: fake}.crawlListing(context.Background(), seenSet(), 2)
 	if err != nil {
 		t.Fatalf("crawlListing: %v", err)
 	}
@@ -134,7 +147,7 @@ func TestAijobsCrawlListingFirstPageFailureErrors(t *testing.T) {
 	fake := aijobsGetPostFake{postForm: func(url string) (*html.Node, error) {
 		return nil, fmt.Errorf("no route for %s", url) // bootstrap succeeds, page 1 fails
 	}}
-	if _, err := (aijobs{http: fake}).crawlListing(context.Background(), seenSet(), 0); err == nil {
+	if _, _, err := (aijobs{http: fake}).crawlListing(context.Background(), seenSet(), 0); err == nil {
 		t.Error("expected an error when the first listing page fails, got nil")
 	}
 }
@@ -157,7 +170,7 @@ func TestAijobsCrawlListingStopsAtHardPageCap(t *testing.T) {
 		return html.Parse(strings.NewReader(aijobsListingPage(fmt.Sprintf("%d", 1000+requests))))
 	}}
 
-	unseen, err := aijobs{http: fake}.crawlListing(context.Background(), seenSet(), 0)
+	unseen, _, err := aijobs{http: fake}.crawlListing(context.Background(), seenSet(), 0)
 	if err != nil {
 		t.Fatalf("crawlListing: %v", err)
 	}
@@ -172,7 +185,7 @@ func TestAijobsCrawlListingStopsAtHardPageCap(t *testing.T) {
 func TestAijobsCrawlListingLaterPageFailureKeepsWhatWasGathered(t *testing.T) {
 	fake := aijobsPagedFake(map[int]string{1: aijobsListingPage("1")}) // no page=2: page 2 fails
 
-	unseen, err := aijobs{http: fake}.crawlListing(context.Background(), seenSet(), 0)
+	unseen, _, err := aijobs{http: fake}.crawlListing(context.Background(), seenSet(), 0)
 	if err != nil {
 		t.Fatalf("crawlListing: %v", err)
 	}
@@ -416,7 +429,7 @@ func TestAijobsImplementsHydratingSource(t *testing.T) {
 	var _ HydratingSource = aijobs{}
 }
 
-func TestAijobsFetchNewHydratesOnlyUnseenPostings(t *testing.T) {
+func TestAijobsFetchNewHydratesUnseenAndRefreshesSeenPostings(t *testing.T) {
 	var mu sync.Mutex
 	requestedSeenPosting := false
 	fake := aijobsGetPostFake{
@@ -450,14 +463,28 @@ func TestAijobsFetchNewHydratesOnlyUnseenPostings(t *testing.T) {
 	if poisoned {
 		t.Error("detail fetched for an already-seen posting (role-1)")
 	}
-	if len(jobs) != 1 {
-		t.Fatalf("got %d jobs, want 1 (the unseen posting only)", len(jobs))
+	if len(jobs) != 2 {
+		t.Fatalf("got %d jobs, want 2 (the unseen posting hydrated, the seen one refreshed)", len(jobs))
 	}
-	if jobs[0].ExternalID != "2" {
-		t.Errorf("ExternalID = %q, want %q", jobs[0].ExternalID, "2")
+	var hydrated, refreshed *Job
+	for i := range jobs {
+		if jobs[i].SeenRefresh {
+			refreshed = &jobs[i]
+		} else {
+			hydrated = &jobs[i]
+		}
 	}
-	if jobs[0].Company != "Acme" {
-		t.Errorf("Company = %q, want %q", jobs[0].Company, "Acme")
+	if hydrated == nil || hydrated.ExternalID != "2" {
+		t.Fatalf("hydrated job = %+v, want ExternalID %q", hydrated, "2")
+	}
+	if hydrated.Company != "Acme" {
+		t.Errorf("Company = %q, want %q", hydrated.Company, "Acme")
+	}
+	// Still-open posting "1" was re-listed but not re-fetched: a SeenRefresh Job, not
+	// silence, or its last_seen_at would never advance and the company-scoped sweep would
+	// eventually close it as unseen with no way back in.
+	if refreshed == nil || refreshed.ExternalID != "1" {
+		t.Fatalf("refreshed job = %+v, want ExternalID %q", refreshed, "1")
 	}
 }
 

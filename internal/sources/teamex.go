@@ -168,12 +168,13 @@ func teamexLocation(countries []teamexCountry) string {
 }
 
 // teamexSkills canonicalizes the posting's required skills through the skilltag dictionary,
-// keeping only resolved technologies. The names are joined into one blob so skilltag.Parse
-// applies the same matching it uses on a description.
+// keeping only resolved technologies. Canonicalize, not Parse: these are already-discrete
+// asserted names, not prose to mine, so the corroboration rule Parse applies to free text
+// must not drop an unambiguous single-word name for lack of a second strong term.
 func teamexSkills(skills []teamexRequiredSkill) []string {
 	names := make([]string, 0, len(skills))
 	for _, s := range skills {
 		names = append(names, s.Skill.DisplayName)
 	}
-	return skilltag.Parse(strings.Join(names, " "))
+	return skilltag.Canonicalize(names)
 }

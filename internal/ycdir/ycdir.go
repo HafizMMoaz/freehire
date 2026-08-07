@@ -154,13 +154,21 @@ func launchYear(ts int64) int {
 	return time.Unix(ts, 0).UTC().Year()
 }
 
-// hqCountry resolves the first country code from a free-text location via the
-// shared location dictionary, or "" when it resolves nothing.
+// hqCountry resolves the country of the first-listed (HQ) office from yc-oss's
+// semicolon-separated all_locations string, via the shared location dictionary, or ""
+// when it resolves nothing.
+//
+// Only the first segment is parsed, deliberately: location.Parse dedups and SORTS its
+// Countries, so parsing the whole multi-office string would return the alphabetically
+// first country among ALL offices rather than the HQ's — for a company listing
+// "San Francisco, CA, USA; Istanbul, Istanbul, Turkey" that reads "tr", not "us".
 func hqCountry(loc string) string {
-	if strings.TrimSpace(loc) == "" {
+	first, _, _ := strings.Cut(loc, ";")
+	first = strings.TrimSpace(first)
+	if first == "" {
 		return ""
 	}
-	if c := location.Parse(loc).Countries; len(c) > 0 {
+	if c := location.Parse(first).Countries; len(c) > 0 {
 		return c[0]
 	}
 	return ""

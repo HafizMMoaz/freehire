@@ -5,9 +5,12 @@ import "testing"
 func TestTextToHTML(t *testing.T) {
 	cases := []struct{ name, in, want string }{
 		{
-			name: "paragraphs and line breaks",
+			// The extraction prompt asks the model to preserve bullet points, so this is the
+			// norm, not an edge case: a run of "- "-prefixed lines becomes a <ul>, matching
+			// what an ATS adapter's plain-text description already renders for the same shape.
+			name: "bullet lines become a list, not literal hyphens",
 			in:   "Требования:\n- Go\n- Postgres\n\nПишите @hr",
-			want: "<p>Требования:<br>- Go<br>- Postgres</p><p>Пишите @hr</p>",
+			want: "<p>Требования:</p><ul><li>Go</li><li>Postgres</li></ul><p>Пишите @hr</p>",
 		},
 		{
 			name: "markup is escaped, not interpreted",
@@ -18,6 +21,11 @@ func TestTextToHTML(t *testing.T) {
 			name: "surrounding whitespace trimmed",
 			in:   "\n\n  hello  \n\n",
 			want: "<p>hello</p>",
+		},
+		{
+			name: "non-bullet lines within a paragraph join with a line break",
+			in:   "Office in Berlin.\nRemote within the EU.",
+			want: "<p>Office in Berlin.<br>Remote within the EU.</p>",
 		},
 	}
 	for _, tc := range cases {

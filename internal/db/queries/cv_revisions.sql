@@ -19,11 +19,12 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 RETURNING *;
 
 -- name: AmendCVRevision :one
--- Fold a follow-on edit into the newest revision: replace what it does and restate its
--- description, but LEAVE inverse alone. The inverse still leads back to the state before the
--- first of the coalesced edits, which is what makes undo mean something for typed text.
+-- Fold a follow-on edit into the newest revision: replace what it does, restate its
+-- description and the reason for the change, but LEAVE inverse alone. The inverse still leads
+-- back to the state before the first of the coalesced edits, which is what makes undo mean
+-- something for typed text.
 UPDATE cv_revisions
-SET ops = $3, title = $4, updated_at = now()
+SET ops = $3, title = $4, note = $5, updated_at = now()
 WHERE id = $1 AND user_id = $2
 RETURNING *;
 

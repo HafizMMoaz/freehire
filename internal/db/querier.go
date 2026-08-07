@@ -32,9 +32,10 @@ type Querier interface {
 	// argument unconditionally left rows reading link_source='agent' with a NULL
 	// confidence after a caller merely re-labelled the message.
 	AgentTriageEmail(ctx context.Context, arg AgentTriageEmailParams) (int64, error)
-	// Fold a follow-on edit into the newest revision: replace what it does and restate its
-	// description, but LEAVE inverse alone. The inverse still leads back to the state before the
-	// first of the coalesced edits, which is what makes undo mean something for typed text.
+	// Fold a follow-on edit into the newest revision: replace what it does, restate its
+	// description and the reason for the change, but LEAVE inverse alone. The inverse still leads
+	// back to the state before the first of the coalesced edits, which is what makes undo mean
+	// something for typed text.
 	AmendCVRevision(ctx context.Context, arg AmendCVRevisionParams) (CvRevision, error)
 	// Append one message to a session's transcript, assigning the next sequence number in the
 	// same statement so concurrent writers cannot collide on (session_id, seq) — the primary
@@ -684,8 +685,12 @@ type Querier interface {
 	// (broad multi-industry ATS crawls: painters, stockers, drivers), so the LLM spend was
 	// not buying the coverage it cost. Also requires a non-empty description: the LLM has
 	// nothing to extract from a blank one regardless of category, and a 2026-08-06 prod
-	// sweep found ~53K such rows already sitting in the queue for no reason. Idempotent via
-	// the outbox's UNIQUE (job_id, target_version). Run in the same transaction as the
+	// sweep found ~53K such rows already sitting in the queue for no reason. Also requires
+	// duplicate_of IS NULL, matching EnqueuePendingJobs: the write path's own dedup only
+	// sets duplicate_of on the INSERT that first clusters a repost, so a later recrawl of
+	// an already-deduped job reaches this call as an UPDATE and would otherwise queue a
+	// row ClaimEnrichmentBatch's duplicate_of IS NULL filter can never claim. Idempotent
+	// via the outbox's UNIQUE (job_id, target_version). Run in the same transaction as the
 	// job's UpsertJob so a newly ingested job is queued atomically with its write.
 	EnqueueJobEnrichment(ctx context.Context, arg EnqueueJobEnrichmentParams) (int64, error)
 	// Idempotent backfill: enqueue every email not yet classified. classified_at is the

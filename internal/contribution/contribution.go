@@ -192,43 +192,6 @@ func (s *Service) RecordIntake(ctx context.Context, in SubmitInput, it Intake) (
 	return SubmitResult{Contribution: rec, Source: it.Source, Board: it.Board, Rewardable: err == nil}, err
 }
 
-// Submit inspects and records in one call, for the callers that do not import first. The
-// checks run cheapest-first: unsupported ATS before any DB read; already-tracked before any
-// write; the record insert last, which no longer competes with a unique constraint — a repeat
-// board is recorded, it simply is not rewardable.
-func (s *Service) Submit(ctx context.Context, in SubmitInput) (SubmitResult, error) {
-	surface := NormalizeSurface(in.Surface)
-	source, board, canonical, ok := s.resolveBoard(ctx, in.URL)
-	if !ok {
-		// No board resolved. A non-URL is garbage → 422. A valid http(s) link is a plausible
-		// missed ATS: log it for maintainer visibility and record it in the review queue (no
-		// board, no credit) so it can be triaged by hand instead of being lost.
-		if !isHTTPURL(in.URL) {
-			return SubmitResult{}, ErrUnsupportedATS
-		}
-		logUnrecognized(in.SubmittedBy, in.URL)
-		rec, err := s.repo.RecordReview(ctx, in.SubmittedBy, stripQueryFragment(in.URL), surface)
-		return SubmitResult{Contribution: rec}, err
-	}
-
-	tracked, err := s.repo.BoardTracked(ctx, source, board)
-	if err != nil {
-		return SubmitResult{Source: source, Board: board}, err
-	}
-	if tracked {
-		return SubmitResult{Source: source, Board: board}, ErrBoardAlreadyTracked
-	}
-
-	rec, err := s.repo.Record(ctx, RecordInput{
-		SubmittedBy: in.SubmittedBy,
-		URL:         canonical,
-		Source:      source,
-		Board:       board,
-		Surface:     surface,
-	})
-	return SubmitResult{Contribution: rec, Source: source, Board: board, Rewardable: err == nil}, err
-}
-
 // resolveBoard finds the (source, board, canonical URL) a pasted link belongs to, trying the
 // cheapest strategy first: the network-free URL recognizer; then a page fetch that detects an
 // ATS embedded on a company's own careers domain; then a Greenhouse or Ashby job-id lookup, for

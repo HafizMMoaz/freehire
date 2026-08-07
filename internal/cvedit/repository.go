@@ -156,13 +156,14 @@ func (t *queriesTx) Insert(ctx context.Context, rev Revision) (Revision, error) 
 	return revisionFromRow(row)
 }
 
-func (t *queriesTx) Amend(ctx context.Context, id uuid.UUID, ops []Op, title string) (Revision, error) {
+func (t *queriesTx) Amend(ctx context.Context, id uuid.UUID, ops []Op, title, note string) (Revision, error) {
 	blob, err := json.Marshal(ops)
 	if err != nil {
 		return Revision{}, err
 	}
 	row, err := t.q.AmendCVRevision(ctx, db.AmendCVRevisionParams{
 		ID: id, UserID: t.userID, Ops: blob, Title: title,
+		Note: pgtype.Text{String: note, Valid: note != ""},
 	})
 	if err != nil {
 		return Revision{}, err

@@ -121,9 +121,16 @@ func micro1WorkMode(locationType string) string {
 	}
 }
 
-// micro1Skills canonicalizes micro1's free-form required_skills (e.g. "GoLang", "Typescript")
-// through the shared skilltag dictionary, so the Skills facet carries canonical names rather
-// than the platform's raw spellings.
+// micro1Skills canonicalizes micro1's required_skills through the shared skilltag dictionary,
+// so the Skills facet carries canonical names rather than the platform's raw spellings.
+//
+// Parse, not Canonicalize, and deliberately: unlike the other aggregators' structured skill
+// lists, micro1's own entries are not always atomic names — a live-captured entry reads
+// "Basics C++", a qualifier word ahead of the actual technology (confirmed in
+// TestMicro1Detail's fixture) — so an entry must still be MINED, not merely matched whole.
+// Joining into one blob keeps that substring-mining ability; the corroboration rule's
+// downside (a lone ambiguous entry needs a second strong term) is the accepted trade-off
+// for it here, same as it always was.
 func micro1Skills(skills []string) []string {
 	return skilltag.Parse(strings.Join(skills, " "))
 }

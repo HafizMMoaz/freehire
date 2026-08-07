@@ -65,15 +65,17 @@ func (aijobs) aggregator() {}
 
 // FetchNew is the hydrating crawl cmd/ingest actually drives: it walks the listing
 // (crawlListing, bounded by maxNewPerRun and the seen-page stop) and fetches detail only
-// for a posting seen reports as not already in the catalogue.
+// for a posting seen reports as not already in the catalogue; a re-listed posting seen
+// already has is refreshed instead, matching every other HydratingSource adapter.
 func (a aijobs) FetchNew(ctx context.Context, _ CompanyEntry, seen func(externalID string) bool) ([]Job, error) {
-	links, err := a.crawlListing(ctx, seen, a.maxNewPerRun)
+	links, refreshed, err := a.crawlListing(ctx, seen, a.maxNewPerRun)
 	if err != nil {
 		return nil, err
 	}
-	return fetchDetails(links, defaultDetailWorkers, func(href string) (Job, bool) {
+	jobs := fetchDetails(links, defaultDetailWorkers, func(href string) (Job, bool) {
 		return a.detail(ctx, href)
-	}), nil
+	})
+	return append(jobs, refreshed...), nil
 }
 
 // Fetch is the list-only fallback HydratingSource specifies for a caller that cannot
@@ -172,8 +174,12 @@ func (a aijobs) listPage(ctx context.Context, csrfToken string, page int) (*html
 }
 
 // crawlListing walks the listing pages (newest posting first) and returns the job-detail
-// hrefs of postings seen reports as NOT already in the catalogue, in discovery order. It
-// stops — without requesting a further page — as soon as either condition holds:
+// hrefs of postings seen reports as NOT already in the catalogue, in discovery order, plus
+// a SeenRefresh-only Job for every already-catalogued posting it encounters along the way —
+// without this, a still-open posting's last_seen_at would never advance past its first
+// crawl, and the company-scoped 48h sweep would eventually close it as unseen with no way
+// back in (ExistingExternalIDs counts a closed row as seen, so it can never re-upsert).
+// The walk stops — without requesting a further page — as soon as either condition holds:
 //   - a whole page's postings are all already seen: the feed has been caught up to, so
 //     every following page (older still) would be too;
 //   - newBudget unseen postings have been found (0 means unbounded): this run's
@@ -182,18 +188,17 @@ func (a aijobs) listPage(ctx context.Context, csrfToken string, page int) (*html
 //
 // A first-page failure is a board-level error; a later page failing ends the walk with
 // what was gathered so far (a partial crawl survives a mid-listing hiccup).
-func (a aijobs) crawlListing(ctx context.Context, seen func(externalID string) bool, newBudget int) ([]string, error) {
+func (a aijobs) crawlListing(ctx context.Context, seen func(externalID string) bool, newBudget int) (unseen []string, refreshed []Job, err error) {
 	csrfToken, err := a.bootstrapSession(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("aijobs: session bootstrap: %w", err)
+		return nil, nil, fmt.Errorf("aijobs: session bootstrap: %w", err)
 	}
 
-	var unseen []string
 	for page := 1; page <= aijobsMaxPages; page++ {
 		root, err := a.listPage(ctx, csrfToken, page)
 		if err != nil {
 			if page == 1 {
-				return nil, fmt.Errorf("aijobs: listing page %d: %w", page, err)
+				return nil, nil, fmt.Errorf("aijobs: listing page %d: %w", page, err)
 			}
 			break
 		}
@@ -204,20 +209,24 @@ func (a aijobs) crawlListing(ctx context.Context, seen func(externalID string) b
 		allSeen := true
 		for _, href := range links {
 			id := aijobsJobID(href)
-			if id == "" || seen(id) {
+			if id == "" {
+				continue
+			}
+			if seen(id) {
+				refreshed = append(refreshed, Job{ExternalID: id, URL: aijobsBaseURL + href, SeenRefresh: true})
 				continue
 			}
 			allSeen = false
 			unseen = append(unseen, href)
 			if newBudget > 0 && len(unseen) >= newBudget {
-				return unseen, nil
+				return unseen, refreshed, nil
 			}
 		}
 		if allSeen {
 			break // caught up to already-known postings; every later page is older still
 		}
 	}
-	return unseen, nil
+	return unseen, refreshed, nil
 }
 
 // aijobsCompanySlugPattern matches a company-profile href and captures its slug, without

@@ -159,12 +159,13 @@ func getmanfredDescription(o getmanfredOffer) string {
 }
 
 // getmanfredSkills canonicalizes an offer's tech stack through the skilltag dictionary, keeping
-// only resolved technologies. The names are joined into one blob so skilltag.Parse applies the
-// same matching it uses on a description.
+// only resolved technologies. Canonicalize, not Parse: these are already-discrete asserted
+// names from a structured field, not prose to mine, so the corroboration rule Parse applies
+// to free text must not drop an unambiguous single-word name for lack of a second strong term.
 func getmanfredSkills(techs []getmanfredTech) []string {
 	names := make([]string, 0, len(techs))
 	for _, t := range techs {
 		names = append(names, t.Name)
 	}
-	return skilltag.Parse(strings.Join(names, " "))
+	return skilltag.Canonicalize(names)
 }

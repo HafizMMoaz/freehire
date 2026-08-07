@@ -165,8 +165,10 @@ type Runner struct {
 func (r Runner) Run(ctx context.Context, entries []sources.CompanyEntry) (RunStats, error) {
 	// Half-open the circuit breaker before the crawl: a provider whose boards were mass-
 	// cooled by a since-resolved outage recovers this cycle instead of each board waiting
-	// out its own backoff.
-	r.recoverProviders(ctx, entries)
+	// out its own backoff. The board that answered the probe was already fully ingested
+	// from that same fetch (see probeProvider) — handled carries its Stats so the loop
+	// below does not crawl it a second time.
+	handled := r.recoverProviders(ctx, entries)
 
 	var (
 		mu     sync.Mutex
@@ -201,7 +203,10 @@ func (r Runner) Run(ctx context.Context, entries []sources.CompanyEntry) (RunSta
 				return
 			}
 
-			boardStats := r.ingestBoard(ctx, e)
+			boardStats, already := handled[boardKey{e.Provider, e.Board}]
+			if !already {
+				boardStats = r.ingestBoard(ctx, e)
+			}
 			crawled.Add(1)
 
 			mu.Lock()
@@ -221,6 +226,10 @@ func (r Runner) Run(ctx context.Context, entries []sources.CompanyEntry) (RunSta
 // a recovered provider, few enough that the probe stays cheap.
 const maxRecoveryProbes = 3
 
+// boardKey identifies one board within a run: the pair a CompanyEntry, a Claimed
+// cooldown, and a recovery probe all key on.
+type boardKey struct{ provider, board string }
+
 // recoverProviders is the provider-level circuit breaker's half-open transition. Before
 // the main crawl, for each provider with cooled boards it probes up to maxRecoveryProbes
 // of them through the adapter; the first probe that succeeds proves the provider is
@@ -228,9 +237,14 @@ const maxRecoveryProbes = 3
 // cycle rather than leaving each board to ride out its per-board backoff (up to a day)
 // after a resolved provider-wide outage. Every probe failing leaves the provider cooled,
 // so a still-down provider is never stampeded. A nil BoardHealth port disables it entirely.
-func (r Runner) recoverProviders(ctx context.Context, entries []sources.CompanyEntry) {
+//
+// It returns the Stats of any board the probe itself fully ingested (see probeProvider):
+// for such a board the caller must not run ingestBoard again this cycle, or "a few cheap
+// probes" becomes a full second crawl of the one board that happened to answer.
+func (r Runner) recoverProviders(ctx context.Context, entries []sources.CompanyEntry) map[boardKey]Stats {
+	handled := make(map[boardKey]Stats)
 	if r.BoardHealth == nil {
-		return
+		return handled
 	}
 	byProvider := entriesByProvider(entries)
 	for _, provider := range sortedProviders(byProvider) {
@@ -250,7 +264,8 @@ func (r Runner) recoverProviders(ctx context.Context, entries []sources.CompanyE
 			log.Printf("ingest: recovery probe %s: list cooled boards: %v", provider, err)
 			continue
 		}
-		if !r.providerAnswers(ctx, src, boards, byProvider[provider]) {
+		e, st, reused, answered := r.probeProvider(ctx, src, boards, byProvider[provider])
+		if !answered {
 			continue
 		}
 		cleared, err := r.BoardHealth.ClearCooldowns(ctx, provider)
@@ -259,26 +274,44 @@ func (r Runner) recoverProviders(ctx context.Context, entries []sources.CompanyE
 			continue
 		}
 		log.Printf("ingest: %s answered a recovery probe — cleared %d cooled board(s) to crawl this cycle", provider, cleared)
+		if reused {
+			handled[boardKey{e.Provider, e.Board}] = st
+		}
 	}
+	return handled
 }
 
-// providerAnswers fetches each candidate board through the adapter until one succeeds,
-// reporting whether the provider responded. A board absent from this run's entries is
-// skipped (it cannot be probed without its entry), and a cancelled run stops early.
-func (r Runner) providerAnswers(ctx context.Context, src sources.Source, boards []string, entries map[string]sources.CompanyEntry) bool {
+// probeProvider fetches each candidate board through the adapter until one succeeds,
+// reporting the entry that answered. For a non-streaming board — the common case, and
+// the only one fetchBoard's result actually corresponds to — that same fetch is finished
+// into a full ingest (reused=true, st holds its Stats) instead of being thrown away, so
+// the board is not crawled a second time by the main loop; the finding this fixes was a
+// HydratingSource's FetchNew (a full paginated re-crawl plus per-posting hydration, not a
+// cheap reachability check) run once to answer the probe and once more moments later. A
+// streaming adapter's real ingest path is ingestStream, which this fetch does not
+// exercise, so reused is false for it and the main loop still runs it normally. A board
+// absent from this run's entries is skipped (it cannot be probed without its entry), and
+// a cancelled run stops early. answered=false when nothing responded.
+func (r Runner) probeProvider(ctx context.Context, src sources.Source, boards []string, entries map[string]sources.CompanyEntry) (e sources.CompanyEntry, st Stats, reused, answered bool) {
+	_, streaming := src.(sources.StreamingSource)
 	for _, board := range boards {
 		if ctx.Err() != nil {
-			return false
+			return sources.CompanyEntry{}, Stats{}, false, false
 		}
-		e, ok := entries[board]
+		candidate, ok := entries[board]
 		if !ok {
 			continue
 		}
-		if _, _, err := r.fetchBoard(ctx, e, src); err == nil {
-			return true
+		raw, seen, err := r.fetchBoard(ctx, candidate, src)
+		if err != nil {
+			continue
 		}
+		if streaming {
+			return candidate, Stats{}, false, true
+		}
+		return candidate, r.ingestFetched(ctx, candidate, raw, seen), true, true
 	}
-	return false
+	return sources.CompanyEntry{}, Stats{}, false, false
 }
 
 // entriesByProvider indexes the run's entries as provider → board → entry, so the
@@ -355,7 +388,16 @@ func (r Runner) ingestBoard(ctx context.Context, e sources.CompanyEntry) Stats {
 		r.recordFailure(ctx, e, err.Error())
 		return Stats{Failed: 1}
 	}
+	return r.ingestFetched(ctx, e, raw, seen)
+}
 
+// ingestFetched turns one board's already-fetched raw postings into Stats: applying a
+// HydratingSource's liveness refreshes, filtering and saving the rest through the
+// catalogue, and recording the board's health. Split out of ingestBoard so the recovery
+// probe — which must fetch a board through the adapter to answer it — can finish that
+// same fetch into a full ingest (see probeProvider) instead of discarding the result and
+// having the main loop fetch the board a second time.
+func (r Runner) ingestFetched(ctx context.Context, e sources.CompanyEntry, raw []sources.Job, seen map[string]bool) Stats {
 	var (
 		st       Stats
 		rej      rejections

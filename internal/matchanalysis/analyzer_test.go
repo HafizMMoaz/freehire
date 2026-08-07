@@ -73,6 +73,54 @@ func TestStreamStage_RetriesATimedOutStage(t *testing.T) {
 	}
 }
 
+// partialThenOmitsModel's first call returns JSON that decodes field "a" fine before
+// hitting a type mismatch on "b" (encoding/json keeps decoding after a type-mismatched
+// field and only reports the error once done, so "a" really does land in the destination
+// before Unmarshal returns its error). The second call is valid JSON that omits "a"
+// entirely — reproducing a real model retry that answers a narrower question the second
+// time.
+type partialThenOmitsModel struct{ calls int }
+
+func (m *partialThenOmitsModel) GenerateContent(context.Context, []llms.MessageContent, ...llms.CallOption) (*llms.ContentResponse, error) {
+	m.calls++
+	if m.calls == 1 {
+		return &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: `{"a":999,"b":"not-an-int"}`}}}, nil
+	}
+	return &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: `{"b":7}`}}}, nil
+}
+func (*partialThenOmitsModel) Call(context.Context, string, ...llms.CallOption) (string, error) {
+	return "", nil
+}
+
+// A failed attempt's partial decode must not survive into a later attempt: encoding/json
+// does not roll back the fields it reached before erroring, so out must be restored to
+// its pre-attempt state before every retry, or a field the second, successful attempt
+// never mentions silently keeps the first attempt's never-validated value.
+func TestStreamStage_DiscardsAPartiallyDecodedFailedAttempt(t *testing.T) {
+	m := &partialThenOmitsModel{}
+	a := &Analyzer{client: llm.NewWithModel(m)}
+
+	var out struct {
+		A int `json:"a"`
+		B int `json:"b"`
+	}
+	err := a.streamStage(context.Background(), 1, "sys", "usr", func(Event) {}, &out)
+
+	if err != nil {
+		t.Fatalf("streamStage: %v, want the retry to succeed", err)
+	}
+	if m.calls != 2 {
+		t.Fatalf("model calls = %d, want 2", m.calls)
+	}
+	if out.A != 0 {
+		t.Errorf("out.A = %d, want 0 — the first attempt's value must not survive into the "+
+			"second attempt's result, which never mentioned \"a\"", out.A)
+	}
+	if out.B != 7 {
+		t.Errorf("out.B = %d, want 7 (the second attempt's own answer)", out.B)
+	}
+}
+
 // A retry is only worth spending when there is still someone to answer. When the caller's
 // own context is already dead, a second call would burn tokens on a reply nobody reads.
 func TestStreamStage_DoesNotRetryWhenTheCallerIsGone(t *testing.T) {

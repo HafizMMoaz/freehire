@@ -157,7 +157,7 @@ func (h *assistantHandlers) experienceSummary(ctx context.Context, userID int64,
 			evidenced[skill] = true
 		}
 	}
-	for _, skill := range skilltag.Canonicalize(claimed) {
+	for _, skill := range skilltag.Canonicalize(claimed, skilltag.WithResumeAcronyms()) {
 		if !evidenced[skill] {
 			out.SkillsWithoutEvidence = append(out.SkillsWithoutEvidence, skill)
 		}

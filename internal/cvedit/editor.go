@@ -84,7 +84,7 @@ type Tx interface {
 	Newest(ctx context.Context) (Revision, bool, error)
 	Revision(ctx context.Context, id uuid.UUID) (Revision, bool, error)
 	Insert(ctx context.Context, rev Revision) (Revision, error)
-	Amend(ctx context.Context, id uuid.UUID, ops []Op, title string) (Revision, error)
+	Amend(ctx context.Context, id uuid.UUID, ops []Op, title, note string) (Revision, error)
 	MarkReverted(ctx context.Context, id uuid.UUID) (bool, error)
 	InBatch(ctx context.Context, batchID uuid.UUID) ([]Revision, error)
 	Trim(ctx context.Context, keep int32) error
@@ -236,7 +236,12 @@ func (e *Editor) record(ctx context.Context, tx Tx, cvID uuid.UUID, userID int64
 		//
 		// The inverse is deliberately not touched: it still leads back to the state before
 		// the first of the coalesced edits, which is what undo has to mean for typed text.
-		return tx.Amend(ctx, newest.ID, ch.Ops, title)
+		//
+		// The note IS replaced along with the title: it is the stated reason for the newest
+		// batch's content, and a coalesced save already carries that content whole rather than
+		// accumulating it — restating anything less would attribute the current text to a
+		// reason that no longer describes it.
+		return tx.Amend(ctx, newest.ID, ch.Ops, title, ch.Note)
 	}
 
 	return tx.Insert(ctx, Revision{

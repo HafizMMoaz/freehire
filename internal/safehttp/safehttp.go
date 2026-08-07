@@ -20,6 +20,8 @@ import (
 	"net/url"
 	"syscall"
 	"time"
+
+	"golang.org/x/oauth2"
 )
 
 // cgnat is the RFC6598 shared address space (100.64.0.0/10). IsPrivate does not
@@ -114,4 +116,19 @@ func NewClientWithProxy(timeout time.Duration, proxy *url.URL) *http.Client {
 		Timeout:   timeout,
 		Transport: NewTransportWithProxy(5*time.Second, proxy),
 	}
+}
+
+// GuardedOAuth2Context returns ctx carrying a guarded client under oauth2's own
+// context key, so golang.org/x/oauth2 (Exchange, TokenSource, Client, and any
+// provider call that reads its HTTP client from ctx) dials through this package's
+// guard instead of the library's zero-value default client.
+//
+// A caller-supplied oauth2.HTTPClient is respected and returned unchanged — tests
+// inject an httptest client for their loopback stub, and this must not override
+// that with a guarded client that would reject 127.0.0.1.
+func GuardedOAuth2Context(ctx context.Context, timeout time.Duration) context.Context {
+	if _, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok {
+		return ctx
+	}
+	return context.WithValue(ctx, oauth2.HTTPClient, NewClient(timeout))
 }

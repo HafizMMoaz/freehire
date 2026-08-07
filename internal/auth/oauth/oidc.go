@@ -22,21 +22,6 @@ const maxUserinfoBytes = 1 << 20 // 1 MiB
 // userinfoTimeout bounds the OAuth token-exchange and userinfo round-trips.
 const userinfoTimeout = 15 * time.Second
 
-// guardedOAuthContext returns ctx carrying an SSRF-guarded HTTP client, so the
-// oauth2 token exchange and the userinfo fetch both dial through safehttp — every
-// other outbound fetch in this service does. The provider endpoints are fixed
-// public constants, so this is defense-in-depth and consistency, not a live fix.
-//
-// A caller-supplied oauth2.HTTPClient is respected (tests inject an httptest
-// client for their loopback stub); the production handler never sets one, so it
-// always gets the guard.
-func guardedOAuthContext(ctx context.Context) context.Context {
-	if _, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok {
-		return ctx
-	}
-	return context.WithValue(ctx, oauth2.HTTPClient, safehttp.NewClient(userinfoTimeout))
-}
-
 // oidcProvider covers every provider that exposes a standard OIDC userinfo
 // endpoint (Google, LinkedIn): exchange the code, then one GET for
 // sub/email/email_verified.
@@ -84,7 +69,7 @@ func (p *oidcProvider) AuthCodeURL(state string) string {
 }
 
 func (p *oidcProvider) FetchIdentity(ctx context.Context, code string) (Identity, error) {
-	ctx = guardedOAuthContext(ctx)
+	ctx = safehttp.GuardedOAuth2Context(ctx, userinfoTimeout)
 	tok, err := p.cfg.Exchange(ctx, code)
 	if err != nil {
 		return Identity{}, fmt.Errorf("%s: exchange code: %w", p.name, err)

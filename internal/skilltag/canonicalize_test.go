@@ -91,3 +91,27 @@ func TestCanonicalizeDoesNotMineSentences(t *testing.T) {
 		t.Errorf("Canonicalize(sentence) = %q, want nil — sentences belong to Parse", got)
 	}
 }
+
+// The zero set is job-safe: a résumé-only acronym like RAG (which collides with "RAG
+// status", project-health shorthand, in job text) must not resolve without an explicit
+// opt-in. cvmatch canonicalizes n-grams mined from a VACANCY's own requirement text, so
+// this is the default every job-side caller relies on.
+func TestCanonicalizeResumeAcronymNeedsOptIn(t *testing.T) {
+	if got := Canonicalize([]string{"RAG"}); got != nil {
+		t.Errorf("Canonicalize([RAG]) = %q, want nil without WithResumeAcronyms — RAG collides with job-side RAG-status", got)
+	}
+	got := Canonicalize([]string{"RAG"}, WithResumeAcronyms())
+	if !reflect.DeepEqual(got, []string{"rag"}) {
+		t.Errorf("Canonicalize([RAG], WithResumeAcronyms()) = %q, want [rag]", got)
+	}
+}
+
+// The full, unambiguous phrase behind a résumé-scoped acronym must resolve regardless
+// of the option — nobody writes "retrieval augmented generation" to mean project-status
+// jargon, so gating it the same way the bare acronym is gated would be over-correction.
+func TestCanonicalizeResumeAcronymsFullPhraseNeedsNoOptIn(t *testing.T) {
+	got := Canonicalize([]string{"retrieval augmented generation"})
+	if !reflect.DeepEqual(got, []string{"rag"}) {
+		t.Errorf("Canonicalize([retrieval augmented generation]) = %q, want [rag] unconditionally", got)
+	}
+}

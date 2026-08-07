@@ -76,3 +76,8 @@ func plainTextToHTML(text string) string {
 	flushPara()
 	return out.String()
 }
+
+// PlainTextToHTML is the exported form, for sibling packages that render a plain-text
+// description into the same structural HTML (e.g. internal/telegram, whose extracted
+// descriptions carry the identical bullet/paragraph shape this reconstructs).
+func PlainTextToHTML(text string) string { return plainTextToHTML(text) }

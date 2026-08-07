@@ -1,31 +1,20 @@
 package telegram
 
 import (
-	"html"
-	"strings"
+	"github.com/strelov1/freehire/internal/sources"
 )
 
 // TextToHTML converts an extracted plain-text description into minimal safe HTML:
-// blank-line-separated chunks become paragraphs, single newlines become <br>, and
-// everything is entity-escaped so post content can never inject markup. Stored
-// descriptions are HTML across all sources (the SPA renders them directly), so
-// telegram jobs must match that contract.
+// blank-line-separated chunks become paragraphs, single newlines become <br>, a run of
+// bullet-marker lines (•, -, *, –, —, ...) becomes a <ul>, and everything is
+// entity-escaped so post content can never inject markup. Stored descriptions are HTML
+// across all sources (the SPA renders them directly), so telegram jobs must match that
+// contract.
+//
+// Delegates to sources.PlainTextToHTML: the extraction prompt explicitly asks the model
+// to preserve "bullet points, numbered lists, and paragraphs on separate lines," so a
+// Telegram-extracted description carries the exact plain-text-with-bullets shape that
+// helper already reconstructs correctly for the ATS adapters that hand it raw text.
 func TextToHTML(text string) string {
-	var b strings.Builder
-	for _, para := range strings.Split(text, "\n\n") {
-		lines := strings.Split(para, "\n")
-		var kept []string
-		for _, l := range lines {
-			if s := strings.TrimSpace(l); s != "" {
-				kept = append(kept, html.EscapeString(s))
-			}
-		}
-		if len(kept) == 0 {
-			continue
-		}
-		b.WriteString("<p>")
-		b.WriteString(strings.Join(kept, "<br>"))
-		b.WriteString("</p>")
-	}
-	return b.String()
+	return sources.PlainTextToHTML(text)
 }

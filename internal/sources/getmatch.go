@@ -228,14 +228,15 @@ func getmatchCategory(specs []string) string {
 
 // getmatchSkills canonicalizes an offer's skills_objects through the skilltag dictionary,
 // keeping only resolved technologies (so marketplace noise like "Kiss" or "152-ФЗ" is dropped).
-// The names are joined into one text blob so skilltag.Parse applies the same matching it uses on
-// a description.
+// Canonicalize, not Parse: these are already-discrete asserted names, not prose to mine, so
+// the corroboration rule Parse applies to free text must not drop an unambiguous single-word
+// name for lack of a second strong term.
 func getmatchSkills(objs []getmatchSkill) []string {
 	names := make([]string, 0, len(objs))
 	for _, o := range objs {
 		names = append(names, o.Name)
 	}
-	return skilltag.Parse(strings.Join(names, " "))
+	return skilltag.Canonicalize(names)
 }
 
 // getmatchWorkMode derives the structured work mode from the offer's location formats, mapping

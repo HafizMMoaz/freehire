@@ -3,7 +3,6 @@ package sources
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/strelov1/freehire/internal/skilltag"
 )
@@ -100,8 +99,11 @@ func (p functionalWorksPosting) toJob() (Job, bool) {
 		Description: sanitizeHTML(p.DescriptionML),
 		Remote:      p.Remote || isRemote(p.location()),
 		WorkMode:    workModeFromRemote(p.Remote),
-		Skills:      skilltag.Parse(strings.Join(labels, " ")),
-		PostedAt:    parseRFC3339(p.FirstPublished),
+		// Canonicalize, not Parse: labels are already-discrete asserted tag names, not
+		// prose — Parse's corroboration rule would drop an unambiguous single-word tag
+		// for lack of a second strong term.
+		Skills:   skilltag.Canonicalize(labels),
+		PostedAt: parseRFC3339(p.FirstPublished),
 	}, true
 }
 

@@ -42,6 +42,18 @@ func TestRequirementSkillsResolveMultiWordSkills(t *testing.T) {
 	}
 }
 
+// skilltag.Canonicalize resolves an acronym only from its exact case ("ML", not "ml" — the
+// lowercase form is reserved, since it also means millilitre). Lowercasing the requirement
+// text before handing it to Canonicalize would destroy that case and silently lose every
+// acronym-only requirement, so this must keep resolving after any change to requirementWords.
+func TestRequirementSkillsResolveAnUppercaseAcronym(t *testing.T) {
+	got := requirementSkills("3+ years of hands-on ML experience", []string{"machine-learning"})
+
+	if !slices.Equal(got, []string{"machine-learning"}) {
+		t.Errorf("requirementSkills = %v, want [machine-learning]", got)
+	}
+}
+
 func reqs() []Requirement {
 	return []Requirement{
 		{Text: "5+ years of Go", Priority: "required", CachedStatus: "missing-gap"},

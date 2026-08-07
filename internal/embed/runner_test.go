@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -130,20 +131,35 @@ type fakeIndexer struct {
 	removed    []int64
 	batchFails bool
 	indexErr   map[int64]error
+	// blockUntilCtxDone makes IndexOpen hang until the call context expires and return
+	// its error — simulating a push that is genuinely still working server-side (the
+	// index never reported a failure) but outran the caller's CallTimeout.
+	blockUntilCtxDone bool
 }
 
 func newFakeIndexer() *fakeIndexer { return &fakeIndexer{indexErr: map[int64]error{}} }
 
-func (ix *fakeIndexer) IndexOpen(_ context.Context, jobs []db.Job) (map[int64][]float32, error) {
+func (ix *fakeIndexer) IndexOpen(ctx context.Context, jobs []db.Job) (map[int64][]float32, error) {
 	ix.mu.Lock()
-	defer ix.mu.Unlock()
 	ids := make([]int64, len(jobs))
-	vecs := make(map[int64][]float32, len(jobs))
 	for i, j := range jobs {
 		ids[i] = j.ID
-		vecs[j.ID] = []float32{float32(j.ID)} // deterministic per-job vector
 	}
 	ix.indexCalls = append(ix.indexCalls, ids)
+	block := ix.blockUntilCtxDone
+	ix.mu.Unlock()
+
+	if block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	vecs := make(map[int64][]float32, len(jobs))
+	for _, j := range jobs {
+		vecs[j.ID] = []float32{float32(j.ID)} // deterministic per-job vector
+	}
 	if ix.batchFails && len(jobs) > 1 {
 		return nil, errors.New("batch embed failed")
 	}
@@ -241,6 +257,51 @@ func TestRunnerFallsBackToPerItemOnBatchFailure(t *testing.T) {
 	}
 	if len(store.failCalls) != 1 || store.failCalls[0].outboxID != 20 {
 		t.Errorf("failCalls = %+v, want one for outbox 20 (job 2)", store.failCalls)
+	}
+}
+
+// TestRunnerSkipsWaveOnBatchTimeoutInsteadOfCascading mirrors
+// internal/searchdrain's identically-named test for the 2026-08-05 prod incident: this
+// worker pushes into a Meili index whose cost is a fixed whole-index re-merge, the same
+// mechanism that turned one slow-but-fine batch into a cascade of equally slow per-item
+// pushes and produced a real outage in the sibling worker. A batch that merely outran
+// CallTimeout — with the index still working on it server-side, not actually failed —
+// must NOT cascade into per-item fallback here either.
+func TestRunnerSkipsWaveOnBatchTimeoutInsteadOfCascading(t *testing.T) {
+	store := newFakeStore()
+	ix := newFakeIndexer()
+	ix.blockUntilCtxDone = true // simulates a push that never returns before the deadline
+	for _, id := range []int64{1, 2, 3} {
+		store.jobs[id] = db.Job{ID: id}
+	}
+	store.pending = []Claimed{
+		{OutboxID: 10, JobID: 1, Closed: false},
+		{OutboxID: 20, JobID: 2, Closed: false},
+		{OutboxID: 30, JobID: 3, Closed: false},
+	}
+
+	opts := opt()
+	opts.CallTimeout = 20 * time.Millisecond
+
+	stats, err := Runner{Store: store, Indexer: ix}.Run(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if stats.Indexed != 0 || stats.Failed != 0 || stats.DeadLettered != 0 {
+		t.Fatalf("stats = %+v, want all zero — a timed-out batch is skipped this run, not "+
+			"fallen back to per-item and not counted as a failure", stats)
+	}
+	// The one batch attempt, and NOTHING else: no per-item retries.
+	if len(ix.indexCalls) != 1 {
+		t.Fatalf("IndexOpen calls = %d, want 1 (the batch attempt only) — per-item fallback "+
+			"on a mere timeout would multiply the number of equally-expensive index pushes by "+
+			"the batch size", len(ix.indexCalls))
+	}
+	// No attempts burned: the wave stays claimed and becomes retryable once its lease
+	// expires, so a later run retries the WHOLE batch fresh rather than spending the
+	// entry's limited attempt budget on a timeout that says nothing about the document.
+	if len(store.failCalls) != 0 {
+		t.Errorf("failCalls = %+v, want none — a timeout must not burn the retry budget", store.failCalls)
 	}
 }
 
