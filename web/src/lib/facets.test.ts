@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { COLLECTIONS } from './generated/contracts';
-import { FACETS } from './facets';
+import { cityOption, countryLabel, FACETS } from './facets';
 
 const collectionOptions = () => FACETS.find((f) => f.param === 'collections')?.options ?? [];
 
@@ -40,5 +40,23 @@ describe('the collections facet', () => {
       const kind = COLLECTIONS.find((c) => c.slug === option.value)?.kind;
       expect(option.group).toBe(kind === 'credential' ? 'Employer credentials' : undefined);
     }
+  });
+});
+
+describe('cityOption', () => {
+  it('composes a display label naming the country, keeping the bare city as the value', () => {
+    // The backend sends a raw ISO code (no hand-maintained country-name table in
+    // Go); the client already has an Intl.DisplayNames-backed resolver, so the
+    // label is composed here, not by the server.
+    const opt = cityOption({ value: 'Florianópolis', country: 'br' });
+    expect(opt.value).toBe('Florianópolis');
+    expect(opt.label).toBe('Florianópolis, Brazil');
+  });
+
+  it('delegates country display entirely to the shared countryLabel resolver', () => {
+    // Same resolver COUNTRY_OPTIONS already uses (Intl.DisplayNames-backed) — this
+    // just locks that cityOption doesn't hand-roll its own country formatting.
+    const opt = cityOption({ value: 'Reykjavik', country: 'is' });
+    expect(opt.label).toBe(`Reykjavik, ${countryLabel('is')}`);
   });
 });

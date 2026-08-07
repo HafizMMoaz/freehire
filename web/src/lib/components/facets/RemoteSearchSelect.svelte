@@ -8,11 +8,11 @@
   // A server-backed multi-select: as the user types we query `search` (debounced)
   // and list the matching options with counts; an empty query lists the popular
   // first page. Used for entity facets too large to ship as a distribution
-  // (company). Selected values render as chips above the search — they stay visible
-  // even when absent from the current results — labelled from what we have seen,
-  // falling back to `fallbackLabel` for a value restored from the URL. A chip is
-  // included or excluded; clicking it calls `onToggle` (cycle for excludable facets,
-  // plain include toggle otherwise).
+  // (company). Selected values render as chips below the search field — they stay
+  // visible even when absent from the current results — labelled from what we have
+  // seen, falling back to `fallbackLabel` for a value restored from the URL. A chip
+  // is included or excluded; clicking it calls `onToggle` (cycle for excludable
+  // facets, plain include toggle otherwise).
   let {
     search,
     include,
@@ -84,6 +84,8 @@
 </script>
 
 <div class="flex flex-col gap-2">
+  <Input bind:value={query} {placeholder} class="w-full" />
+
   {#if selected.length > 0}
     <div class="flex flex-wrap gap-1.5">
       {#each selected as value (value)}
@@ -100,8 +102,6 @@
       {/each}
     </div>
   {/if}
-
-  <Input bind:value={query} {placeholder} class="w-full" />
 
   <div class={expand ? 'flex flex-col gap-0.5' : 'flex max-h-44 flex-col gap-0.5 overflow-y-auto'}>
     {#each pickable as opt (opt.value)}

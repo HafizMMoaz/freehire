@@ -204,6 +204,24 @@ async function subindustrySearch(query: string): Promise<FacetOption[]> {
   return q ? all.filter((o) => o.label.toLowerCase().includes(q)) : all;
 }
 
+// Composes one /geo/cities result into a FacetOption: the value stays the bare city
+// name (what a profile's location_preferences already stores), the label adds the
+// country via the same countryLabel() resolver COUNTRY_OPTIONS uses, so two
+// otherwise-identical city names (e.g. two "Springfield"s) read as distinct choices.
+export function cityOption(row: { value: string; country: string }): FacetOption {
+  return { value: row.value, label: `${row.value}, ${countryLabel(row.country)}` };
+}
+
+// Option source for the profile's base-city and relocation-cities controls: a
+// server-side prefix search over the embedded GeoNames dictionary (RemoteSearchSelect's
+// debounce means this fires at most once per ~250ms of typing, not per keystroke).
+// `country` narrows the base-city search to the already-chosen base country; the
+// relocation-cities search omits it, since that set may span multiple countries.
+export async function searchCities(query: string, country?: string): Promise<FacetOption[]> {
+  const rows = await api.searchCities(query, country);
+  return rows.map(cityOption);
+}
+
 // Role facet values are canonical slugs (senior_backend, founding_engineer); the
 // live distribution carries no display name, so map them through the generated
 // ROLE_LABELS catalog (the roletag dictionary is the source of truth), falling

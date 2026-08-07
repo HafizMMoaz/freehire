@@ -6,6 +6,7 @@
     CATEGORY_OPTIONS,
     COUNTRY_OPTIONS,
     REGION_OPTIONS,
+    searchCities,
     WORK_MODE_OPTIONS,
     type FacetOption,
   } from '$lib/facets';
@@ -15,7 +16,7 @@
   import { withSkills } from '$lib/profileSkills';
   import { loadSkillDistribution } from '$lib/skillDictionary';
   import type { LocationPreferences, UserProfile } from '$lib/types';
-  import { Button, Input } from '$lib/ui';
+  import { Button } from '$lib/ui';
   import HeadshotField from './HeadshotField.svelte';
   import RemoteSearchSelect from './facets/RemoteSearchSelect.svelte';
   import SearchSelect from './facets/SearchSelect.svelte';
@@ -94,7 +95,6 @@
   let relocRegions = $state.raw<string[]>(loc0?.relocation.regions ?? []);
   let relocCountries = $state.raw<string[]>(loc0?.relocation.countries ?? []);
   let relocCities = $state.raw<string[]>(loc0?.relocation.cities ?? []);
-  let cityDraft = $state('');
 
   // Work format gates the two "where would you take work" sub-forms: remote reach shows
   // only when Remote is accepted, relocation only for On-site/Hybrid. Hidden fields linger
@@ -282,14 +282,6 @@
     return active
       ? 'rounded-full bg-brand px-3 py-1 text-sm font-medium text-brand-foreground'
       : 'rounded-full border border-border px-3 py-1 text-sm transition-colors hover:border-brand/60';
-  }
-
-  // Add the drafted city (trimmed, case-insensitive dedup) to the relocation targets.
-  function addCity() {
-    const city = cityDraft.trim();
-    cityDraft = '';
-    if (!city || relocCities.some((c) => c.toLowerCase() === city.toLowerCase())) return;
-    relocCities = [...relocCities, city];
   }
 
   // Reassemble the flat fields into the saved location block. The rules — which sub-forms
@@ -554,7 +546,14 @@
             <option value={opt.value}>{opt.label}</option>
           {/each}
         </select>
-        <Input bind:value={baseCity} aria-label="Base city" placeholder="City" class="w-full" />
+        <RemoteSearchSelect
+          search={(q) => searchCities(q, baseCountry)}
+          include={baseCity ? [baseCity] : []}
+          onToggle={(v) => (baseCity = baseCity === v ? '' : v)}
+          fallbackLabel={(v) => v}
+          placeholder="City"
+          clearOnSelect
+        />
       </div>
     </div>
 
@@ -590,31 +589,13 @@
             relocCountries,
             (v) => (relocCountries = toggleIn(relocCountries, v)),
           )}
-          {#if relocCities.length > 0}
-            <div class="flex flex-wrap gap-1.5">
-              {#each relocCities as city (city)}
-                <button
-                  type="button"
-                  onclick={() => (relocCities = relocCities.filter((c) => c !== city))}
-                  class="inline-flex items-center gap-1 rounded-full bg-brand px-2.5 py-1 text-sm font-medium text-brand-foreground transition-opacity hover:opacity-90"
-                >
-                  {city}
-                  <X class="size-3" />
-                </button>
-              {/each}
-            </div>
-          {/if}
-          <Input
-            bind:value={cityDraft}
-            onkeydown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                addCity();
-              }
-            }}
-            aria-label="Add a relocation city"
-            placeholder="Add a city, press Enter"
-            class="w-full"
+          <RemoteSearchSelect
+            search={(q) => searchCities(q)}
+            include={relocCities}
+            onToggle={(v) => (relocCities = toggleIn(relocCities, v))}
+            fallbackLabel={(v) => v}
+            placeholder="Add a city"
+            clearOnSelect
           />
         {/if}
       </div>

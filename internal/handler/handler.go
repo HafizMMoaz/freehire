@@ -386,6 +386,7 @@ func Register(app *fiber.App, cfg Config) {
 	}
 	searchH := newSearchHandlers(jobSearch, facets, queries)
 	companiesH := newCompaniesHandlers(queries, companySearch)
+	geoH := newGeoHandlers()
 	trackingH := newTrackingHandlers(queries, cfg.Pool, jobSearch)
 	timelineH := newTimelineHandlers(queries)
 	resumeH := newResumeHandlers(resumeStore, structuredExtractor, jobSearch, facets, profileSvc, atsAnalyzer, queries)
@@ -511,6 +512,7 @@ func Register(app *fiber.App, cfg Config) {
 	sitemapH.register(api)
 	jobsH.register(api, mw)
 	companiesH.register(api, mw)
+	geoH.register(api)
 
 	// Saved searches + the public shared-board read (see savedSearchHandlers).
 	savedSearchH.register(api, mw)
