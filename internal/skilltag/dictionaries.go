@@ -964,8 +964,9 @@ var engineeringPhraseAliases = []phraseAlias{
 	//     "a key lever", "a flexible workday". Same doctrine as burp/druid above: such
 	//     a name may only return through a qualifying phrase, never as a bare token.
 	//
-	// The recruiting/HR/finance/legal/operations/customer-success half of this seed set
-	// lives in professionalPhraseAliases below — same matching, separate list.
+	// The recruiting/HR/finance/legal/operations/customer-success/sales/support half of
+	// this seed set lives in professionalPhraseAliases below — same matching, separate
+	// list.
 	// business analysis
 	{"requirements gathering", "requirements-gathering"},
 	{"requirements elicitation", "requirements-elicitation"},
@@ -1029,11 +1030,11 @@ var engineeringPhraseAliases = []phraseAlias{
 }
 
 // professionalPhraseAliases is the non-engineering half of the IT-company role
-// vocabulary: the recruiting, HR, finance, legal, operations and customer-success
-// craft a technical company hires for without hiring an engineer. Parse matches these
-// exactly like any other phrase — a skills facet describes every posting, not only the
-// technical ones — but they are declared apart so a caller can ask the narrower
-// question HasEngineering answers.
+// vocabulary: the recruiting, HR, finance, legal, operations, sales, customer-success
+// and support craft a technical company hires for without hiring an engineer. Parse
+// matches these exactly like any other phrase — a skills facet describes every posting,
+// not only the technical ones — but they are declared apart so a caller can ask the
+// narrower question HasEngineering answers.
 //
 // What is NOT here is the point: developer relations, technical writing, business
 // analysis and pre-sales stay in engineeringPhraseAliases. They are tech-industry
@@ -1076,12 +1077,24 @@ var professionalPhraseAliases = []phraseAlias{
 	{"program management", "program-management"},
 	{"strategic planning", "strategic-planning"},
 	{"stakeholder management", "stakeholder-management"},
+	// sales
+	{"account executive", "account-executive"},
+	{"business development", "business-development"},
+	{"pipeline management", "pipeline-management"},
+	{"cold outreach", "cold-outreach"},
+	{"sales enablement", "sales-enablement"},
+	{"lead generation", "lead-generation"},
 	// customer success
 	{"customer onboarding", "customer-onboarding"},
 	{"customer retention", "customer-retention"},
 	{"churn prevention", "churn-prevention"},
 	{"customer health score", "customer-health-score"},
+	{"renewal management", "renewal-management"},
 	{"gainsight", "gainsight"}, {"churnzero", "churnzero"},
+	// support
+	{"help desk", "help-desk"},
+	{"service desk", "service-desk"},
+	{"ticket resolution", "ticket-resolution"},
 	// marketing — search optimization tooling. These are unambiguous product names,
 	// so they are strong matches, which also makes them corroborators for the gated
 	// `seo` canonical: before this block a posting could name its whole toolchain and
@@ -1153,6 +1166,18 @@ var nonCorroboratingPhrases = map[string]bool{
 	"influencer-marketing":           true,
 	"copywriting":                    true,
 	"go-to-market":                   true,
+	// sales / support — same doctrine as the marketing disciplines above: "manage our
+	// CRM as an account executive" names the gated word "crm" without evidencing any
+	// technical involvement with it, and that phrasing recurs at scale in this category.
+	"account-executive":    true,
+	"business-development": true,
+	"pipeline-management":  true,
+	"cold-outreach":        true,
+	"sales-enablement":     true,
+	"lead-generation":      true,
+	"help-desk":            true,
+	"service-desk":         true,
+	"ticket-resolution":    true,
 }
 
 // nonEngineeringCanonicals is derived from professionalPhraseAliases, never written by
