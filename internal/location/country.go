@@ -37,17 +37,27 @@ var alpha3ToAlpha2 = map[string]string{
 	"uzb": "uz", "kaz": "kz", "kgz": "kg", "tjk": "tj", "tkm": "tm",
 }
 
-// NormalizeCountry maps an ATS-supplied ISO 3166-1 country code — alpha-2 or alpha-3, in
-// any case — to freehire's canonical lowercase alpha-2 code. It returns "" for a code
-// outside the curated country set Parse itself resolves (countryToRegion): the same
-// never-guess contract, so a country this package cannot place on the region map is left
-// for the location/description dictionaries to fill instead of being recorded ungrouped.
+// NormalizeCountry maps an ATS-supplied country value to freehire's canonical lowercase
+// alpha-2 code. The input is a dedicated country field, not a free-text location line, but
+// its own format still varies by ATS and even by employer within one ATS: an alpha-2 code
+// (Lever, Workday), an alpha-3 code (Ashby usually — e.g. "USA"), or a plain country name
+// (Ashby sometimes — schema.org's addressCountry accepts either, and which one a given
+// employer's Ashby config carries is up to them; "United States" and "USA" both appear on
+// live boards). nameToCountry already resolves the name case via the same lookup Parse
+// uses for a location string's country token, so this is a lookup order, not new parsing.
+// It returns "" for a value outside the curated country set Parse itself resolves
+// (countryToRegion): the same never-guess contract, so a country this package cannot place
+// on the region map is left for the location/description dictionaries to fill instead of
+// being recorded ungrouped.
 func NormalizeCountry(code string) string {
 	c := strings.ToLower(strings.TrimSpace(code))
 	if _, ok := countryToRegion[c]; ok {
 		return c
 	}
 	if a2, ok := alpha3ToAlpha2[c]; ok {
+		return a2
+	}
+	if a2, ok := nameToCountry[c]; ok {
 		return a2
 	}
 	return ""
