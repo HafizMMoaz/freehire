@@ -95,6 +95,10 @@ func experienceFromBank(employments []Employment, atoms []Atom) []resumeextract.
 	// in an entry that names NO place rather than under an invented one: an empty company
 	// is how this shape says "no place", and inventing a heading would be a fabrication in
 	// the projection whose whole job is to carry only what is true.
+	//
+	// Always appended AFTER dated employments so chronological sort of roles cannot place
+	// a blank-header evidence block between jobs. A titled orphan with empty company (role
+	// set, no company) is a separate bank row from import/edit — not this placeless path.
 	if len(placeless) > 0 {
 		out = append(out, resumeextract.Experience{Highlights: placeless})
 	}

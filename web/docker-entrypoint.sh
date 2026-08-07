@@ -6,6 +6,13 @@
 # 502s on a healthcheck).
 set -e
 
+# Variable proxy_pass needs a recursive resolver. nginx.conf defaults to Docker's
+# embedded DNS (127.0.0.11); Podman/aardvark put a different nameserver in
+# /etc/resolv.conf — without this swap, /api/* returns 502.
+RESOLVER=$(awk '/^nameserver / { print $2; exit }' /etc/resolv.conf)
+RESOLVER=${RESOLVER:-127.0.0.11}
+sed -i "s/resolver 127\\.0\\.0\\.11 /resolver ${RESOLVER} /" /etc/nginx/http.d/default.conf
+
 node build &
 
 exec nginx -g 'daemon off;'

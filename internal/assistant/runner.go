@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"time"
 
@@ -149,6 +150,10 @@ func persisting(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), persistTimeout)
 }
 
+// ErrNothingToContinue is returned by Continue when the session has no user
+// message to resume from. The handler maps it to HTTP 409.
+var ErrNothingToContinue = errors.New("assistant: nothing to continue")
+
 // Run executes one turn: it records the prompt, then alternates model calls and
 // tool calls until the model answers, the step cap is reached, or the caller goes
 // away. Every frame is emitted through emit and persisted as it is produced, so a
@@ -161,7 +166,43 @@ func (r *Runner) Run(ctx context.Context, sess Session, reg *Registry, system, p
 	if err := r.recordPrompt(ctx, sess, prompt, emit); err != nil {
 		return err
 	}
+	return r.runFromHistory(ctx, sess, reg, system, turn, emit)
+}
 
+// Continue resumes after a failed turn without appending another user message.
+// The transcript already holds the prompt (and any partial tool work); replaying
+// a second copy would duplicate the candidate's request in the model's context.
+// Dangling tool_use rows from the interrupted turn are healed when history is
+// rebuilt — same path every other turn uses — so Bedrock stays provider-legal.
+func (r *Runner) Continue(ctx context.Context, sess Session, reg *Registry, system string, turn TurnConfig, emit func(Event)) error {
+	stored, err := r.store.Transcript(ctx, sess.ID)
+	if err != nil {
+		return r.fail(emit, err)
+	}
+	if !hasUserMessage(stored) {
+		return ErrNothingToContinue
+	}
+	// Activity only — no new prompt, no re-label.
+	writeCtx, cancel := persisting(ctx)
+	defer cancel()
+	if err := r.store.Touch(writeCtx, sess.ID); err != nil {
+		log.Printf("assistant: touch session %s: %v", sess.ID, err)
+	}
+	return r.runFromHistory(ctx, sess, reg, system, turn, emit)
+}
+
+func hasUserMessage(msgs []Message) bool {
+	for _, m := range msgs {
+		if m.Role == RoleUser {
+			return true
+		}
+	}
+	return false
+}
+
+// runFromHistory is the shared tool-calling loop. Run records a prompt first;
+// Continue skips that so a retry does not rewrite the conversation.
+func (r *Runner) runFromHistory(ctx context.Context, sess Session, reg *Registry, system string, turn TurnConfig, emit func(Event)) error {
 	history, err := r.history(ctx, sess.ID, system)
 	if err != nil {
 		return r.fail(emit, err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -496,6 +497,57 @@ func TestCVEditWritesACitedBullet(t *testing.T) {
 	}
 	if !strings.Contains(string(repo.written), "Kafka") {
 		t.Errorf("the bullet was not written: %s", repo.written)
+	}
+}
+
+func TestCVEditToolRefusesAnOverCapInsert(t *testing.T) {
+	prev := cv.MaxBullets
+	cv.SetMaxBullets(20)
+	t.Cleanup(func() { cv.SetMaxBullets(prev) })
+
+	bullets := make([]string, cv.MaxBullets)
+	for i := range bullets {
+		bullets[i] = fmt.Sprintf("Original bullet %d", i+1)
+	}
+	doc, err := json.Marshal(cv.Document{
+		Experience: []cv.ExperienceItem{{
+			Role: "Staff Engineer", Company: "Contoso", Bullets: bullets,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	bank := newStubBank()
+	atom := bank.add(3, experience.Atom{Claim: "extra", Provenance: experience.ProvenanceStatedInChat})
+	a, repo := cvToolsAPIWithBank(t, string(doc), bank)
+	before := append([]byte(nil), repo.data...)
+
+	tool := toolByName(t, a.assistantCVTools(testCVID, 9, uuid.New()), "cv_edit")
+	_, err = tool.Run(context.Background(), 3, json.RawMessage(
+		`{"ops":[{"kind":"insert","path":"experience[0].bullets[0]","value":"extra claim",`+
+			`"evidence_id":"`+atom.ID.String()+`"}]}`))
+	if err == nil {
+		t.Fatal("over-cap insert was accepted")
+	}
+	if !errors.Is(err, cvedit.ErrListCap) && !strings.Contains(err.Error(), cvedit.ListCapCode) {
+		t.Fatalf("error = %v, want ErrListCap / %s", err, cvedit.ListCapCode)
+	}
+	if repo.written != nil {
+		t.Fatalf("CV was written on refuse: %s", repo.written)
+	}
+	if string(repo.data) != string(before) {
+		t.Fatal("stored CV data changed on a refused over-cap edit")
+	}
+}
+
+func TestCVEditToolDescriptionNamesTheBulletCeiling(t *testing.T) {
+	tool := toolByName(t, (&assistantHandlers{}).assistantCVTools(testCVID, 9, uuid.New()), "cv_edit")
+	want := fmt.Sprintf("%d", cv.MaxBullets)
+	if !strings.Contains(tool.Description, want) {
+		t.Fatalf("cv_edit description missing live MaxBullets %s: %s", want, tool.Description)
+	}
+	if !strings.Contains(strings.ToLower(tool.Description), "refused") {
+		t.Fatalf("cv_edit description should say an over-cap insert is refused: %s", tool.Description)
 	}
 }
 

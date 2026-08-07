@@ -55,6 +55,7 @@ func newCVAPIWithoutAssistant(t *testing.T) (*cvHandlers, *auth.Issuer, *fiber.A
 		creditsStore,
 		&matchHandlers{credits: creditsStore},
 		bankGate{bank: bank},
+		true,
 	)
 
 	app := fiber.New(fiber.Config{ErrorHandler: RenderError})

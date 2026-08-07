@@ -59,6 +59,11 @@ POST /api/v1/assistant/sessions/:id/messages
                                               emit tool_use/tool_result,
                                               persist, append to history
             └─ cap reached → one final Chat with NO tools → result(max_steps)
+
+POST /api/v1/assistant/sessions/:id/retry
+  └─ Runner.Continue — same loop, NO new user message (a failed turn already
+     recorded the prompt; re-sending it would duplicate context). History rebuild
+     still heals dangling tool_use from the interrupted turn.
 ```
 
 **Files.** `runner.go` is the loop and the event shapes; `tool.go` the tool

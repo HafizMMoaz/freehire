@@ -3,6 +3,7 @@ package handler
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -39,6 +40,8 @@ type assistantHandlers struct {
 	// keys resolves the credential a turn spends under. Nil in a deployment that does
 	// not attribute spend, which every path treats as "spend on the service credential".
 	keys *llmkey.Resolver
+	// maxPrompt is the rune ceiling on one user message (ASSISTANT_MAX_PROMPT).
+	maxPrompt int
 
 	// turns are the turns running right now, so a cancel request can reach one that is
 	// streaming on a goroutine no request owns any more, and so a session keeps to one turn
@@ -81,8 +84,9 @@ type assistantModels struct {
 	Agent *llm.Client
 	// Keys names the caller on the gateway. Nil is ordinary rather than degraded: every
 	// turn then spends on the service credential, exactly as it did before attribution.
-	Keys     *llmkey.Resolver
-	MaxSteps int
+	Keys      *llmkey.Resolver
+	MaxSteps  int
+	MaxPrompt int
 }
 
 // newAssistantHandlers wires the agent.
@@ -114,6 +118,10 @@ func newAssistantHandlers(queries *db.Queries, models assistantModels, store *as
 		h.runner = assistant.NewRunner(models.Agent, h.store, assistant.RunnerConfig{MaxSteps: models.MaxSteps})
 	}
 	h.keys = models.Keys
+	h.maxPrompt = models.MaxPrompt
+	if h.maxPrompt < 1 {
+		h.maxPrompt = defaultAssistantMaxPrompt
+	}
 	return h
 }
 
@@ -135,14 +143,17 @@ func (h *assistantHandlers) register(api fiber.Router, mw middleware) {
 	api.Post("/assistant/sessions/:id/messages", mw.key, h.PostAssistantMessage)
 	api.Post("/assistant/sessions/:id/cancel", mw.key, h.CancelAssistantTurn)
 	api.Post("/assistant/sessions/:id/opening", mw.key, h.PostAssistantOpening)
+	// Resume after a transport/model failure without appending another user message —
+	// re-sending the prompt would duplicate it in the model's context.
+	api.Post("/assistant/sessions/:id/retry", mw.key, h.PostAssistantRetry)
 	// Cookie-only: an unattended run rewrites a CV, and the browser is the only place
 	// the candidate can watch it happen and undo it.
 	api.Post("/assistant/sessions/:id/autopilot", mw.cookie, h.PostAssistantAutopilot)
 }
 
-// assistantMaxPrompt bounds one user message. The agent's context is finite and a
-// pasted job board is not a question; the limit is generous for prose.
-const assistantMaxPrompt = 8000
+// defaultAssistantMaxPrompt bounds one user message when ASSISTANT_MAX_PROMPT is
+// unset. The agent's context is finite and a pasted job board is not a question.
+const defaultAssistantMaxPrompt = 8000
 
 // sessionResponse is the wire shape of one conversation.
 type sessionResponse struct {
@@ -440,10 +451,55 @@ func (h *assistantHandlers) PostAssistantMessage(c *fiber.Ctx) error {
 	if prompt == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "text is required")
 	}
-	if len([]rune(prompt)) > assistantMaxPrompt {
+	if len([]rune(prompt)) > h.maxPrompt {
 		return fiber.NewError(fiber.StatusBadRequest, "message is too long")
 	}
 	return h.streamTurn(c, sess, prompt, assistant.TurnConfig{})
+}
+
+// PostAssistantRetry resumes a session after a model/transport failure without recording
+// another user message. Re-posting the same prompt would leave two copies in the
+// transcript and in the model's context; Continue keeps the history as it is (healing
+// any dangling tool_use from the interrupted turn) and runs the loop again.
+func (h *assistantHandlers) PostAssistantRetry(c *fiber.Ctx) error {
+	sess, err := h.ownedSession(c)
+	if err != nil {
+		return err
+	}
+	if h.runner == nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "the assistant is not available")
+	}
+	transcript, err := h.store.Transcript(c.Context(), sess.ID)
+	if err != nil {
+		return err
+	}
+	if lastUserText(transcript) == "" {
+		return fiber.NewError(fiber.StatusConflict, "nothing to retry — send a message first")
+	}
+	turn := assistant.TurnConfig{}
+	// A failed unattended run already spent under the raised ceiling; keep it so a retry
+	// is not cut short at the ordinary chat bound.
+	if sess.Preset == assistant.PresetTailor && lastUserText(transcript) == autopilotBrief {
+		turn.MaxSteps = autopilotMaxSteps
+	}
+	return h.streamContinue(c, sess, turn)
+}
+
+// lastUserText returns the text of the most recent user message, or "" when none.
+func lastUserText(transcript []assistant.Message) string {
+	for i := len(transcript) - 1; i >= 0; i-- {
+		if transcript[i].Role != assistant.RoleUser {
+			continue
+		}
+		var c struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(transcript[i].Content, &c); err != nil {
+			return ""
+		}
+		return c.Text
+	}
+	return ""
 }
 
 // streamTurn runs one turn and writes it to the response as SSE. It is shared by every
@@ -454,6 +510,25 @@ func (h *assistantHandlers) PostAssistantMessage(c *fiber.Ctx) error {
 // body: an unattended run's brief and its raised ceiling are ours to choose, and a ceiling
 // a client can set is not a bound.
 func (h *assistantHandlers) streamTurn(c *fiber.Ctx, sess assistant.Session, prompt string, turn assistant.TurnConfig) error {
+	return h.streamSSE(c, sess, func(ctx context.Context, runner *assistant.Runner, reg *assistant.Registry, system string, emit func(assistant.Event)) error {
+		return runner.Run(ctx, sess, reg, system, prompt, turn, emit)
+	})
+}
+
+// streamContinue is streamTurn for a retry: same SSE machinery, no new prompt.
+func (h *assistantHandlers) streamContinue(c *fiber.Ctx, sess assistant.Session, turn assistant.TurnConfig) error {
+	return h.streamSSE(c, sess, func(ctx context.Context, runner *assistant.Runner, reg *assistant.Registry, system string, emit func(assistant.Event)) error {
+		return runner.Continue(ctx, sess, reg, system, turn, emit)
+	})
+}
+
+// streamSSE owns the SSE headers, turn claim/queue, keepalive and writer. start is the
+// one difference between a fresh message and a retry.
+func (h *assistantHandlers) streamSSE(
+	c *fiber.Ctx,
+	sess assistant.Session,
+	start func(context.Context, *assistant.Runner, *assistant.Registry, string, func(assistant.Event)) error,
+) error {
 	// One batch per turn. Every CV edit the agent makes in this turn is filed under it, so
 	// the history can group them and "undo the run" is undoing a batch — which is what
 	// retires the single pre-run snapshot and the edge two concurrent runs used to create.
@@ -531,7 +606,7 @@ func (h *assistantHandlers) streamTurn(c *fiber.Ctx, sess assistant.Session, pro
 		}
 		defer h.turns.release(sess.ID, slot)
 
-		err = turnRunner.Run(ctx, sess, registry, system, prompt, turn, func(e assistant.Event) {
+		err = start(ctx, turnRunner, registry, system, func(e assistant.Event) {
 			// A write that fails means THIS reader is not listening: a phone froze its tab,
 			// a tunnel dropped, a laptop slept. It does not mean the work should stop, and
 			// treating it that way threw away live runs — a tailoring pass lost its report
@@ -544,6 +619,11 @@ func (h *assistantHandlers) streamTurn(c *fiber.Ctx, sess assistant.Session, pro
 			stream.event(string(e.Kind), e)
 		})
 		if err != nil {
+			// Nothing to continue is a client mistake (empty session), not a turn fault —
+			// surface it as a conflict on the still-open stream rather than Sentry noise.
+			if errors.Is(err, assistant.ErrNothingToContinue) {
+				return
+			}
 			// The loop has already emitted its terminal error event; this is for us —
 			// and for Sentry, which would otherwise never learn of it: this handler
 			// returned nil long before the turn ran, so RenderError never sees the

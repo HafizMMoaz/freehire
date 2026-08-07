@@ -270,6 +270,20 @@ func (s *Store) Status(ctx context.Context, userID int64) (Meta, error) {
 	return metaFromPointer(ptr), nil
 }
 
+// UploadedAt returns the résumé upload stamp when one is recorded, without requiring
+// object storage to be configured. Used by CV bootstrap freshness (base behind upload).
+func (s *Store) UploadedAt(ctx context.Context, userID int64) (*time.Time, error) {
+	row, err := s.repo.GetStructured(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !row.ResumeUploadedAt.Valid {
+		return nil, nil
+	}
+	t := row.ResumeUploadedAt.Time
+	return &t, nil
+}
+
 // Text fetches the stored résumé and derives its plain text — parsing a PDF, or reading
 // text as-is (the pasted-text path). ErrNotStored when the user has no résumé; the text
 // is never persisted separately (derived on read, no drift).

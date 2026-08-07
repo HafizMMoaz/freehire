@@ -51,11 +51,27 @@ export function reduceTurnEvent(prev: ChatState, event: TurnEvent): ChatState {
       }));
     case 'tool_result':
       return upsertAssistant(prev, (m) => ({ ...m, tools: attachResult(m.tools, event) }));
-    case 'result':
+    case 'result': {
       // Clears the wait as well as closing the turn: a wait can end WITHOUT the turn ever
       // starting (it timed out, or was stopped), and a banner still claiming to be queued
       // would then mask the next turn's real progress.
-      return { ...closeAssistant(prev, event.is_error ?? false), queued: false };
+      let next = closeAssistant(prev, event.is_error ?? false);
+      // A failure before any assistant frame left only the user prompt — still surface an
+      // errored assistant so the Retry control has somewhere to sit.
+      if (event.is_error) {
+        const last = next.messages[next.messages.length - 1];
+        if (!last || last.role !== 'assistant' || !last.errored) {
+          next = {
+            ...next,
+            messages: [
+              ...next.messages,
+              { role: 'assistant', text: '', thinking: '', tools: [], streaming: false, errored: true },
+            ],
+          };
+        }
+      }
+      return { ...next, queued: false };
+    }
     default:
       // usage, and anything not in the union — ignored.
       return prev;

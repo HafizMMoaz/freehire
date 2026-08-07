@@ -507,3 +507,62 @@ func TestACancelledToolRoundKeepsItsResults(t *testing.T) {
 		t.Fatalf("transcript has %v, want %v", roles, want)
 	}
 }
+
+// A retry after a transport failure must not append another copy of the user's
+// prompt — that would leave the model answering a conversation that asked twice.
+func TestContinueDoesNotRecordAnotherUserPrompt(t *testing.T) {
+	failing := &scriptedModel{err: errors.New("upstream 502")}
+	q := &fakeQueries{}
+	r := testRunner(failing, q)
+
+	var failed []Event
+	err := r.Run(context.Background(), Session{ID: sessionID, UserID: 3}, NewRegistry(),
+		"sys", "tailor this for me", TurnConfig{}, func(e Event) { failed = append(failed, e) })
+	if err == nil {
+		t.Fatal("want the first turn to fail")
+	}
+	if res := lastResult(t, failed); !res.IsError {
+		t.Fatalf("first turn result = %+v, want is_error", res)
+	}
+	users := 0
+	for _, m := range q.messages {
+		if m.Role == RoleUser {
+			users++
+		}
+	}
+	if users != 1 {
+		t.Fatalf("after the failed turn: %d user messages, want 1", users)
+	}
+
+	ok := &scriptedModel{replies: []*llms.ContentChoice{textReply("Picking up where we left off.")}}
+	r = testRunner(ok, q)
+	var events []Event
+	if err := r.Continue(context.Background(), Session{ID: sessionID, UserID: 3}, NewRegistry(),
+		"sys", TurnConfig{}, func(e Event) { events = append(events, e) }); err != nil {
+		t.Fatalf("Continue: %v", err)
+	}
+	if hasKind(events, EventUserPrompt) {
+		t.Fatal("Continue emitted user_prompt — that would duplicate the request in the UI and the model")
+	}
+	users = 0
+	for _, m := range q.messages {
+		if m.Role == RoleUser {
+			users++
+		}
+	}
+	if users != 1 {
+		t.Fatalf("after Continue: %d user messages, want still 1", users)
+	}
+	if res := lastResult(t, events); res.StopReason != StopEndTurn || res.IsError {
+		t.Fatalf("Continue result = %+v, want a clean end_turn", res)
+	}
+}
+
+func TestContinueWithEmptyTranscriptIsRefused(t *testing.T) {
+	r := testRunner(&scriptedModel{}, &fakeQueries{})
+	err := r.Continue(context.Background(), Session{ID: sessionID, UserID: 3}, NewRegistry(),
+		"sys", TurnConfig{}, func(Event) {})
+	if !errors.Is(err, ErrNothingToContinue) {
+		t.Fatalf("Continue on empty session: %v, want ErrNothingToContinue", err)
+	}
+}

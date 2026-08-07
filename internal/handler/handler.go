@@ -190,6 +190,10 @@ type Config struct {
 	// disables rendering: the /me/cvs/:id/pdf endpoint returns 501, the rest works.
 	TypstBin string
 
+	// CVEditAllowBulletTruncation restores silent Sanitize truncation past the
+	// per-role bullet ceiling. Default false (refuse on). Ops kill switch.
+	CVEditAllowBulletTruncation bool
+
 	// TracerLinkSalt keys the visitor hash of a traced click; empty means the CV tracing
 	// toggle cannot be enabled at all.
 	TracerLinkSalt string
@@ -203,6 +207,9 @@ type Config struct {
 	// AssistantMaxSteps bounds the tool-calling rounds of one turn; zero uses the
 	// assistant package's default.
 	AssistantMaxSteps int
+	// AssistantMaxPrompt bounds the rune length of one user message. Zero falls
+	// back to the handler default (8000).
+	AssistantMaxPrompt int
 	// LLMKeys mints the per-user gateway credential each account's model calls are
 	// spent under. Nil is the deployment that does not attribute spend: every call goes
 	// out on the service credential exactly as it did before, and no behaviour changes.
@@ -351,7 +358,7 @@ func Register(app *fiber.App, cfg Config) {
 	// account a call is attributed to is decided in one place rather than per feature. A nil
 	// gateway client leaves it inert and every call on the service credential.
 	llmKeys := llmkey.NewResolver(queries, cfg.LLMKeys)
-	cvH := newCVHandlers(cfg.Pool, queries, cvStore, assistantStore, cvRenderer, cfg.TracerLinkSalt, cfg.FrontendOrigin, servedHostsOrDefault(cfg.ServedHosts, cfg.FrontendOrigin), resumeStore, photoStore, creditsStore, matchH, bankGate{bank: bank})
+	cvH := newCVHandlers(cfg.Pool, queries, cvStore, assistantStore, cvRenderer, cfg.TracerLinkSalt, cfg.FrontendOrigin, servedHostsOrDefault(cfg.ServedHosts, cfg.FrontendOrigin), resumeStore, photoStore, creditsStore, matchH, bankGate{bank: bank}, !cfg.CVEditAllowBulletTruncation)
 	telegramH := newTelegramHandlers(queries, cfg.JWTSecret, cfg.TelegramBotToken, cfg.TelegramBotUsername, cfg.TelegramWebhookSecret, cfg.FrontendOrigin, contributionsH.intake)
 	discordH := newDiscordHandlers(queries, cfg.JWTSecret, cfg.DiscordBotToken, cfg.DiscordApplicationID, cfg.DiscordPublicKey, cfg.DiscordGuildID, cfg.FrontendOrigin, contributionsH.intake)
 	inboxH := newInboxHandlers(queries, cfg.Pool, cfg.GmailConnector, cfg.GmailCipher, cfg.FrontendOrigin, cfg.CookieSecure, cfg.MailboxDomain)
@@ -405,7 +412,10 @@ func Register(app *fiber.App, cfg Config) {
 	// store, which is why the CV handlers get it back. It also takes the browser-tool
 	// hub, which a browsing session reads the caller's open page through.
 	assistantH := newAssistantHandlers(queries,
-		assistantModels{Agent: cfg.AssistantLLM, Keys: llmKeys, MaxSteps: cfg.AssistantMaxSteps},
+		assistantModels{
+			Agent: cfg.AssistantLLM, Keys: llmKeys,
+			MaxSteps: cfg.AssistantMaxSteps, MaxPrompt: cfg.AssistantMaxPrompt,
+		},
 		assistantStore, searchH, resumeH, trackingH, cvH, profileH, a.browserTools, inboxH, bank)
 	resumeH.llm = llmBinding{client: cfg.LLM, keys: llmKeys}
 	matchH.llm = llmBinding{client: cfg.LLM, keys: llmKeys}

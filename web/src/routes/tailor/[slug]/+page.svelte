@@ -38,6 +38,8 @@
   } from '$lib/cv';
   import type { Analysis, AutopilotEntry, Document, RevisionView } from '$lib/generated/contracts';
   import type { Job } from '$lib/types';
+  import { profileStore } from '$lib/profile.svelte';
+  import { skillsToAddToProfile } from '$lib/tailor/skillDiff';
 
   const slug = $derived(page.params.slug ?? '');
   const cvParam = $derived(page.url.searchParams.get('cv'));
@@ -111,7 +113,7 @@
 
   // The right context panel's tab, lifted here so the mobile tab bar can drive it (on desktop the
   // panel's own tab bar sets it via the same binding).
-  let artifactTab = $state<'jd' | 'jobmatch' | 'score'>('jobmatch');
+  let artifactTab = $state<'jd' | 'jobmatch' | 'score' | 'history'>('jobmatch');
 
   // Mobile-only navigation: below lg the three columns collapse to one, so a single flat tab bar
   // picks which view fills the screen. At lg it's hidden and every column shows at once as before.
@@ -119,7 +121,7 @@
   // syncs the matching column's own selector (mobile → column) so the wide layout shows the same
   // content once revealed. The reverse (a desktop tab change updating mobileView) is not wired —
   // switching a column tab then narrowing across lg resets the mobile view to that tab's default.
-  type MobileView = 'chat' | 'editor' | 'settings' | 'preview' | 'templates' | 'jd' | 'jobmatch' | 'score';
+  type MobileView = 'chat' | 'editor' | 'settings' | 'preview' | 'templates' | 'jd' | 'jobmatch' | 'score' | 'history';
   const mobileTabs: [MobileView, string][] = [
     ['chat', 'Chat'],
     ['editor', 'Editor'],
@@ -128,6 +130,7 @@
     ['preview', 'Preview'],
     ['jobmatch', 'Job Match'],
     ['score', 'Score'],
+    ['history', 'History'],
     ['jd', 'Job'],
   ];
   let mobileView = $state<MobileView>('chat');
@@ -211,6 +214,7 @@
   }
 
   onMount(async () => {
+    void profileStore.ensureLoaded();
     try {
       if (cvParam) {
         // Resume an existing tailored CV. If it already has a bound session, re-attach it with
@@ -341,6 +345,76 @@
     void loadRevisions();
     void refreshAtsDelta();
     void refreshJobMatch();
+  }
+
+  let resetBusy = $state(false);
+  let resetError = $state('');
+
+  async function resetFromResume() {
+    if (
+      !window.confirm(
+        'Reset this tailored CV from your current uploaded résumé? Your template and typography stay; content edits can be undone from History.',
+      )
+    ) {
+      return;
+    }
+    resetBusy = true;
+    resetError = '';
+    try {
+      await undoRun({
+        flush: flushPendingSave,
+        undo: async () => {
+          const rec = await api.resetCvFromResume(cvId);
+          hydrate(rec);
+        },
+        refetch: async () => {
+          pdfVersion += 1;
+          void loadRevisions();
+          void refreshAtsDelta();
+          void refreshJobMatch();
+        },
+      });
+    } catch (e) {
+      resetError = e instanceof ApiError ? e.message : 'Could not reset changes.';
+    } finally {
+      resetBusy = false;
+    }
+  }
+
+  let addSkillsBusy = $state(false);
+  let addSkillsError = $state('');
+  let addSkillsNote = $state('');
+  const skillsToAdd = $derived(
+    skillsToAddToProfile(doc, profileStore.profile).skills,
+  );
+
+  async function addSkillsToProfile() {
+    const result = skillsToAddToProfile(doc, profileStore.profile);
+    if (!result.skills.length) return;
+    const preview = result.skills.slice(0, 12).join(', ') + (result.skills.length > 12 ? '…' : '');
+    const capNote = result.capped
+      ? '\n\nYour profile is near the skill cap — only as many as fit will be added.'
+      : '';
+    if (
+      !window.confirm(
+        `Add ${result.skills.length} skill(s) to your profile?\n\n${preview}${capNote}`,
+      )
+    ) {
+      return;
+    }
+    addSkillsBusy = true;
+    addSkillsError = '';
+    addSkillsNote = '';
+    try {
+      await profileStore.addSkills(result.skills);
+      addSkillsNote = result.capped
+        ? 'Some skills were skipped because your profile hit the skill limit.'
+        : '';
+    } catch (e) {
+      addSkillsError = e instanceof ApiError ? e.message : 'Could not update profile skills.';
+    } finally {
+      addSkillsBusy = false;
+    }
   }
 
   // ---- Autosave (folded in from the old standalone CvEditor) ----
@@ -626,15 +700,28 @@
       <div
         class={['min-w-0 min-h-0 flex-1 flex-col bg-muted/30 lg:flex', mobileView === 'preview' ? 'flex' : 'hidden']}
       >
-        <div class="flex items-center justify-between gap-2 border-b border-border bg-background px-3 py-1.5 text-sm">
-          <div class="flex items-center gap-1">
-            <button type="button" onclick={zoomOut} aria-label="Zoom out" class="rounded p-1 text-muted-foreground transition-colors hover:text-foreground">
-              <ZoomOut class="size-4" />
-            </button>
-            <span class="w-12 text-center text-xs tabular-nums text-muted-foreground">{zoomPct}%</span>
-            <button type="button" onclick={zoomIn} aria-label="Zoom in" class="rounded p-1 text-muted-foreground transition-colors hover:text-foreground">
-              <ZoomIn class="size-4" />
-            </button>
+        <div class="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 border-b border-border bg-background px-3 py-1.5 text-sm">
+          <div class="flex flex-wrap items-center gap-2">
+            <div class="flex items-center gap-1">
+              <button type="button" onclick={zoomOut} aria-label="Zoom out" class="rounded p-1 text-muted-foreground transition-colors hover:text-foreground">
+                <ZoomOut class="size-4" />
+              </button>
+              <span class="w-12 text-center text-xs tabular-nums text-muted-foreground">{zoomPct}%</span>
+              <button type="button" onclick={zoomIn} aria-label="Zoom in" class="rounded p-1 text-muted-foreground transition-colors hover:text-foreground">
+                <ZoomIn class="size-4" />
+              </button>
+            </div>
+            {#if skillsToAdd.length > 0}
+              <button
+                type="button"
+                disabled={addSkillsBusy || turnActive || runActive}
+                title="Add skills from this CV that are missing on your search profile"
+                onclick={() => void addSkillsToProfile()}
+                class="inline-flex items-center rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {addSkillsBusy ? 'Adding…' : `Add ${skillsToAdd.length} skill${skillsToAdd.length === 1 ? '' : 's'} to profile`}
+              </button>
+            {/if}
           </div>
           <!-- eslint-disable svelte/no-navigation-without-resolve -- external CV PDF API URL, not an internal route -->
           <a
@@ -647,6 +734,16 @@
             <Download class="size-4" /> Download PDF
           </a>
         </div>
+        {#if addSkillsError || addSkillsNote}
+          <div class="border-b border-border bg-background px-3 py-1.5 text-xs">
+            {#if addSkillsError}
+              <p class="text-destructive">{addSkillsError}</p>
+            {/if}
+            {#if addSkillsNote}
+              <p class="text-muted-foreground">{addSkillsNote}</p>
+            {/if}
+          </div>
+        {/if}
         <div class="min-h-0 flex-1 overflow-auto p-6">
           <CvHtmlPreview {doc} {templateId} {zoom} {fonts} {photoSrc} highlightPaths={pinnedRevision?.paths ?? []} />
         </div>
@@ -666,8 +763,11 @@
         onPreviewRevision={(r) => (pinnedRevision = r)}
         onUndoRevision={undoRevision}
         onUndoRevisionRun={undoRevisionRun}
+        onResetFromResume={resetFromResume}
+        resetBusy={resetBusy || turnActive || runActive}
+        {resetError}
         bind:tab={artifactTab}
-        mobileVisible={mobileView === 'jd' || mobileView === 'jobmatch' || mobileView === 'score'}
+        mobileVisible={mobileView === 'jd' || mobileView === 'jobmatch' || mobileView === 'score' || mobileView === 'history'}
       />
     </div>
   {/if}

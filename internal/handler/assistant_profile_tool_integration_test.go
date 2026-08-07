@@ -77,6 +77,7 @@ func newProfileAssistantApp(pool *pgxpool.Pool, iss *auth.Issuer, model assistan
 	)
 	h := &assistantHandlers{
 		store: assistant.NewStore(queries), queries: queries, profile: profileH, experience: bank,
+		maxPrompt: defaultAssistantMaxPrompt,
 	}
 	h.runner = assistant.NewRunner(model, h.store, assistant.RunnerConfig{MaxSteps: 3})
 

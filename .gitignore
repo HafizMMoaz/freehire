@@ -77,6 +77,12 @@ hire
 .agents/
 skills-lock.json
 
+# Spec Kit — local-only (not part of the freehire tree). Keep on disk for personal
+# workflows; never commit tooling, constitution memory, or generated feature specs.
+.specify/
+.cursor/
+/specs/
+
 # Python
 __pycache__/
 *.pyc

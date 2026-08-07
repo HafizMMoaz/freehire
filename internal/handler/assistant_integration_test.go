@@ -60,6 +60,7 @@ func newAssistantApp(pool *pgxpool.Pool, iss *auth.Issuer, model assistant.Model
 	bank := experience.NewStore(experience.NewQueriesRepository(queries))
 	h := &assistantHandlers{
 		store: assistant.NewStore(queries), queries: queries,
+		maxPrompt: defaultAssistantMaxPrompt,
 		// A rehearsal resolves its application through the same store the production
 		// wiring gives it; without this the ownership check reports the assistant
 		// unavailable and the 404 under test would never be reached.

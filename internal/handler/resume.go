@@ -336,6 +336,11 @@ func (h *resumeHandlers) embedResume(userID int64, text string) {
 // the CV embedding (/my/recommendations) and the structured résumé (profile view + fit
 // context). Both run detached on their own timeout contexts. Defined once so the two
 // upload paths (PutResume, ExtractResumeProfile) can't drift out of sync.
+//
+// Intentionally does NOT write cvs rows. Applying the seed into a base or tailored CV is
+// the candidate's explicit Reset from résumé on the tailor workspace — or, for a *new*
+// vacancy bootstrap only, TailorCV's stale-base refresh when base.updated_at predates
+// resume_uploaded_at. Upload itself never mutates cvs.
 func (h *resumeHandlers) deriveResumeArtifacts(userID int64, text string, uploadedAt *time.Time) {
 	go h.embedResume(userID, text)
 	go h.extractStructuredResume(userID, text, uploadedAt)

@@ -76,6 +76,20 @@ func TestTailorPromptCarriesTheHonestyRule(t *testing.T) {
 	}
 }
 
+func TestTailorPromptStatesTheBulletCeilingRule(t *testing.T) {
+	p := SystemPrompt(PresetTailor)
+	lower := strings.ToLower(p)
+	if !strings.Contains(lower, "bullet ceiling") && !strings.Contains(lower, "at most") {
+		t.Error("the tailor prompt must tell the model each experience has a bullet ceiling")
+	}
+	if !strings.Contains(lower, "refused") {
+		t.Error("the tailor prompt must say inserting past the cap is refused")
+	}
+	if !strings.Contains(p, "`set`") || !strings.Contains(p, "`remove`") {
+		t.Error("the tailor prompt must tell the model to set or remove before inserting when full")
+	}
+}
+
 func TestAnUnknownPresetFallsBackToTheChatPrompt(t *testing.T) {
 	if SystemPrompt("wizard") != SystemPrompt(PresetChat) {
 		t.Error("an unknown preset must still get a prompt; a session with none would answer unguided")

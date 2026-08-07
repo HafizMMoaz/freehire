@@ -139,6 +139,19 @@ Three things that follow, and are easy to get backwards:
   tailored copy whose vacancy is gone is refused with "the vacancy … no longer exists". They are
   different situations, and `job_id == 0` alone cannot tell them apart.
 
+### Reset from résumé
+
+`POST /me/cvs/:id/reset-from-resume` (cookie-only) rebuilds a **tailored** CV's content from the
+current résumé seed (`bankedSeeder`: experience bank + `resume_structured`) and refreshes the
+base CV from the same seed. Same tailored id and agent session; template/margins/style on each
+row are preserved. Upload alone does **not** write `cvs` — it only refreshes the seed source;
+this endpoint is the explicit apply. 409 when the target is not tailored or the seed is unusable.
+
+**Bootstrap freshness:** `POST /me/cvs/tailor` refreshes a base whose `updated_at` is strictly
+before `resume_uploaded_at` (when the seed is usable) before copying into a **new** tailored
+row. Reloading an existing tailored-for-job stays idempotent and does not rewrite that copy.
+Does not write the profile.
+
 Backfill caveat: `0058` reads `job_id` to set the flag, so it is right about every row only because
 no prune had orphaned one yet. A row orphaned before that migration would stay marked non-tailored
 and would need a heuristic repair.

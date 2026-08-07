@@ -1590,6 +1590,16 @@ export function createApi(
     );
   }
 
+  /** Rebuild this tailored CV (and the base) from the current résumé seed. Cookie-only.
+   *  Same id and agent session; presentation preserved. 409 when the CV is not tailored or
+   *  there is nothing to seed from. */
+  async function resetCvFromResume(id: string): Promise<CvRecord> {
+    return requestData<CvRecord>(
+      `/api/v1/me/cvs/${encodeURIComponent(id)}/reset-from-resume`,
+      jsonBody('POST', {}),
+    );
+  }
+
   async function getCvAtsDelta(id: string): Promise<CvAtsDelta> {
     return requestData<CvAtsDelta>(`/api/v1/me/cvs/${id}/ats-delta`);
   }
@@ -1888,6 +1898,7 @@ export function createApi(
     listCvRevisions,
     undoCvRevision,
     undoCvRevisionRun,
+    resetCvFromResume,
     tailorCv,
     startTailorSession,
     resolveJd,

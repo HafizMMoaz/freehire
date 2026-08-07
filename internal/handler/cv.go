@@ -74,7 +74,9 @@ type jobReader interface {
 	GetJob(ctx context.Context, id int64) (db.Job, error)
 }
 
-func newCVHandlers(pool *pgxpool.Pool, queries *db.Queries, cvStore *cv.Store, assistantSessions *assistant.Store, cvRenderer cv.Renderer, tracerSalt, baseURL string, servedHosts []string, resumeStore *resume.Store, photoStore *headshot.Store, creditsStore *credits.Store, match *matchHandlers, gate cvedit.EvidenceGate) *cvHandlers {
+// refuseListCap is normally true (Commit refuses over-cap edits). Pass false only when
+// an operator has turned on CV_EDIT_ALLOW_BULLET_TRUNCATION.
+func newCVHandlers(pool *pgxpool.Pool, queries *db.Queries, cvStore *cv.Store, assistantSessions *assistant.Store, cvRenderer cv.Renderer, tracerSalt, baseURL string, servedHosts []string, resumeStore *resume.Store, photoStore *headshot.Store, creditsStore *credits.Store, match *matchHandlers, gate cvedit.EvidenceGate, refuseListCap bool) *cvHandlers {
 	h := &cvHandlers{
 		cvStore:           cvStore,
 		assistantSessions: assistantSessions,
@@ -93,7 +95,7 @@ func newCVHandlers(pool *pgxpool.Pool, queries *db.Queries, cvStore *cv.Store, a
 		// something attached afterwards: PATCH /me/cvs/:id edits as the agent for any
 		// API-key caller, so the wall cannot depend on which other features the assembly
 		// built.
-		editor:             cvedit.NewEditor(cvedit.NewRepository(pool, queries), gate),
+		editor:             cvedit.NewEditor(cvedit.NewRepository(pool, queries), gate).SetRefuseListCap(refuseListCap),
 		jobReader:          queries,
 		resume:             resumeStore,
 		photos:             photoStore,
@@ -145,6 +147,9 @@ func (h *cvHandlers) register(api fiber.Router, mw middleware) {
 	// the edit + context/get/render reads with its minted API key (keyAuth = cookie or Bearer).
 	api.Post("/me/cvs/tailor", mw.cookie, h.TailorCV)
 	api.Post("/me/cvs/:id/tailor-session", mw.cookie, h.StartTailorSession)
+	// Rebuild this tailored CV (and the base) from the current résumé seed. Cookie-only:
+	// destructive whole-document replace; the browser is where the candidate confirms it.
+	api.Post("/me/cvs/:id/reset-from-resume", mw.cookie, h.ResetCVFromResume)
 	api.Patch("/me/cvs/:id", mw.key, h.PatchCV)
 	api.Put("/me/cvs/:id/session", mw.key, h.SetCVSession)
 	api.Get("/me/cvs/:id/tailor-context", mw.key, h.TailorContext)
@@ -624,6 +629,13 @@ func mapCVError(err error) error {
 			strings.TrimPrefix(err.Error(), cvedit.ErrInvalidOp.Error()+": "))
 	case errors.Is(err, cvedit.ErrForbiddenPath), errors.Is(err, cvedit.ErrEvidenceRequired):
 		return fiber.NewError(fiber.StatusForbidden, err.Error())
+	case errors.Is(err, cvedit.ErrListCap):
+		// Candidate-facing: no internal prefixes, clear that nothing was deleted.
+		if msg := cvedit.UserListCapMessage(err); msg != "" {
+			return fiber.NewError(fiber.StatusConflict, msg)
+		}
+		return fiber.NewError(fiber.StatusConflict,
+			"this role already has the maximum number of bullet points; nothing was changed")
 	case errors.Is(err, cvedit.ErrNothingToUndo):
 		return fiber.NewError(fiber.StatusConflict, "there is nothing to undo")
 	case errors.Is(err, cvedit.ErrCannotUndo):

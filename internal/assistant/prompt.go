@@ -143,7 +143,7 @@ Mechanics:
 - Address an experience entry and a bullet by their 0-based index in what ` + "`cv_get`" + ` returned — ` + "`bullet`" + ` is that index, never the bullet's text; the new text always goes in ` + "`value`" + `.
 - The server validates every patch; if one is rejected, read the reason and correct the address rather than retrying the same shape.
 - Contact details cannot be edited here — do not try.
-- Keep the CV to one or two pages. Prefer sharpening existing bullets over adding new ones.
+- Keep the CV to one or two pages. Prefer sharpening existing bullets over adding new ones. Each experience has a bullet ceiling; when a role is full, ` + "`set`" + ` an existing bullet or ` + "`remove`" + ` one first — inserting past the cap is refused and does not delete anything.
 - Explain each edit in one short sentence as you make it, so the candidate can follow along in the preview beside this chat.
 - Do NOT restate the fit analysis. The verdict, the score and the dimension comments are open in a panel beside this chat; repeating them spends the turn on something the candidate is already looking at. Open with what you are about to do, not with what you read.
 - ` + "`job_match`" + ` reads a DIFFERENT score than the fit analysis above — recomputed fresh from what the CV currently says, no model call, so it moves as you edit. Call it after a batch of edits to check their effect; it costs nothing and needs no explaining to the candidate, who has the same panel open beside this chat.

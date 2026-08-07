@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
-  import { AlertTriangle, ArrowDown, MessagesSquare, PanelLeft, Plus, Trash2, WandSparkles } from '@lucide/svelte';
+  import { AlertTriangle, ArrowDown, MessagesSquare, PanelLeft, Plus, Trash2, WandSparkles, X } from '@lucide/svelte';
   import { resolve } from '$app/paths';
   import {
     createSession,
@@ -12,12 +12,14 @@
   import { track } from '$lib/analytics';
   import {
     openRehearsal,
+    retryTurn,
     sendTurn,
     startAutopilot,
     StreamInterrupted,
     type Turn,
   } from '$lib/assistant/client';
   import { initChat, reduceTurnEvent, type ChatState } from '$lib/assistant/chat';
+  import { bulletCapUserMessage } from '$lib/assistant/bulletCapAlert';
   import { splitPresentingCalls } from '$lib/assistant/deck';
   import { atBottom } from '$lib/assistant/scrolling';
   import { renderMarkdown } from '$lib/assistant/markdown';
@@ -100,6 +102,10 @@
   // open — deleted, someone else's, or a tailoring chat that belongs to a CV. It is
   // a dead link, not a failure, so it gets an explanation and a way out.
   let notFound = $state(false);
+  // When cv_edit refuses an insert that would silently truncate a full role, show a
+  // dismissible banner — the tool chip alone is easy to miss, and the candidate needs
+  // to know their existing bullets were kept.
+  let bulletCapAlert = $state<string | null>(null);
 
   // Sidebar: the caller's conversations, newest activity first. `switching`
   // disables the composer and list while a session load is in flight.
@@ -365,6 +371,7 @@
     try {
       chat = initChat();
       queue = [];
+      bulletCapAlert = null;
       activeId = id;
       activePreset = null;
       // Raise the guard HERE, not after the fetch below: the URL-following effect reruns
@@ -508,6 +515,11 @@
     if (sessionId !== activeId) return;
     if (event.type === 'user_prompt') {
       sessions = setLabel(sessions, sessionId, labelFromMessage(event.text));
+      bulletCapAlert = null;
+    }
+    if (event.type === 'tool_result' && event.is_error) {
+      const alert = bulletCapUserMessage(event.result);
+      if (alert) bulletCapAlert = alert;
     }
     chat = reduceTurnEvent(chat, event);
     if (event.type === 'result') {
@@ -533,10 +545,14 @@
     void dispatch({ kind: 'message', text });
   }
 
-  // The three ways a turn begins. Two of them carry no text, because their brief is the
-  // server's: the unattended tailoring run, and a rehearsal's opening — the candidate
-  // arrived from an application with nothing to type.
-  type TurnStart = { kind: 'message'; text: string } | { kind: 'autopilot' } | { kind: 'opening' };
+  // The ways a turn begins. Autopilot and opening carry no text (server-owned brief).
+  // Retry continues from the existing transcript without appending another user message —
+  // re-sending the prompt would duplicate it in the model's context.
+  type TurnStart =
+    | { kind: 'message'; text: string }
+    | { kind: 'autopilot' }
+    | { kind: 'opening' }
+    | { kind: 'retry' };
 
   async function dispatch(start: TurnStart) {
     const id = activeId;
@@ -556,9 +572,12 @@
     // Whether the turn ever began. A message can queue behind the session's running turn and
     // then never start — the wait runs out, or it is stopped — and the composer cleared the
     // draft the moment it was sent. Without this the user's words would simply vanish.
-    let began = false;
+    // A retry never emits user_prompt (that is the point), so "began" is not meaningful for it.
+    let began = start.kind === 'retry';
     const watch = (event: TurnEvent) => {
-      if (event.type === 'user_prompt') began = true;
+      if (event.type === 'user_prompt' || event.type === 'assistant_text' || event.type === 'assistant_thought' || event.type === 'tool_use') {
+        began = true;
+      }
       onEvent(id, event);
     };
 
@@ -569,6 +588,14 @@
       started = startAutopilot(id, watch);
     } else if (start.kind === 'opening') {
       started = openRehearsal(id, watch);
+    } else if (start.kind === 'retry') {
+      // A failed autopilot left runActive false after endTurn; if the last user brief was
+      // the unattended run, treat the retry as that run again so the host can keep its
+      // "run in progress" affordances. We cannot see the brief here cheaply — the server
+      // already re-raises the ceiling — so only flip the flag when the host already knew
+      // a run was in play (openingActions with autopilot, or prior runActive). For the
+      // tailor workspace, refreshing after a failed run is enough via onTurnComplete.
+      started = retryTurn(id, watch);
     } else {
       started = sendTurn(id, start.text, watch);
     }
@@ -596,6 +623,11 @@
       chat = reduceTurnEvent(chat, { type: 'result', stop_reason: 'error', is_error: true });
       endTurn();
     }
+  }
+
+  function retryFailedTurn() {
+    if (!canStartTurn()) return;
+    void dispatch({ kind: 'retry' });
   }
 
   /** Re-read a session's stored transcript into the view. The server holds the truth about a
@@ -645,6 +677,23 @@
   >
     <AlertTriangle class="mt-0.5 size-4 shrink-0" />
     <span>{error}</span>
+  </div>
+{/if}
+{#if bulletCapAlert}
+  <div
+    class="m-3 mb-0 flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/5 px-3 py-2 text-sm text-foreground"
+    role="status"
+  >
+    <AlertTriangle class="mt-0.5 size-4 shrink-0 text-warning-strong" />
+    <span class="min-w-0 flex-1">{bulletCapAlert}</span>
+    <button
+      type="button"
+      class="shrink-0 rounded-md p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      aria-label="Dismiss"
+      onclick={() => (bulletCapAlert = null)}
+    >
+      <X class="size-4" />
+    </button>
   </div>
 {/if}
 
@@ -832,7 +881,19 @@
               {/if}
 
               {#if message.errored}
-                <p class="self-start text-xs text-destructive">The agent ended the turn with an error.</p>
+                <div class="self-start flex flex-wrap items-center gap-2 text-xs">
+                  <p class="text-destructive">The agent ended the turn with an error.</p>
+                  {#if i === chat.messages.length - 1 && !turnActive && !switching}
+                    <button
+                      type="button"
+                      class="rounded-md border border-border bg-background px-2 py-0.5 font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+                      disabled={!canStartTurn()}
+                      onclick={retryFailedTurn}
+                    >
+                      Retry
+                    </button>
+                  {/if}
+                </div>
               {/if}
             {/if}
           {/each}

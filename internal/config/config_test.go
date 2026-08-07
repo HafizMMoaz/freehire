@@ -83,6 +83,55 @@ func TestLoad_AnUnparseableCeilingIsNoCeiling(t *testing.T) {
 	}
 }
 
+func TestLoad_BulletTruncationEscapeHatchDefaultsOff(t *testing.T) {
+	t.Setenv("CV_EDIT_ALLOW_BULLET_TRUNCATION", "")
+	if s := Load(); s.CVEditAllowBulletTruncation {
+		t.Fatal("CVEditAllowBulletTruncation defaults on — an unset env must keep the refuse")
+	}
+}
+
+func TestLoad_BulletTruncationEscapeHatchFromEnv(t *testing.T) {
+	t.Setenv("CV_EDIT_ALLOW_BULLET_TRUNCATION", "true")
+	if s := Load(); !s.CVEditAllowBulletTruncation {
+		t.Fatal("CVEditAllowBulletTruncation = false, want true from env")
+	}
+}
+
+func TestLoad_MaxBulletsDefaultsToTwenty(t *testing.T) {
+	t.Setenv("CV_MAX_BULLETS", "")
+	if s := Load(); s.CVMaxBullets != 20 {
+		t.Fatalf("CVMaxBullets = %d, want 20", s.CVMaxBullets)
+	}
+}
+
+func TestLoad_AssistantMaxPromptDefaultsTo8000(t *testing.T) {
+	t.Setenv("ASSISTANT_MAX_PROMPT", "")
+	if s := Load(); s.AssistantMaxPrompt != 8000 {
+		t.Fatalf("AssistantMaxPrompt = %d, want 8000", s.AssistantMaxPrompt)
+	}
+}
+
+func TestLoad_AssistantMaxPromptFromEnv(t *testing.T) {
+	t.Setenv("ASSISTANT_MAX_PROMPT", "15000")
+	if s := Load(); s.AssistantMaxPrompt != 15000 {
+		t.Fatalf("AssistantMaxPrompt = %d, want 15000", s.AssistantMaxPrompt)
+	}
+}
+
+func TestLoad_AssistantMaxPromptRejectsNonPositive(t *testing.T) {
+	t.Setenv("ASSISTANT_MAX_PROMPT", "0")
+	if s := Load(); s.AssistantMaxPrompt != 8000 {
+		t.Fatalf("AssistantMaxPrompt = %d after 0, want 8000", s.AssistantMaxPrompt)
+	}
+}
+
+func TestLoad_MaxBulletsFromEnv(t *testing.T) {
+	t.Setenv("CV_MAX_BULLETS", "50")
+	if s := Load(); s.CVMaxBullets != 50 {
+		t.Fatalf("CVMaxBullets = %d, want 50", s.CVMaxBullets)
+	}
+}
+
 func TestLoad_STTModelHasNoDefault(t *testing.T) {
 	t.Setenv("STT_MODEL", "")
 
