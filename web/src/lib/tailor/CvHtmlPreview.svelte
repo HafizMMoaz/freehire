@@ -62,6 +62,10 @@
   const mr = $derived((doc.margins?.right || 0.5) * PX_PER_IN);
   const mb = $derived((doc.margins?.bottom || 0.5) * PX_PER_IN);
   const ml = $derived((doc.margins?.left || 0.5) * PX_PER_IN);
+  // The registry id each template falls back to when the candidate has not chosen a font — must
+  // match that template's own Typst default face (`fontFamily` in templates/<id>.typ).
+  const defaultFontId = $derived(isSans ? 'liberation-sans' : 'libertinus-serif');
+
   // Typography, resolved once and spread onto BOTH the visible sheets and the hidden
   // measurement layer below. One value, two consumers — measuring in one type and drawing in
   // another would make pagination disagree with what is on screen, and nothing would report it.
@@ -70,8 +74,17 @@
   // stack therefore falls through to whatever the machine has, which on Windows is the very face
   // the registry entry matches (Times New Roman, Arial, Calibri) and elsewhere may be a generic.
   // The preview has always approximated the PDF; this keeps it in the same family, not identical.
+  //
+  // Falls back to the template's own default id (not just the candidate's explicit choice) so an
+  // unset font_family still resolves a real CSS stack: measuring against the browser's OS-default
+  // serif/sans (e.g. macOS's "New York") instead of the registry's Georgia-anchored fallback for
+  // Libertinus Serif wraps text onto more lines than Typst does, and the preview overflows onto a
+  // second page well before the PDF would.
   const typography = $derived(
-    previewTypography(doc.style ?? {}, fonts.find((f) => f.id === doc.style?.font_family)?.css ?? ''),
+    previewTypography(
+      doc.style ?? {},
+      fonts.find((f) => f.id === (doc.style?.font_family || defaultFontId))?.css ?? '',
+    ),
   );
   const typeStyle = $derived(
     `font-size: ${typography.fontSizePx}px; line-height: ${typography.lineHeight};` +
@@ -79,7 +92,9 @@
   );
   // NOTE: the `13` in the text-[calc(N/13*1em)] classes below is PREVIEW_FONT_SIZE_PX — the base
   // those ratios were taken over. Change the constant and those class strings must follow.
-  // The template's own face applies only while the document names none.
+  // `typography.fontFamily` is empty only in the brief window before `fonts` (GET /cv-fonts) has
+  // loaded, since `defaultFontId` above always resolves once the registry is in — this Tailwind
+  // generic is a loading-state fallback, not a steady-state one.
   const useTemplateFace = $derived(typography.fontFamily === '');
 
   const contentWidth = $derived(PAGE_W - ml - mr);

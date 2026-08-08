@@ -74,7 +74,10 @@ export function stepFontSize(value: number, delta: number): number {
 
 /** The typography the live preview renders (and measures) with, resolved from the document's
  *  style block. Every unset value falls back to what the preview used before the style block
- *  existed; `cssStack` is the selected font's CSS stack, ignored when no family is set.
+ *  existed; `cssStack` is passed straight through as `fontFamily` — the caller resolves it,
+ *  whether that's the candidate's chosen font or the active template's own default face, so an
+ *  unset font_family still measures against the face the PDF will actually use rather than
+ *  whatever generic serif/sans the browser's OS happens to default to.
  *
  *  Pure so the calibration above is testable: the component only spreads the result onto both
  *  its visible sheets and its hidden measurement layer. */
@@ -90,7 +93,7 @@ export function previewTypography(
     // and left the preview still — in a feature whose whole point is that they agree.
     fontSizePx: pt > 0 ? (pt * 4) / 3 : PREVIEW_FONT_SIZE_PX,
     lineHeight: leading > 0 ? leading + LEADING_TO_LINE_HEIGHT : PREVIEW_LINE_HEIGHT,
-    fontFamily: (style.font_family ?? '') !== '' ? cssStack : '',
+    fontFamily: cssStack,
   };
 }
 
