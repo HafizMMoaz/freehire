@@ -48,7 +48,7 @@ describe('previewTypography', () => {
   });
 
   it('maps a looser leading to a looser line height', () => {
-    expect(previewTypography({ line_height: 0.7 }, '').lineHeight).toBeCloseTo(1.575, 5);
+    expect(previewTypography({ line_height: 0.7 }, '').lineHeight).toBeCloseTo(PREVIEW_LINE_HEIGHT + 0.2, 5);
   });
 
   it('passes the font stack through', () => {

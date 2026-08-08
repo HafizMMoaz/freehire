@@ -55,6 +55,11 @@
   const twoColumn = $derived(templateId === 'sidebar' || isPortrait);
   const ruled = $derived(isCentered || isSans || twoColumn); // a rule under each section heading
   const contactSep = $derived(isSans ? '·' : '|');
+  // The candidate's name renders at a different scale per template — must track each template's
+  // own `text(weight: "bold", size: (N/9.5)*1em)` on `full_name` in templates/<id>.typ. classic-ats
+  // prints a compact single-line ATS header; every other template sets a larger display name, and
+  // a single shared ratio for all six (as this used to be) overstated classic-ats specifically.
+  const nameSizeRatio = $derived(twoColumn ? 17 / 9.5 : isCentered || isSans ? 18 / 9.5 : 12 / 9.5);
 
   // Page geometry from the document's margins (inches → px). A missing or zero side falls back to
   // 0.5in, matching the backend clampMargin / Typst mg rule so preview and PDF never diverge.
@@ -90,8 +95,6 @@
     `font-size: ${typography.fontSizePx}px; line-height: ${typography.lineHeight};` +
       (typography.fontFamily ? ` font-family: ${typography.fontFamily};` : ''),
   );
-  // NOTE: the `13` in the text-[calc(N/13*1em)] classes below is PREVIEW_FONT_SIZE_PX — the base
-  // those ratios were taken over. Change the constant and those class strings must follow.
   // `typography.fontFamily` is empty only in the brief window before `fonts` (GET /cv-fonts) has
   // loaded, since `defaultFontId` above always resolves once the registry is in — this Tailwind
   // generic is a loading-state fallback, not a steady-state one.
@@ -178,12 +181,12 @@
 </script>
 
 {#snippet sectionHeading(title: string)}
-  <h2 class={['mb-1 mt-3 text-[calc(12/13*1em)] font-bold uppercase tracking-wide', isCentered ? 'text-center' : '']}>{title}</h2>
+  <h2 class={['mb-1 mt-2 font-bold uppercase tracking-wide', isCentered ? 'text-center' : '']}>{title}</h2>
   {#if ruled}<hr class="mb-2 -mt-0.5 border-neutral-300" />{/if}
 {/snippet}
 
 {#snippet contactLine()}
-  <p class={['text-[calc(12/13*1em)] text-neutral-700', isCentered ? 'text-center' : '', isSans ? 'text-neutral-500' : '']}>
+  <p class={['text-neutral-700', isCentered ? 'text-center' : '', isSans ? 'text-neutral-500' : '']}>
     {#each contacts as c, i (i)}
       {#if i > 0}<span class="mx-1.5 text-neutral-400">{contactSep}</span>{/if}
       {#if isLink(c)}
@@ -209,7 +212,10 @@
 {#snippet headerBlock()}
   <header class={['mb-1', isCentered ? 'text-center' : '', isHeadshot ? 'flex items-start gap-5' : '']}>
     <div class={isHeadshot ? 'min-w-0 flex-1' : ''}>
-    <h1 class={['text-[calc(24/13*1em)] leading-[1.333] font-bold', isSans ? 'uppercase tracking-wider' : 'tracking-tight']}>
+    <h1
+      class={['leading-[1.333] font-bold', isSans ? 'uppercase tracking-wider' : 'tracking-tight']}
+      style="font-size: calc({nameSizeRatio} * 1em);"
+    >
       {header.full_name || 'Your Name'}
     </h1>
     {#if !twoColumn && contacts.length}
@@ -219,7 +225,7 @@
       <p
         class:cv-lit={lit('summary')}
         class={[
-          'mt-2 text-[calc(12.5/13*1em)] text-neutral-800',
+          'mt-1 text-neutral-800',
           isCentered ? 'mx-auto max-w-[62ch] italic' : '',
           twoColumn ? 'italic' : '',
         ]}
@@ -230,13 +236,13 @@
     </div>
     {#if isHeadshot}{@render photoFrame('size-[98px]')}{/if}
   </header>
-  <hr class={['my-2', isSans || twoColumn ? 'border-neutral-500' : 'border-neutral-300']} />
+  <hr class={['my-1', isSans || twoColumn ? 'border-neutral-500' : 'border-neutral-300']} />
 {/snippet}
 
 {#snippet experienceItem(e: ExperienceItem, at: number)}
   {@const bullets = keepIndex(e.bullets ?? [], (b) => b.trim() !== '')}
   {@const stack = (e.stack ?? []).filter((s) => s.trim())}
-  <div class="mb-2.5">
+  <div class="mb-1.5">
     <p class="font-bold" class:cv-lit={lit(`experience[${at}].role`) || lit(`experience[${at}].company`)}>
       {experienceHeader(e)}
     </p>

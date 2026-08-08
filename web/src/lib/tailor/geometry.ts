@@ -49,18 +49,25 @@ export const FONT_SIZE_STEP = 0.5;
  *  the document means "use this", so the stepper starts from it rather than from zero. */
 export const TEMPLATE_FONT_SIZE_PT = 9.5;
 
-/** What the preview has always rendered body text at: 13px on `leading-snug`. These stay the
- *  fallback for an unset style so an existing CV paginates exactly as it did — the preview
- *  approximates Typst by measurement, and re-deriving these from the point size would move
- *  every existing preview for no gain. */
+/** What the preview renders body text at: 13px, paired with PREVIEW_LINE_HEIGHT below. These
+ *  stay the fallback for an unset style so an existing CV paginates exactly as it did — the
+ *  preview approximates Typst by measurement, and re-deriving these from the point size would
+ *  move every existing preview for no gain. */
 export const PREVIEW_FONT_SIZE_PX = 13;
-export const PREVIEW_LINE_HEIGHT = 1.375;
+
+/** Measured, not guessed: a classic-ats PDF's text layer (PyMuPDF span bboxes) advances a
+ *  consistent 11.0pt between two lines of the same paragraph at the template's default 9.5pt /
+ *  0.5em-leading — a 11/9.5 line-height multiplier, not the 1.375 this used to read. That
+ *  earlier constant overstated every line by ~19%, which a short CV absorbs invisibly but a
+ *  dense one (many bulleted roles) compounds into a page's worth of premature overflow: a real
+ *  PDF that fits five roles on page one measured a preview that pushed the fourth onto page two. */
+export const PREVIEW_LINE_HEIGHT = 11 / 9.5;
 
 /** CSS `line-height` ≈ Typst `leading` + this. Typst's leading is the gap BETWEEN lines; CSS
  *  line-height is the whole line box, so they differ by roughly the glyphs' own height. The
  *  constant is calibrated, not derived: it is what makes the templates' default 0.5em leading
- *  land on the 1.375 the preview already used. Change it and the preview starts paginating in
- *  a different metric from the PDF, silently. */
+ *  land on PREVIEW_LINE_HEIGHT above. Change it and the preview starts paginating in a
+ *  different metric from the PDF, silently. */
 const LEADING_TO_LINE_HEIGHT = PREVIEW_LINE_HEIGHT - 0.5;
 
 /** Apply one stepper increment to a base font size in points. An unset (zero) size steps from
