@@ -79,8 +79,20 @@ them into every compile sandbox.
 
 The set is deliberately small and metric-compatible with what recruiters and résumé parsers
 expect — Tinos for Times New Roman, Liberation Sans for Arial, Carlito for Calibri. That also
-pays off in the browser: the preview ships no webfonts and its CSS fallback lands on the real
-face the metrics match.
+pays off in the browser: a candidate's explicit choice never ships a webfont, its CSS fallback
+lands on the real face the metrics match instead.
+
+**The two *template defaults* — Libertinus Serif (Typst's own built-in) and Liberation Sans —
+are the one exception,** and do ship as webfonts: `web/src/lib/tailor/CvHtmlPreview.svelte`
+`@font-face`s a Latin-only WOFF2 subset of each (`web/static/fonts/`, ~11-16KB per weight) under
+their exact family names, Vite-code-split onto the preview route only. Unlike the three
+alternates above, an unset `font_family` is the *common* case — most CVs never touch the style
+picker — so approximating with a browser default here, rather than the metric-identical face,
+is what let a dense CV's preview and PDF disagree on page count by a whole section. Regenerating
+the subset after a font bump: `pyftsubset <ttf> --output-file=<name>.woff2 --flavor=woff2
+--unicodes=U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD
+--layout-features='*' --no-hinting` (regular and bold separately — Typst never synthesizes bold,
+so the browser must not either, or a bold run's glyph widths stop matching the PDF's).
 
 `TestEveryRegisteredFontIsResolvable` fails the build if an entry names neither a Typst
 built-in nor a bundled file. It has to, because under `--ignore-system-fonts` a missing face
