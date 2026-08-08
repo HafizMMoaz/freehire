@@ -20,8 +20,8 @@
 
 ## 4. Verification
 
-- [ ] 4.1 `go build ./...` and `go vet ./...`
-- [ ] 4.2 `go vet -tags=integration ./...`
-- [ ] 4.3 `go test ./...`
-- [ ] 4.4 `go test -tags=integration ./internal/db/` (requires Docker/testcontainers) and any other integration suites touching `internal/experience` or `internal/userprofile`
-- [ ] 4.5 Web build/lint per project conventions; confirm no remaining reference to the deleted `skillDiff.ts`
+- [x] 4.1 `go build ./...` and `go vet ./...` — clean.
+- [x] 4.2 `go vet -tags=integration ./...` — clean.
+- [x] 4.3 `go test ./...` — every package ok, 0 failures.
+- [x] 4.4 `go test -tags=integration ./internal/db/` — ok. Also ran `-tags=integration` for `internal/experience`, `internal/userprofile`, `internal/handler` (the packages this change actually touches) — all ok.
+- [x] 4.5 `npx vitest run` — 836/836 passed. `npx svelte-check` — 0 errors (18 pre-existing warnings, none in touched files). `npx oxlint` — only pre-existing warnings, none in touched files. Confirmed no reference to the deleted `skillDiff.ts` anywhere in `web/`.
