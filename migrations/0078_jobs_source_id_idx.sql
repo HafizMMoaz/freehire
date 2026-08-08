@@ -1,0 +1,26 @@
+-- migrate: no-transaction
+--
+-- A full (source, id) index, unconditional — the counterpart to jobs_source_id_open_idx
+-- (0056), which is partial on `closed_at IS NULL` and therefore useless to a query that must
+-- see closed rows too.
+--
+-- Measured live (2026-08-08) on cmd/backfill-echojobs's keyset scan
+-- (`WHERE source = $1 AND id > $2 ORDER BY id LIMIT 500`, deliberately unfiltered on
+-- closed_at — a one-time backfill must fill closed rows same as open ones): without a
+-- covering index the planner chose `Index Scan using jobs_pkey (id > $2)` with
+-- `source = $1` as a bare Filter, not an Index Cond — walking the PK in id order and
+-- discarding every row that fails the filter until 500 pass. echojobs' rows are recent (high
+-- ids), so the scan had to cross nearly the whole ~4M-row table before finding its first
+-- page; killed after 3+ minutes still running. The same shape 0056 already measured for the
+-- open-only case (28s/page) without its index.
+--
+-- CONCURRENTLY, and not wrapped in the runner's transaction, for the same reason 0071 and
+-- 0056 give: building a ~4M-row index takes real time, and a plain CREATE INDEX holds
+-- SHARE lock blocking writes to jobs for the whole build. CONCURRENTLY takes SHARE UPDATE
+-- EXCLUSIVE instead, blocking neither readers nor writers, at the cost of two table passes.
+--
+-- Applied to a fresh volume by initdb after 0077; on an existing prod volume build it by hand,
+-- detached from the SSH session (systemd-run or nohup) — a CONCURRENTLY build dies with its
+-- ssh session and leaves an INVALID index behind, exactly the 0056 warning.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS jobs_source_id_idx
+    ON public.jobs (source, id);
