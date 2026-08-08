@@ -38,8 +38,6 @@
   } from '$lib/cv';
   import type { Analysis, AutopilotEntry, Document, RevisionView } from '$lib/generated/contracts';
   import type { Job } from '$lib/types';
-  import { profileStore } from '$lib/profile.svelte';
-  import { skillsToAddToProfile } from '$lib/tailor/skillDiff';
 
   const slug = $derived(page.params.slug ?? '');
   const cvParam = $derived(page.url.searchParams.get('cv'));
@@ -214,7 +212,6 @@
   }
 
   onMount(async () => {
-    void profileStore.ensureLoaded();
     try {
       if (cvParam) {
         // Resume an existing tailored CV. If it already has a bound session, re-attach it with
@@ -381,42 +378,6 @@
       resetError = e instanceof ApiError ? e.message : 'Could not reset changes.';
     } finally {
       resetBusy = false;
-    }
-  }
-
-  let addSkillsBusy = $state(false);
-  let addSkillsError = $state('');
-  let addSkillsNote = $state('');
-  const skillsToAdd = $derived(
-    skillsToAddToProfile(doc, profileStore.profile).skills,
-  );
-
-  async function addSkillsToProfile() {
-    const result = skillsToAddToProfile(doc, profileStore.profile);
-    if (!result.skills.length) return;
-    const preview = result.skills.slice(0, 12).join(', ') + (result.skills.length > 12 ? '…' : '');
-    const capNote = result.capped
-      ? '\n\nYour profile is near the skill cap — only as many as fit will be added.'
-      : '';
-    if (
-      !window.confirm(
-        `Add ${result.skills.length} skill(s) to your profile?\n\n${preview}${capNote}`,
-      )
-    ) {
-      return;
-    }
-    addSkillsBusy = true;
-    addSkillsError = '';
-    addSkillsNote = '';
-    try {
-      await profileStore.addSkills(result.skills);
-      addSkillsNote = result.capped
-        ? 'Some skills were skipped because your profile hit the skill limit.'
-        : '';
-    } catch (e) {
-      addSkillsError = e instanceof ApiError ? e.message : 'Could not update profile skills.';
-    } finally {
-      addSkillsBusy = false;
     }
   }
 
@@ -714,17 +675,6 @@
                 <ZoomIn class="size-4" />
               </button>
             </div>
-            {#if skillsToAdd.length > 0}
-              <button
-                type="button"
-                disabled={addSkillsBusy || turnActive || runActive}
-                title="Add skills from this CV that are missing on your search profile"
-                onclick={() => void addSkillsToProfile()}
-                class="inline-flex items-center rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {addSkillsBusy ? 'Adding…' : `Add ${skillsToAdd.length} skill${skillsToAdd.length === 1 ? '' : 's'} to profile`}
-              </button>
-            {/if}
           </div>
           <!-- eslint-disable svelte/no-navigation-without-resolve -- external CV PDF API URL, not an internal route -->
           <a
@@ -737,16 +687,6 @@
             <Download class="size-4" /> Download PDF
           </a>
         </div>
-        {#if addSkillsError || addSkillsNote}
-          <div class="border-b border-border bg-background px-3 py-1.5 text-xs">
-            {#if addSkillsError}
-              <p class="text-destructive">{addSkillsError}</p>
-            {/if}
-            {#if addSkillsNote}
-              <p class="text-muted-foreground">{addSkillsNote}</p>
-            {/if}
-          </div>
-        {/if}
         <div class="min-h-0 flex-1 overflow-auto p-6">
           <CvHtmlPreview {doc} {templateId} {zoom} {fonts} {photoSrc} highlightPaths={pinnedRevision?.paths ?? []} />
         </div>

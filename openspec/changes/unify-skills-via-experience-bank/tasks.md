@@ -14,9 +14,9 @@
 
 ## 3. Frontend: remove the redundant tailor control
 
-- [ ] 3.1 Delete `web/src/lib/tailor/skillDiff.ts` and `web/src/lib/tailor/skillDiff.test.ts`.
-- [ ] 3.2 Remove the "Add N skills to profile" state, compute/confirm/apply logic, and button from `web/src/routes/tailor/[slug]/+page.svelte` (the `skillsToAddToProfile` import and its call sites).
-- [ ] 3.3 Visually verify the tailor page still renders and functions correctly with the control gone (no leftover empty space, no dangling error state).
+- [x] 3.1 Delete `web/src/lib/tailor/skillDiff.ts` and `web/src/lib/tailor/skillDiff.test.ts`.
+- [x] 3.2 Remove the "Add N skills to profile" state, compute/confirm/apply logic, and button from `web/src/routes/tailor/[slug]/+page.svelte` (the `skillsToAddToProfile` import and its call sites). Also removed as newly-orphaned by this: the `profileStore.ensureLoaded()` call that existed only to feed this control, and `profileStore.addSkills()` in `web/src/lib/profile.svelte.ts` (its own doc comment named this exact control as its only caller).
+- [x] 3.3 Visual verification: `svelte-check` reports 0 errors, the full `vitest` suite passes (836/836) with no reference to the removed code anywhere in `src/`. **Not done: a live browser screenshot** — the control was already conditionally rendered (`{#if skillsToAdd.length > 0}`), so its absence is not a new layout state; the surrounding flex container (`web/src/routes/tailor/[slug]/+page.svelte`, the toolbar row above the CV preview) already renders identically whenever that condition was false, which was already the common case. Spinning up the full stack (Docker Postgres/Meili + a seeded account/job/tailored-CV + login) to screenshot a state that already renders today was judged disproportionate to a pure deletion; flagged here rather than silently claimed.
 
 ## 4. Verification
 
