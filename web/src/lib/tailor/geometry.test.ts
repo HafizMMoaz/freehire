@@ -57,8 +57,13 @@ describe('previewTypography', () => {
     );
   });
 
-  it('ignores a stack when no family is set', () => {
-    expect(previewTypography({}, 'Carlito, Calibri, sans-serif').fontFamily).toBe('');
+  // The function no longer decides whether a stack applies — the caller resolves it (the
+  // candidate's choice, or the active template's own default face) and hands it in, so an unset
+  // font_family still measures against a real CSS stack instead of an empty one.
+  it('passes a caller-resolved default stack through even when font_family is unset', () => {
+    expect(previewTypography({}, '"Libertinus Serif", "Linux Libertine", Georgia, serif').fontFamily).toBe(
+      '"Libertinus Serif", "Linux Libertine", Georgia, serif',
+    );
   });
 });
 
