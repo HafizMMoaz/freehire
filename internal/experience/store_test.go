@@ -195,6 +195,91 @@ func newStore() (*Store, *fakeRepo) {
 	return NewStore(repo), repo
 }
 
+// fakeProfileSkills is a spy ProfileSkills, so the Store's sync-on-write can be asserted
+// without a real userprofile.Service.
+type fakeProfileSkills struct {
+	calls []profileSkillsCall
+	err   error
+}
+
+type profileSkillsCall struct {
+	userID int64
+	skills []string
+}
+
+func (f *fakeProfileSkills) MergeSkills(_ context.Context, userID int64, skills []string) error {
+	f.calls = append(f.calls, profileSkillsCall{userID: userID, skills: skills})
+	return f.err
+}
+
+func TestStoreAddAtomSyncsSkillsToProfile(t *testing.T) {
+	s, _ := newStore()
+	profile := &fakeProfileSkills{}
+	s.SetProfileSkills(profile)
+
+	if _, err := s.AddAtom(context.Background(), owner, Atom{
+		Claim: "Cut latency", Skills: []string{"k8s"}, Provenance: ProvenanceManual,
+	}); err != nil {
+		t.Fatalf("AddAtom: %v", err)
+	}
+	if len(profile.calls) != 1 {
+		t.Fatalf("MergeSkills called %d times, want 1", len(profile.calls))
+	}
+	if profile.calls[0].userID != owner {
+		t.Errorf("userID = %d, want %d", profile.calls[0].userID, owner)
+	}
+	if len(profile.calls[0].skills) != 1 || profile.calls[0].skills[0] != "kubernetes" {
+		t.Errorf("skills = %v, want the canonicalized [kubernetes]", profile.calls[0].skills)
+	}
+}
+
+func TestStoreUpdateAtomSyncsSkillsToProfile(t *testing.T) {
+	s, _ := newStore()
+	atom, err := s.AddAtom(context.Background(), owner, Atom{Claim: "Cut latency", Provenance: ProvenanceManual})
+	if err != nil {
+		t.Fatalf("AddAtom: %v", err)
+	}
+
+	profile := &fakeProfileSkills{}
+	s.SetProfileSkills(profile)
+	if _, err := s.UpdateAtom(context.Background(), atom.ID, owner, Atom{
+		Claim: "Cut latency further", Skills: []string{"golang"}, Provenance: ProvenanceManual,
+	}); err != nil {
+		t.Fatalf("UpdateAtom: %v", err)
+	}
+	if len(profile.calls) != 1 {
+		t.Fatalf("MergeSkills called %d times, want 1", len(profile.calls))
+	}
+	if len(profile.calls[0].skills) != 1 || profile.calls[0].skills[0] != "go" {
+		t.Errorf("skills = %v, want the canonicalized [go]", profile.calls[0].skills)
+	}
+}
+
+func TestStoreAddAtomToleratesProfileSyncFailure(t *testing.T) {
+	s, _ := newStore()
+	s.SetProfileSkills(&fakeProfileSkills{err: errors.New("boom")})
+
+	got, err := s.AddAtom(context.Background(), owner, Atom{
+		Claim: "Cut latency", Skills: []string{"k8s"}, Provenance: ProvenanceManual,
+	})
+	if err != nil {
+		t.Fatalf("AddAtom: %v, want the atom write to succeed despite the sync failure", err)
+	}
+	if got.ID == uuid.Nil {
+		t.Error("stored atom has no id")
+	}
+}
+
+func TestStoreAddAtomWithoutProfileSkillsDependency(t *testing.T) {
+	s, _ := newStore() // no SetProfileSkills call — mirrors every other existing caller/test
+
+	if _, err := s.AddAtom(context.Background(), owner, Atom{
+		Claim: "Cut latency", Skills: []string{"k8s"}, Provenance: ProvenanceManual,
+	}); err != nil {
+		t.Fatalf("AddAtom: %v, want it to work with no ProfileSkills dependency set", err)
+	}
+}
+
 func TestStoreAddAtomSanitizesAndStamps(t *testing.T) {
 	s, _ := newStore()
 

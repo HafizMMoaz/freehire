@@ -313,7 +313,9 @@ func Register(app *fiber.App, cfg Config) {
 	// One bank for the whole surface. It is stateless over the shared queries, but the
 	// single value is what keeps the evidence gate from being anyone's to attach later:
 	// the CV editor is constructed with it below, not handed it by the assistant.
-	bank := experience.NewStore(experience.NewQueriesRepository(queries))
+	// SetProfileSkills folds every atom this bank ever writes into the owner's search
+	// profile, so a skill proven in the bank reaches job filters without a manual step.
+	bank := experience.NewStore(experience.NewQueriesRepository(queries)).SetProfileSkills(profileSvc)
 	experienceH := newExperienceHandlers(bank)
 	// Nil-safe: NewAnalyzer(nil) is a no-op analyzer, so the ATS report works whether
 	// or not the LLM is configured.

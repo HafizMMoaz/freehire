@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -42,12 +43,46 @@ type Repository interface {
 	DeleteAtom(ctx context.Context, id uuid.UUID, userID int64) (int64, error)
 }
 
+// ProfileSkills is the narrow slice of userprofile the bank needs: fold newly banked
+// skills into an existing profile. A user with no profile is not an error — there is
+// nothing to fold into, and this must never create one. Kept as an interface (rather than
+// importing internal/userprofile directly) so the bank does not need to know the
+// profile's full surface just to pass along a skill list — the same reasoning behind
+// cvedit.EvidenceGate.
+type ProfileSkills interface {
+	MergeSkills(ctx context.Context, userID int64, skills []string) error
+}
+
 // Store is the bank's domain surface: it sanitizes and validates before anything is
 // persisted, derives the claim key, and turns rows back into domain values.
-type Store struct{ repo Repository }
+type Store struct {
+	repo Repository
+	// profileSkills is optional and nil-safe: unset, atom writes behave exactly as they
+	// did before this dependency existed.
+	profileSkills ProfileSkills
+}
 
 // NewStore builds a Store over an owner-scoped Repository.
 func NewStore(repo Repository) *Store { return &Store{repo: repo} }
+
+// SetProfileSkills wires the profile-sync dependency. Optional — a Store this is never
+// called on keeps working exactly as before.
+func (s *Store) SetProfileSkills(p ProfileSkills) *Store {
+	s.profileSkills = p
+	return s
+}
+
+// syncProfileSkills folds a banked atom's skills into the owner's search profile,
+// best-effort: the atom is already durably persisted, which matters more than this
+// courtesy update, so a failure here is logged and never returned to the caller.
+func (s *Store) syncProfileSkills(ctx context.Context, userID int64, skills []string) {
+	if s.profileSkills == nil || len(skills) == 0 {
+		return
+	}
+	if err := s.profileSkills.MergeSkills(ctx, userID, skills); err != nil {
+		log.Printf("experience: profile skill sync failed for user %d: %v", userID, err)
+	}
+}
 
 // ListEmployments returns the owner's places of work in reverse chronological order
 // (current roles first). Free-form period labels are sorted via a parsed key — not raw
@@ -196,7 +231,9 @@ func (s *Store) AddAtom(ctx context.Context, userID int64, a Atom) (Atom, error)
 	if err != nil {
 		return Atom{}, fmt.Errorf("add atom: %w", err)
 	}
-	return atomFromRow(row), nil
+	added := atomFromRow(row)
+	s.syncProfileSkills(ctx, userID, added.Skills)
+	return added, nil
 }
 
 // UpdateAtom replaces an owned atom's content. The claim key moves with the claim, so
@@ -216,7 +253,9 @@ func (s *Store) UpdateAtom(ctx context.Context, id uuid.UUID, userID int64, a At
 	if err != nil {
 		return Atom{}, fmt.Errorf("update atom: %w", err)
 	}
-	return atomFromRow(row), nil
+	updated := atomFromRow(row)
+	s.syncProfileSkills(ctx, userID, updated.Skills)
+	return updated, nil
 }
 
 // DeleteAtom removes an owned atom. This is the only path that takes evidence out of the
