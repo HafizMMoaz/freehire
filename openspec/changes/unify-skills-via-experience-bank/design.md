@@ -57,9 +57,19 @@ type ProfileSkills interface {
 `internal/userprofile.Service` gets a new `MergeSkills` method implementing this — a
 Get-modify-Upsert cycle reusing the same merge rule the frontend's `withSkills` already
 encodes (server-side Go implementation, since this call has no client round-trip to lean
-on). `NewStore` takes the interface as an added constructor parameter; wiring happens once,
-at `cmd/server` construction, alongside where `Store` and `userprofile.Service` are already
-built.
+on). `Store` gets a `SetProfileSkills` setter (not a `NewStore` parameter, so every
+existing construction site keeps compiling unchanged).
+
+**Correction from the original plan above ("wiring happens once, at cmd/server"):**
+`internal/handler` builds more than one write-path `Store`, not one. `SetProfileSkills` is
+called at both: the shared `bank` in `handler.go` (backs the chat tools
+`experience_add`/`experience_update`) and the separate `Store` `resume.go`'s
+`newExperienceBank` builds for the CV-upload import path. `cmd/backfill-experience`'s bulk
+historical-CV importer is deliberately left unwired — wiring it would contradict the "no
+retrofit of historical atoms" non-goal below by flooding profile upserts for every
+already-banked user on a rerun. The read-only `Store` instances in `cv_seed.go` and
+`match_analysis.go` (`WorkHistory`/`Professional` only) never call `AddAtom`/`UpdateAtom`
+and need no wiring.
 
 *Alternative considered:* `internal/experience` importing `internal/userprofile` directly.
 Rejected — no import-cycle risk today, but it is the shape this codebase has already

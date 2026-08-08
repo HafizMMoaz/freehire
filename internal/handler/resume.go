@@ -60,18 +60,19 @@ func newResumeHandlers(resumeStore *resume.Store, structuredExtractor *resumeext
 		userProfile:         userProfile,
 		atsAnalyzer:         atsAnalyzer,
 		atsCache:            queries,
-		bank:                newExperienceBank(queries),
+		bank:                newExperienceBank(queries, userProfile),
 	}
 }
 
 // newExperienceBank builds the bank the upload path feeds, or nil when there are no
 // queries to build it over — a nil bank is the "banking disabled" state the import
-// already tolerates.
-func newExperienceBank(queries *db.Queries) experienceBank {
+// already tolerates. Wired with profileSkills so an atom the upload imports also folds
+// its skills into the same profile the upload's owner searches with.
+func newExperienceBank(queries *db.Queries, profileSkills experience.ProfileSkills) experienceBank {
 	if queries == nil {
 		return nil
 	}
-	return experience.NewStore(experience.NewQueriesRepository(queries))
+	return experience.NewStore(experience.NewQueriesRepository(queries)).SetProfileSkills(profileSkills)
 }
 
 func (h *resumeHandlers) register(api fiber.Router, mw middleware) {
