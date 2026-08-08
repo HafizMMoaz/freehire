@@ -181,7 +181,7 @@
 </script>
 
 {#snippet sectionHeading(title: string)}
-  <h2 class={['mb-1 mt-1.5 font-bold uppercase tracking-wide', isCentered ? 'text-center' : '']}>{title}</h2>
+  <h2 class={['mb-1 mt-1 font-bold uppercase tracking-wide', isCentered ? 'text-center' : '']}>{title}</h2>
   {#if ruled}<hr class="mb-2 -mt-0.5 border-neutral-300" />{/if}
 {/snippet}
 
@@ -242,7 +242,7 @@
 {#snippet experienceItem(e: ExperienceItem, at: number)}
   {@const bullets = keepIndex(e.bullets ?? [], (b) => b.trim() !== '')}
   {@const stack = (e.stack ?? []).filter((s) => s.trim())}
-  <div class="mb-1">
+  <div class="mb-0.5">
     <p class="font-bold" class:cv-lit={lit(`experience[${at}].role`) || lit(`experience[${at}].company`)}>
       {experienceHeader(e)}
     </p>
