@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/base64"
+	"errors"
 	"os"
 	"os/exec"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 
 // Settings holds application configuration read from environment variables.
 type Settings struct {
+	Env            string
 	Port           string
 	DatabaseURL    string
 	FrontendOrigin string
@@ -224,6 +226,7 @@ const defaultAssistantMaxPrompt = 8000
 // Load reads configuration from the environment, falling back to sensible defaults.
 func Load() Settings {
 	s := Settings{
+		Env:            env("ENV", "development"),
 		LLM:            LoadLLM(),
 		Port:           env("PORT", "8080"),
 		DatabaseURL:    env("DATABASE_URL", "postgres://hire:hire@localhost:5432/hire?sslmode=disable"),
@@ -284,6 +287,23 @@ func Load() Settings {
 		s.AssistantMaxPrompt = defaultAssistantMaxPrompt
 	}
 	return s
+}
+
+// Validate checks that the configuration values are safe to boot the auth surface with.
+// The JWT secret check runs in every environment, not just production: HS256 security
+// rests entirely on secret entropy, so a short secret is brute-forceable offline against
+// any captured token regardless of what ENV happens to be set to.
+func (s Settings) Validate() error {
+	if s.Env == "production" && !s.CookieSecure {
+		return errors.New("COOKIE_SECURE must be true in production")
+	}
+	if strings.HasPrefix(s.FrontendOrigin, "https://") && !s.CookieSecure {
+		return errors.New("COOKIE_SECURE must be true when using HTTPS origin")
+	}
+	if len(s.JWTSecret) < 32 {
+		return errors.New("JWT_SECRET is required and must be at least 32 bytes")
+	}
+	return nil
 }
 
 // splitCSV parses a comma-separated env value into trimmed, non-empty entries.
