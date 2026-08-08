@@ -181,7 +181,7 @@
 </script>
 
 {#snippet sectionHeading(title: string)}
-  <h2 class={['mb-1 mt-2 font-bold uppercase tracking-wide', isCentered ? 'text-center' : '']}>{title}</h2>
+  <h2 class={['mb-1 mt-1.5 font-bold uppercase tracking-wide', isCentered ? 'text-center' : '']}>{title}</h2>
   {#if ruled}<hr class="mb-2 -mt-0.5 border-neutral-300" />{/if}
 {/snippet}
 
@@ -236,13 +236,13 @@
     </div>
     {#if isHeadshot}{@render photoFrame('size-[98px]')}{/if}
   </header>
-  <hr class={['my-1', isSans || twoColumn ? 'border-neutral-500' : 'border-neutral-300']} />
+  <hr class={['my-0.5', isSans || twoColumn ? 'border-neutral-500' : 'border-neutral-300']} />
 {/snippet}
 
 {#snippet experienceItem(e: ExperienceItem, at: number)}
   {@const bullets = keepIndex(e.bullets ?? [], (b) => b.trim() !== '')}
   {@const stack = (e.stack ?? []).filter((s) => s.trim())}
-  <div class="mb-1.5">
+  <div class="mb-1">
     <p class="font-bold" class:cv-lit={lit(`experience[${at}].role`) || lit(`experience[${at}].company`)}>
       {experienceHeader(e)}
     </p>
@@ -250,7 +250,11 @@
       <p class="text-neutral-800" class:cv-lit={lit(`experience[${at}].summary`)}>{e.summary}</p>
     {/if}
     {#if bullets.length}
-      <ul class="ml-4 list-disc space-y-0.5">
+      <!-- No inter-item gap: Typst's list() advances consecutive bullets at the same rate as
+           wrapped lines within one bullet — a PDF text layer shows both at 11.0pt, no extra
+           list.spacing on top. A Tailwind space-y here would look nicer but drift pagination
+           again on a bullet-heavy CV. -->
+      <ul class="ml-4 list-disc">
         {#each bullets as b (b.index)}
           <li class:cv-lit={lit(`experience[${at}].bullets[${b.index}]`)}>{b.item}</li>
         {/each}

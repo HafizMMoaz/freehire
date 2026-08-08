@@ -49,11 +49,11 @@ export const FONT_SIZE_STEP = 0.5;
  *  the document means "use this", so the stepper starts from it rather than from zero. */
 export const TEMPLATE_FONT_SIZE_PT = 9.5;
 
-/** What the preview renders body text at: 13px, paired with PREVIEW_LINE_HEIGHT below. These
- *  stay the fallback for an unset style so an existing CV paginates exactly as it did — the
- *  preview approximates Typst by measurement, and re-deriving these from the point size would
- *  move every existing preview for no gain. */
-export const PREVIEW_FONT_SIZE_PX = 13;
+/** The unset-style fallback in CSS px: TEMPLATE_FONT_SIZE_PT at 96dpi (1pt = 4/3px), kept
+ *  fractional for the same reason `stepFontSize`'s own conversion is — this used to be a
+ *  rounded 13px, which is 9.75pt-equivalent, not the template's actual 9.5pt. A ~2.6% oversized
+ *  baseline is invisible on one line and compounds on a dense CV like every other constant here. */
+export const PREVIEW_FONT_SIZE_PX = (TEMPLATE_FONT_SIZE_PT * 4) / 3;
 
 /** Measured, not guessed: a classic-ats PDF's text layer (PyMuPDF span bboxes) advances a
  *  consistent 11.0pt between two lines of the same paragraph at the template's default 9.5pt /
