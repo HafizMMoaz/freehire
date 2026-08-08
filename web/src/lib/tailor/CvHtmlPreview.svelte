@@ -81,8 +81,8 @@
   // an accepted approximation for the minority of CVs that touch the style picker at all.
   //
   // The unset case is different, and gets a real font: `defaultFontId` below resolves to the
-  // active template's own Typst default (see AGENTS.md § Fonts), and this component's own
-  // `<style>` block `@font-face`s exactly those two faces (Libertinus Serif, Liberation Sans) as
+  // active template's own Typst default (see AGENTS.md § Fonts), and this component's own style
+  // block `@font-face`s exactly those two faces (Libertinus Serif, Liberation Sans) as
   // small Latin-subset WOFF2s. Most CVs never touch the style picker, so approximating THIS case
   // with an OS default (e.g. macOS's "New York" for `font-serif`) was measurably wrong: it wraps
   // text onto more lines than Typst does, and a dense CV's preview overflowed onto a second page
@@ -380,7 +380,7 @@
   /* The exact faces the PDF renders with (Libertinus Serif is Typst's own default; Liberation
      Sans is templates/*.typ's declared default for the sans templates — see fonts.go), subset to
      Latin and WOFF2'd down to ~11-16KB each: small enough that shipping them beats approximating
-     a browser default. Scoped to this component's own <style>, so Vite code-splits them onto
+     a browser default. Scoped to this component's own style block, so Vite code-splits them onto
      whatever route renders a CV preview rather than the whole app's initial bundle. Loading them
      under these exact family names is the whole fix — every `previewTypography` CSS stack
      already lists the family first, so no other code needs to change to pick them up once the
