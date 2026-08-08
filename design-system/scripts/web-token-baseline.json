@@ -85,7 +85,7 @@
   "web/src/lib/tailor/ArtifactPanel.svelte": 1,
   "web/src/lib/tailor/AtsDelta.svelte": 3,
   "web/src/lib/tailor/AutopilotReport.svelte": 2,
-  "web/src/lib/tailor/CvHtmlPreview.svelte": 27,
+  "web/src/lib/tailor/CvHtmlPreview.svelte": 23,
   "web/src/lib/tailor/JobMatch.svelte": 3,
   "web/src/lib/tailor/ScoreCategoryRow.svelte": 2,
   "web/src/lib/tailor/TemplateGallery.svelte": 2,
