@@ -75,16 +75,18 @@
   // measurement layer below. One value, two consumers — measuring in one type and drawing in
   // another would make pagination disagree with what is on screen, and nothing would report it.
   //
-  // No webfonts are shipped for the preview: 2.6 MB to approximate a page is a bad trade. Each
-  // stack therefore falls through to whatever the machine has, which on Windows is the very face
-  // the registry entry matches (Times New Roman, Arial, Calibri) and elsewhere may be a generic.
-  // The preview has always approximated the PDF; this keeps it in the same family, not identical.
+  // A candidate's explicit alternate (Tinos/Liberation Sans/Carlito) ships no webfont: its CSS
+  // stack falls through to whatever the machine has, which on Windows is the very face the
+  // registry entry matches (Times New Roman, Arial, Calibri) and elsewhere may be a generic —
+  // an accepted approximation for the minority of CVs that touch the style picker at all.
   //
-  // Falls back to the template's own default id (not just the candidate's explicit choice) so an
-  // unset font_family still resolves a real CSS stack: measuring against the browser's OS-default
-  // serif/sans (e.g. macOS's "New York") instead of the registry's Georgia-anchored fallback for
-  // Libertinus Serif wraps text onto more lines than Typst does, and the preview overflows onto a
-  // second page well before the PDF would.
+  // The unset case is different, and gets a real font: `defaultFontId` below resolves to the
+  // active template's own Typst default (see AGENTS.md § Fonts), and this component's own
+  // `<style>` block `@font-face`s exactly those two faces (Libertinus Serif, Liberation Sans) as
+  // small Latin-subset WOFF2s. Most CVs never touch the style picker, so approximating THIS case
+  // with an OS default (e.g. macOS's "New York" for `font-serif`) was measurably wrong: it wraps
+  // text onto more lines than Typst does, and a dense CV's preview overflowed onto a second page
+  // a whole section before the real PDF would.
   const typography = $derived(
     previewTypography(
       doc.style ?? {},
@@ -181,7 +183,7 @@
 </script>
 
 {#snippet sectionHeading(title: string)}
-  <h2 class={['mb-1 mt-1 font-bold uppercase tracking-wide', isCentered ? 'text-center' : '']}>{title}</h2>
+  <h2 class={['mb-1 mt-1.5 font-bold uppercase tracking-wide', isCentered ? 'text-center' : '']}>{title}</h2>
   {#if ruled}<hr class="mb-2 -mt-0.5 border-neutral-300" />{/if}
 {/snippet}
 
@@ -242,7 +244,7 @@
 {#snippet experienceItem(e: ExperienceItem, at: number)}
   {@const bullets = keepIndex(e.bullets ?? [], (b) => b.trim() !== '')}
   {@const stack = (e.stack ?? []).filter((s) => s.trim())}
-  <div class="mb-0.5">
+  <div class="mb-1">
     <p class="font-bold" class:cv-lit={lit(`experience[${at}].role`) || lit(`experience[${at}].company`)}>
       {experienceHeader(e)}
     </p>
@@ -375,6 +377,41 @@
 </div>
 
 <style>
+  /* The exact faces the PDF renders with (Libertinus Serif is Typst's own default; Liberation
+     Sans is templates/*.typ's declared default for the sans templates — see fonts.go), subset to
+     Latin and WOFF2'd down to ~11-16KB each: small enough that shipping them beats approximating
+     a browser default. Scoped to this component's own <style>, so Vite code-splits them onto
+     whatever route renders a CV preview rather than the whole app's initial bundle. Loading them
+     under these exact family names is the whole fix — every `previewTypography` CSS stack
+     already lists the family first, so no other code needs to change to pick them up once the
+     font is actually resolvable. Regular and bold are separate files: Typst never synthesizes
+     bold from regular (it has no such notion), and neither should the browser, or a bold run's
+     glyph widths would stop matching what the PDF measures. */
+  @font-face {
+    font-family: 'Libertinus Serif';
+    src: url('/fonts/LibertinusSerif-Regular.woff2') format('woff2');
+    font-weight: 400;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Libertinus Serif';
+    src: url('/fonts/LibertinusSerif-Bold.woff2') format('woff2');
+    font-weight: 700;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Liberation Sans';
+    src: url('/fonts/LiberationSans-Regular.woff2') format('woff2');
+    font-weight: 400;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Liberation Sans';
+    src: url('/fonts/LiberationSans-Bold.woff2') format('woff2');
+    font-weight: 700;
+    font-display: swap;
+  }
+
   /* What a revision touched is marked with an underline rather than a filled background: the
      page has to keep reading as a CV while it answers "what changed". Wavy and offset so it
      is not mistaken for a link, and it prints away with the highlight since nothing here
