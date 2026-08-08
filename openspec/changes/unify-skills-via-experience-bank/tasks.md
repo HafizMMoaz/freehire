@@ -10,7 +10,7 @@
 - [x] 2.3 In `Store.AddAtom`, after a successful persist, call the sync with the atom's canonical `Skills` when the dependency is set. On sync error, log and still return the persisted atom — the atom write must not fail because of it.
 - [x] 2.4 Apply the same call in `Store.UpdateAtom` after a successful persist.
 - [x] 2.5 Unit tests: `AddAtom`/`UpdateAtom` invoke the injected `ProfileSkills.MergeSkills` with the atom's skills on success; a `MergeSkills` error does not surface as an error from `AddAtom`/`UpdateAtom` and does not prevent the atom from being returned; a `Store` built without the dependency (nil) behaves exactly as it does today.
-- [ ] 2.6 Integration test (`internal/db`, `-tags=integration`): banking an atom for a user with a saved profile results in the profile's `skills` including the atom's skills; banking an atom for a user with no profile leaves no profile row behind.
+- [x] 2.6 Integration test: banking an atom for a user with a saved profile results in the profile's `skills` including the atom's skills; banking an atom for a user with no profile leaves no profile row behind. **Implementation note (location deviates from the plan):** lives in `internal/experience/store_integration_test.go`, not `internal/db` — `internal/db` cannot import `internal/experience`/`internal/userprofile` without an import cycle (it's the layer they're built on). Uses the same `testdb.Pool(t)` + `//go:build integration` pattern as `internal/credits/store_integration_test.go`.
 
 ## 3. Frontend: remove the redundant tailor control
 
