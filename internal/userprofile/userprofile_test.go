@@ -90,6 +90,93 @@ func TestSave_RejectsUnknownSpecialization(t *testing.T) {
 	}
 }
 
+func TestMergeSkills_NoopWhenNoProfile(t *testing.T) {
+	repo := &fakeRepo{getErr: userprofile.ErrNotFound}
+	err := userprofile.New(repo).MergeSkills(context.Background(), 7, []string{"docker"})
+	if err != nil {
+		t.Fatalf("MergeSkills: %v", err)
+	}
+	if repo.upsertCalled {
+		t.Error("repo.Upsert should not be called when the user has no profile")
+	}
+}
+
+func TestMergeSkills_AddsNewSkills(t *testing.T) {
+	repo := &fakeRepo{getRet: userprofile.Profile{
+		UserID:          7,
+		Specializations: []string{"backend"},
+		Skills:          []string{"go"},
+		ExcludedSkills:  []string{"php"},
+	}}
+	err := userprofile.New(repo).MergeSkills(context.Background(), 7, []string{"Docker", "kubernetes"})
+	if err != nil {
+		t.Fatalf("MergeSkills: %v", err)
+	}
+	if !repo.upsertCalled {
+		t.Fatal("repo.Upsert was not called")
+	}
+	wantSkills := []string{"go", "docker", "kubernetes"}
+	if strings.Join(repo.upserted.Skills, ",") != strings.Join(wantSkills, ",") {
+		t.Errorf("Skills = %v, want %v", repo.upserted.Skills, wantSkills)
+	}
+	// Everything else the profile held must round-trip unchanged.
+	if strings.Join(repo.upserted.Specializations, ",") != "backend" {
+		t.Errorf("Specializations = %v, want unchanged [backend]", repo.upserted.Specializations)
+	}
+	if strings.Join(repo.upserted.ExcludedSkills, ",") != "php" {
+		t.Errorf("ExcludedSkills = %v, want unchanged [php]", repo.upserted.ExcludedSkills)
+	}
+}
+
+func TestMergeSkills_SkipsCaseInsensitiveDuplicate(t *testing.T) {
+	repo := &fakeRepo{getRet: userprofile.Profile{UserID: 7, Skills: []string{"go", "docker"}}}
+	err := userprofile.New(repo).MergeSkills(context.Background(), 7, []string{"GO", "Docker"})
+	if err != nil {
+		t.Fatalf("MergeSkills: %v", err)
+	}
+	if repo.upsertCalled {
+		t.Error("repo.Upsert should not be called when every skill is already present")
+	}
+}
+
+func TestMergeSkills_SkipsExcludedSkill(t *testing.T) {
+	repo := &fakeRepo{getRet: userprofile.Profile{
+		UserID:         7,
+		Skills:         []string{"go"},
+		ExcludedSkills: []string{"php"},
+	}}
+	err := userprofile.New(repo).MergeSkills(context.Background(), 7, []string{"PHP"})
+	if err != nil {
+		t.Fatalf("MergeSkills: %v", err)
+	}
+	if repo.upsertCalled {
+		t.Error("repo.Upsert should not be called when the only new skill is excluded")
+	}
+}
+
+func TestMergeSkills_NeverExceedsCap(t *testing.T) {
+	// Mirrors the 200 cap documented on maxSkills (internal/userprofile.go) and mirrored
+	// client-side by web/src/lib/tailor/skillDiff.ts's PROFILE_MAX_SKILLS.
+	existing := make([]string, 199)
+	for i := range existing {
+		existing[i] = "skill" + strconv.Itoa(i)
+	}
+	repo := &fakeRepo{getRet: userprofile.Profile{UserID: 7, Skills: existing}}
+	err := userprofile.New(repo).MergeSkills(context.Background(), 7, []string{"new-a", "new-b", "new-c"})
+	if err != nil {
+		t.Fatalf("MergeSkills: %v", err)
+	}
+	if !repo.upsertCalled {
+		t.Fatal("repo.Upsert was not called")
+	}
+	if len(repo.upserted.Skills) != 200 {
+		t.Fatalf("len(Skills) = %d, want 200 (cap)", len(repo.upserted.Skills))
+	}
+	if repo.upserted.Skills[199] != "new-a" {
+		t.Errorf("Skills[199] = %q, want the first skill that fit under the cap", repo.upserted.Skills[199])
+	}
+}
+
 func TestSave_RejectsEmptySpecializations(t *testing.T) {
 	cases := []struct {
 		name string

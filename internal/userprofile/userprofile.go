@@ -135,6 +135,67 @@ func (s *Service) Delete(ctx context.Context, userID int64) error {
 	return s.repo.Delete(ctx, userID)
 }
 
+// MergeSkills folds skills the caller did not directly ask to save — freshly banked
+// experience-bank evidence — into an existing profile, so the profile stays current with
+// the bank without the candidate re-declaring what it already proves. It is a courtesy
+// update, not profile management: a user with no saved profile gets no side effect (the
+// same "do not invent one" rule the profile's own Save enforces), and it never removes a
+// skill, overwrites specializations, excluded_skills or location preferences, or errors
+// past the skill cap — it silently adds only as many of the new skills as still fit,
+// mirroring how a manual claim behaves when the profile is near the limit.
+func (s *Service) MergeSkills(ctx context.Context, userID int64, skills []string) error {
+	profile, err := s.repo.Get(ctx, userID)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	merged, changed := mergeSkills(profile.Skills, skills, profile.ExcludedSkills)
+	if !changed {
+		return nil
+	}
+	_, err = s.repo.Upsert(ctx, userID, profile.Specializations, merged, profile.ExcludedSkills, profile.LocationPreferences)
+	return err
+}
+
+// mergeSkills appends the new skills that are not already held and not excluded, capped at
+// maxSkills, preserving the existing order and existing entries untouched. It reports
+// whether anything was actually appended, so a caller with nothing new to add can skip a
+// write entirely.
+func mergeSkills(held, additions, excluded []string) ([]string, bool) {
+	have := make(map[string]struct{}, len(held))
+	for _, s := range held {
+		have[strings.ToLower(s)] = struct{}{}
+	}
+	avoid := make(map[string]struct{}, len(excluded))
+	for _, s := range excluded {
+		avoid[strings.ToLower(s)] = struct{}{}
+	}
+
+	merged := held
+	changed := false
+	for _, raw := range additions {
+		if len(merged) >= maxSkills {
+			break
+		}
+		skill := strings.ToLower(strings.TrimSpace(raw))
+		if skill == "" || len(skill) > maxSkillLen {
+			continue
+		}
+		if _, dup := have[skill]; dup {
+			continue
+		}
+		if _, isExcluded := avoid[skill]; isExcluded {
+			continue
+		}
+		have[skill] = struct{}{}
+		merged = append(merged, skill)
+		changed = true
+	}
+	return merged, changed
+}
+
 // normalizeSpecializations trims each value, drops blanks, deduplicates (preserving
 // first-seen order), and checks membership in the controlled category vocabulary (the same
 // enum the rest of the app validates against). It returns ErrEmptySpecializations if nothing
