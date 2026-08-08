@@ -155,8 +155,7 @@ func TestMergeSkills_SkipsExcludedSkill(t *testing.T) {
 }
 
 func TestMergeSkills_NeverExceedsCap(t *testing.T) {
-	// Mirrors the 200 cap documented on maxSkills (internal/userprofile.go) and mirrored
-	// client-side by web/src/lib/tailor/skillDiff.ts's PROFILE_MAX_SKILLS.
+	// Mirrors the 200 cap documented on maxSkills (internal/userprofile.go).
 	existing := make([]string, 199)
 	for i := range existing {
 		existing[i] = "skill" + strconv.Itoa(i)
