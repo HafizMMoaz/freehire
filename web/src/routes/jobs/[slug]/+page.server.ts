@@ -1,5 +1,12 @@
 import { error } from '@sveltejs/kit';
 import { ApiError } from '$lib/api';
+import { backerBadges } from '$lib/backers';
+import {
+  collectionBySlug,
+  jobFacetsFromJob,
+  relatedCollectionLinks,
+  type SeeAlsoCard,
+} from '$lib/collections';
 import { serverApi } from '$lib/server/api';
 import type { PageServerLoad } from './$types';
 
@@ -31,11 +38,29 @@ export const load: PageServerLoad = async ({ params, fetch }) => {
     api.getJobCopies(params.slug, 10).catch(() => ({ copies: [], total: 0 })),
     api.getApplyForm(params.slug).catch(() => null),
   ]);
+
+  // The "see also" block's matched collections, each with its live open-job
+  // count — needs `job`'s own facets, so it can't join the Promise.all above.
+  // Bounded to relatedCollectionLinks' target (~5), so this is a handful of
+  // small parallel requests, not a scan.
+  const seeAlso: SeeAlsoCard[] = await Promise.all(
+    relatedCollectionLinks(jobFacetsFromJob(job)).map(async (link): Promise<SeeAlsoCard> => {
+      const resolved = collectionBySlug(link.slug);
+      let count: number | null = null;
+      if (resolved) {
+        count = (await api.searchJobs(new URLSearchParams(resolved.params), 0, 0).catch(() => null))
+          ?.total ?? null;
+      }
+      return { slug: link.slug, title: link.title, count, mark: backerBadges([link.slug])[0]?.mark ?? null };
+    })
+  );
+
   return {
     job,
     similar,
     copies: copiesResult.copies,
     copiesTotal: copiesResult.total,
     applyForm,
+    seeAlso,
   };
 };

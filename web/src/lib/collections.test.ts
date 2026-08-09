@@ -4,9 +4,11 @@ import {
   POPULAR_COLLECTION_FALLBACK,
   collectionBySlug,
   collectionSlugs,
+  jobFacetsFromJob,
   relatedCollectionLinks,
   relatedCollectionSlugs,
 } from './collections';
+import type { Job } from './types';
 import { FACETS } from './facets';
 
 // Minimal JobFacets fixture — every field defaults to "no signal" so a test
@@ -233,5 +235,43 @@ describe('relatedCollectionLinks', () => {
   it('produces the same slugs, in the same order, as relatedCollectionSlugs', () => {
     const job = jobFacets({ skills: ['react'], collections: ['yc'] });
     expect(relatedCollectionLinks(job).map((l) => l.slug)).toEqual(relatedCollectionSlugs(job));
+  });
+});
+
+describe('jobFacetsFromJob', () => {
+  it('reads category/seniority from enrichment, the rest from top-level Job fields', () => {
+    const job = {
+      skills: ['react'],
+      work_mode: 'remote',
+      countries: ['us'],
+      regions: ['global'],
+      collections: ['yc'],
+      enrichment: { category: 'backend', seniority: 'senior' },
+    } as Job;
+
+    expect(jobFacetsFromJob(job)).toEqual({
+      category: 'backend',
+      seniority: 'senior',
+      skills: ['react'],
+      workMode: 'remote',
+      countries: ['us'],
+      regions: ['global'],
+      collections: ['yc'],
+    });
+  });
+
+  it('leaves category/seniority undefined when the job carries neither', () => {
+    const job = {
+      skills: [],
+      countries: [],
+      regions: [],
+      collections: [],
+      enrichment: {},
+    } as unknown as Job;
+
+    const facets = jobFacetsFromJob(job);
+    expect(facets.category).toBeUndefined();
+    expect(facets.seniority).toBeUndefined();
+    expect(facets.workMode).toBeUndefined();
   });
 });

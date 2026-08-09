@@ -56,5 +56,5 @@
     slug={data.job.public_slug}
   />
 
-  <JobSeeAlso job={data.job} />
+  <JobSeeAlso cards={data.seeAlso} />
 </div>
