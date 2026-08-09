@@ -35,6 +35,7 @@
     type CvAtsDelta,
     type CvFont,
     type CvJobMatch,
+    type TailorResult,
   } from '$lib/cv';
   import type { Analysis, AutopilotEntry, Document, RevisionView } from '$lib/generated/contracts';
   import type { Job } from '$lib/types';
@@ -47,6 +48,10 @@
   let sessionId = $state<string | undefined>(undefined);
   let resuming = $state(false);
   let cvId = $state('');
+  // True exactly on a bootstrap that just created the tailored CV — the empty chat runs the
+  // autopilot pass itself instead of offering the two-action menu. Never true when resuming
+  // an existing CV (?cv=<id>).
+  let coldStartRunning = $state(false);
   // The CV's own consent flag, read with the document and written by its own endpoint — it is
   // not part of the document, so autosave neither carries nor overwrites it.
   let tracerLinksEnabled = $state(false);
@@ -211,6 +216,39 @@
     }
   }
 
+  // Shared tail of every path that reaches a usable workspace (resume or bootstrap): flips to
+  // ready and kicks off the accessory reads that don't block first paint.
+  function finishReady() {
+    status = 'ready';
+    // Not awaited: the workspace is usable before the comparison lands, and the comparison
+    // costs two renders. The history is the same kind of accessory read.
+    void refreshAtsDelta();
+    void refreshJobMatch();
+    void loadRevisions();
+    // Not awaited either: an empty list only means the font picker has nothing to offer yet,
+    // and the preview falls back to the template's own face meanwhile.
+    void api.listCvFonts().then((f) => (fonts = f)).catch(() => {});
+  }
+
+  // Applies a tailoring bootstrap's result (fresh or retried) to the page state and settles
+  // the CV into the address bar.
+  async function applyTailorResult(tailor: TailorResult) {
+    cvId = tailor.tailor_cv_id;
+    analysis = tailor.analysis;
+    sessionId = tailor.session_id;
+    coldStartRunning = tailor.cold_start_running;
+    await loadCv(); // bootstrap has no CV record in hand yet — fetch the tailored copy
+    // Put the CV in the address, replacing this entry rather than adding one. A reload of
+    // the bare /tailor/<slug> is a bootstrap request, and until the address names the CV
+    // the candidate is one F5 away from an empty workspace. Back still leaves the page.
+    // eslint-disable-next-line svelte/no-navigation-without-resolve -- resolve() supplies the path; the rule can't see through the appended ?cv= query
+    void goto(`${resolve('/tailor/[slug]', { slug })}?cv=${cvId}`, {
+      replaceState: true,
+      noScroll: true,
+      keepFocus: true,
+    });
+  }
+
   onMount(async () => {
     try {
       if (cvParam) {
@@ -245,44 +283,10 @@
         track('tailor_run', { slug });
         const [j, tailor] = await Promise.all([api.getJob(slug), api.tailorCv(slug)]);
         job = j;
-        cvId = tailor.tailor_cv_id;
-        analysis = tailor.analysis;
-        sessionId = tailor.session_id;
-        await loadCv(); // bootstrap has no CV record in hand yet — fetch the tailored copy
-        // Put the CV in the address, replacing this entry rather than adding one. A reload of
-        // the bare /tailor/<slug> is a bootstrap request, and until the address names the CV
-        // the candidate is one F5 away from an empty workspace. Back still leaves the page.
-        // eslint-disable-next-line svelte/no-navigation-without-resolve -- resolve() supplies the path; the rule can't see through the appended ?cv= query
-        void goto(`${resolve('/tailor/[slug]', { slug })}?cv=${cvId}`, {
-          replaceState: true,
-          noScroll: true,
-          keepFocus: true,
-        });
+        await applyTailorResult(tailor);
       }
-      status = 'ready';
-      // Not awaited: the workspace is usable before the comparison lands, and the comparison
-      // costs two renders. The history is the same kind of accessory read.
-      void refreshAtsDelta();
-      void refreshJobMatch();
-      void loadRevisions();
-      // Not awaited either: an empty list only means the font picker has nothing to offer yet,
-      // and the preview falls back to the template's own face meanwhile.
-      void api.listCvFonts().then((f) => (fonts = f)).catch(() => {});
+      finishReady();
     } catch (e) {
-      if (e instanceof ApiError && e.status === 409 && e.message === 'run the fit analysis first') {
-        // The bootstrap (tailorCv) requires a cached match to already exist — true for
-        // every vacancy reached the normal way (the match page's "Tailor my CV" button
-        // only ever appears once one has run), but never true for a job that just came
-        // through the JD-intake dialog (paste text/URL/pick a vacancy — none of those
-        // run a match first). Rather than surface that as an error, send the candidate
-        // straight to the match page, which auto-runs on a cold start and hands them
-        // back here once it lands. Matched on the exact message, not just the 409 status:
-        // TailorCV also 409s when the account has no résumé to seed a base CV from, and
-        // that reason has no fix on the match page — silently bouncing there looks like a
-        // dead loop instead of the "add a résumé" error it actually is.
-        void goto(resolve('/match/[slug]', { slug }));
-        return;
-      }
       if (e instanceof ApiError && e.status === 402) {
         // Out of AI credits: surface the message plus when the monthly grant renews.
         const resetsAt = typeof e.body?.resets_at === 'string' ? e.body.resets_at : null;
@@ -425,6 +429,19 @@
     }
   });
 
+  // Refreshes just the document, live, as a run's cv_edit calls resolve — so the preview fills
+  // in while the run is still going instead of waiting for it to finish. Deliberately lighter
+  // than onTurnComplete: the accessory reads (ATS delta, job match, revisions) stay end-of-turn
+  // only, or a 30-step run would fire ten of each.
+  async function onDocumentEdited() {
+    try {
+      await loadCv();
+      pdfVersion += 1;
+    } catch {
+      /* best-effort; onTurnComplete reconciles at the end regardless */
+    }
+  }
+
   // After an agent turn the CV may have changed server-side: flush any pending human edit, then
   // refetch and replace the shared document so the Editor and preview reflect it.
   async function onTurnComplete() {
@@ -435,6 +452,12 @@
       void loadRevisions(true);
       void refreshAtsDelta();
       void refreshJobMatch();
+      // A cold-start run computes the fit analysis inline as its own first step (see
+      // internal/handler.PostAssistantAutopilot); the bootstrap response predates that, so the
+      // Job Match tab is still showing its empty/pending state until this picks it up.
+      if (!analysis) {
+        analysis = (await api.getMatchAnalysis(slug).catch(() => null))?.analysis ?? null;
+      }
     } catch {
       /* best-effort refresh; the next edit or reload will reconcile */
     }
@@ -486,7 +509,7 @@
   {:else if status === 'error'}
     <div class="flex min-w-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
       <p class="max-w-md text-sm text-destructive">{errorMsg}</p>
-      <a href={resolve('/match/[slug]', { slug })} class="text-sm text-brand hover:underline">Back to the match</a>
+      <a href={resolve('/jobs/[slug]', { slug })} class="text-sm text-brand hover:underline">Back to the role</a>
     </div>
   {:else}
     <div class="flex min-w-0 flex-1 flex-col lg:flex-row">
@@ -633,10 +656,12 @@
             <AssistantChat
               bind:this={chatRef}
               session={sessionId}
-              openingActions={opening}
+              openingActions={coldStartRunning ? undefined : opening}
+              autoRun={coldStartRunning}
               {sessionLabel}
               showSessionRail={false}
               {onTurnComplete}
+              {onDocumentEdited}
               onRunStateChange={(running) => (runActive = running)}
               onTurnStateChange={(active) => (turnActive = active)}
               beforeTurn={flushPendingSave}
