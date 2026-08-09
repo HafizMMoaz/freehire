@@ -55,7 +55,12 @@ export const load: PageServerLoad = async ({ params, fetch }) => {
           // Just verified length === 1, so index 0 exists; noUncheckedIndexedAccess
           // can't see that from the length check alone.
           const [key, value] = paramEntries[0]!;
-          count = facetsResult ? (facetsResult.facets[key]?.[value] ?? 0) : null;
+          // A missing entry here is never a genuine zero: every card reaching this
+          // branch is either the job's own facet/collection (so the job itself is
+          // ≥1) or a fallback pool entry curated to have a healthy count. It means
+          // Meilisearch's MaxValuesPerFacet cap dropped this value from the
+          // distribution — degrade to unresolved, not a false "0 jobs".
+          count = facetsResult ? (facetsResult.facets[key]?.[value] ?? null) : null;
         } else {
           count =
             (await api.searchJobs(new URLSearchParams(resolved.params), 0, 0).catch(() => null))
