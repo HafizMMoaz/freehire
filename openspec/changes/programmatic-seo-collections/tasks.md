@@ -1,10 +1,10 @@
 ## 1. Live job count in collection title/H1/OG
 
-- [ ] 1.1 In `web/src/routes/collections/[slug]/+page.svelte`, interpolate the
+- [x] 1.1 In `web/src/routes/collections/[slug]/+page.svelte`, interpolate the
       already-fetched `meta.total` into `<title>`, `<h1>`, and the OG title
       (exact count, e.g. `"1,234 React Jobs · freehire"`), for both filter
       and company collections (single shared route/component).
-- [ ] 1.2 Test: rendered `<title>`/`<h1>`/OG-title match a fixture
+- [x] 1.2 Test: rendered `<title>`/`<h1>`/OG-title match a fixture
       `meta.total` exactly, covering one filter-collection slug (e.g. `react`)
       and one company-collection slug (e.g. `yc`).
 

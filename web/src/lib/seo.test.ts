@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   articleJsonLd,
+  collectionHeading,
   collectionPageJsonLd,
   companyListItems,
   datasetJsonLd,
@@ -45,6 +46,20 @@ function company(overrides: Partial<Company> = {}): Company {
 }
 
 const ORIGIN = 'https://freehire.me';
+
+describe('collectionHeading', () => {
+  it('includes the exact live count, comma-grouped', () => {
+    expect(collectionHeading('React', 1234)).toBe('1,234 React jobs');
+  });
+
+  it('falls back to the plain title when no count is available', () => {
+    expect(collectionHeading('React', undefined)).toBe('React jobs');
+  });
+
+  it('renders a zero count honestly rather than hiding it', () => {
+    expect(collectionHeading('React', 0)).toBe('0 React jobs');
+  });
+});
 
 describe('organizationJsonLd', () => {
   it('emits every company-info fact the company provides', () => {
