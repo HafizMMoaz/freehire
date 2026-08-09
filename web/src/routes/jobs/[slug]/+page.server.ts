@@ -13,10 +13,31 @@ import type { PageServerLoad } from './$types';
 
 type Api = ReturnType<typeof serverApi>;
 
+// Splits a resolved collection's params into a filter (every key but the
+// last) and the one "variable" key/value a facet distribution under that
+// filter can read a count off. A single-key collection's filter is simply
+// empty — reading its count is then the whole-catalogue case, not a special
+// one: every collection sharing the same filter (every single-key one,
+// grouped under the empty filter; all ten remote+region/country combos,
+// grouped under work_mode=remote) reads off ONE shared facetCounts() call, no
+// matter how many of that group a job matches at once. A facet distribution
+// is a marginal count per field under a filter, not a joint count across
+// fields — which is why the OTHER keys have to be the filter, not also read
+// from the distribution.
+function splitParams(params: Record<string, string>): {
+  filter: Record<string, string>;
+  lastKey: string;
+  lastValue: string;
+} {
+  const entries = Object.entries(params);
+  const [lastKey, lastValue] = entries[entries.length - 1]!;
+  return { filter: Object.fromEntries(entries.slice(0, -1)), lastKey, lastValue };
+}
+
 // A missing facets[key][value] entry is never a genuine zero: every card
-// reaching seeAlsoCount is either the job's own facet/collection (so the job
-// itself is ≥1) or a fallback pool entry curated to have a healthy count. It
-// means Meilisearch's MaxValuesPerFacet cap dropped this value from the
+// reaching this is either the job's own facet/collection (so the job itself
+// is ≥1) or a fallback pool entry curated to have a healthy count. It means
+// Meilisearch's MaxValuesPerFacet cap dropped this value from the
 // distribution — degrade to unresolved, not a false "0 jobs".
 function readCount(facetsResult: FacetCounts | null, key: string, value: string): number | null {
   return facetsResult ? (facetsResult.facets[key]?.[value] ?? null) : null;
@@ -26,38 +47,20 @@ function readCount(facetsResult: FacetCounts | null, key: string, value: string)
 // count. Kicked off the moment `job` resolves (it needs `job`'s own facets)
 // so it overlaps with the page's other fetches instead of adding a second
 // sequential wave after them.
-//
-// Every current collection's count is readable off a facetCounts()
-// distribution, never a per-card searchJobs call:
-// - A single-key collection (skills=react, category=backend, collections=yc,
-//   …) reads straight off ONE shared, unfiltered distribution covering the
-//   whole catalogue.
-// - A multi-key collection (the ten remote+region/country combos, e.g.
-//   work_mode=remote AND regions=global) needs its LAST key's value read
-//   from a distribution filtered by its other keys — a facet distribution is
-//   a marginal count per field under a filter, not a joint count across
-//   fields. All ten currently share the same filter (work_mode=remote), so
-//   they're grouped by filter and share ONE extra call: a job open in
-//   several countries at once (matching several remote-* collections) still
-//   costs one request, not one per match.
 async function buildSeeAlso(job: Job, api: Api): Promise<SeeAlsoCard[]> {
   const links = relatedCollectionLinks(jobFacetsFromJob(job));
   const resolvedLinks = links.map((link) => ({ link, resolved: collectionBySlug(link.slug) }));
 
-  const baseFacets = await api.facetCounts(new URLSearchParams()).catch(() => null);
-
-  const multiKeyGroups = new Map<string, { filter: Record<string, string>; lastKey: string }>();
+  const filterGroups = new Map<string, Record<string, string>>();
   for (const { resolved } of resolvedLinks) {
-    const entries = resolved ? Object.entries(resolved.params) : [];
-    if (entries.length <= 1) continue;
-    const [lastKey] = entries[entries.length - 1]!;
-    const filter = Object.fromEntries(entries.slice(0, -1));
-    multiKeyGroups.set(new URLSearchParams(filter).toString(), { filter, lastKey });
+    if (!resolved) continue;
+    const { filter } = splitParams(resolved.params);
+    filterGroups.set(new URLSearchParams(filter).toString(), filter);
   }
   const groupedFacets = new Map<string, FacetCounts | null>(
     await Promise.all(
-      [...multiKeyGroups.entries()].map(
-        async ([groupKey, { filter }]): Promise<[string, FacetCounts | null]> => [
+      [...filterGroups.entries()].map(
+        async ([groupKey, filter]): Promise<[string, FacetCounts | null]> => [
           groupKey,
           await api.facetCounts(new URLSearchParams(filter)).catch(() => null),
         ]
@@ -72,16 +75,9 @@ async function buildSeeAlso(job: Job, api: Api): Promise<SeeAlsoCard[]> {
     // narrowing, not a real fallback path.
     if (!resolved) return { slug: link.slug, title: link.title, count: null, mark };
 
-    const entries = Object.entries(resolved.params);
-    let count: number | null;
-    if (entries.length === 1) {
-      const [key, value] = entries[0]!;
-      count = readCount(baseFacets, key, value);
-    } else {
-      const [lastKey, lastValue] = entries[entries.length - 1]!;
-      const groupKey = new URLSearchParams(Object.fromEntries(entries.slice(0, -1))).toString();
-      count = readCount(groupedFacets.get(groupKey) ?? null, lastKey, lastValue);
-    }
+    const { filter, lastKey, lastValue } = splitParams(resolved.params);
+    const groupKey = new URLSearchParams(filter).toString();
+    const count = readCount(groupedFacets.get(groupKey) ?? null, lastKey, lastValue);
     return { slug: link.slug, title: link.title, count, mark };
   });
 }
