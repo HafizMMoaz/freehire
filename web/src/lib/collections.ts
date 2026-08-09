@@ -374,9 +374,11 @@ export const FILTER_COLLECTIONS: FilterCollection[] = [
     description: 'Internship and trainee roles for students and new graduates in tech.',
     params: { seniority: 'intern' },
   },
-  // Infra-skill landings — the same "<skill> jobs" pattern as the language/framework
-  // set above, extended to cloud & platform tools. `slug`/`params.skills` MUST be the
-  // exact skilltag canonical. Each was confirmed to have a live count before shipping.
+  // Infra & ecosystem skill landings — the same "<skill> jobs" pattern as the
+  // language/framework set above, extended to any other skilltag canonical:
+  // cloud/platform tools, databases, CI/CD, ML frameworks, blockchain.
+  // `slug`/`params.skills` MUST be the exact skilltag canonical. Each was
+  // confirmed to have a live count before shipping.
   {
     slug: 'aws',
     title: 'AWS',
@@ -544,7 +546,7 @@ export const FILTER_COLLECTIONS: FilterCollection[] = [
     params: { role: 'senior_fullstack' },
   },
   {
-    slug: 'senior-data-engineer',
+    slug: 'senior-data-engineering',
     title: 'Senior Data Engineer',
     description: 'Senior data engineering roles building pipelines and data platforms.',
     params: { role: 'senior_data_engineering' },
