@@ -224,6 +224,12 @@ describe('relatedCollectionLinks', () => {
     expect(links).toContainEqual({ slug: 'yc', title: 'Y Combinator' });
   });
 
+  it('falls back to the popular collections when a job matches nothing', () => {
+    const links = relatedCollectionLinks(jobFacets());
+    expect(links.map((l) => l.slug)).toEqual(POPULAR_COLLECTION_FALLBACK);
+    expect(links.every((l) => typeof l.title === 'string' && l.title.length > 0)).toBe(true);
+  });
+
   it('produces the same slugs, in the same order, as relatedCollectionSlugs', () => {
     const job = jobFacets({ skills: ['react'], collections: ['yc'] });
     expect(relatedCollectionLinks(job).map((l) => l.slug)).toEqual(relatedCollectionSlugs(job));
