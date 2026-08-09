@@ -149,6 +149,31 @@ describe('relatedCollectionSlugs', () => {
     expect(slugs).not.toContain('software-engineer');
   });
 
+  it('matches category, seniority, and region facets, not just skills', () => {
+    // Each of facetMatches' non-skills branches asserted positively, not just
+    // exercised as a side effect of another test.
+    expect(relatedCollectionSlugs(jobFacets({ category: 'backend' }))).toContain('backend');
+    expect(relatedCollectionSlugs(jobFacets({ seniority: 'senior' }))).toContain('senior');
+    expect(
+      relatedCollectionSlugs(jobFacets({ workMode: 'remote', regions: ['global'] }))
+    ).toContain('remote-worldwide');
+  });
+
+  it('requires every param on a multi-key entry (AND across keys, not OR)', () => {
+    // remote-brasil = { work_mode: 'remote', countries: 'br' }. Satisfying only
+    // one of its two keys must not match — this is the property that would
+    // silently break if collectionMatchesJob's `.every()` became `.some()`.
+    expect(relatedCollectionSlugs(jobFacets({ workMode: 'remote' }))).not.toContain(
+      'remote-brasil'
+    );
+    expect(relatedCollectionSlugs(jobFacets({ countries: ['br'] }))).not.toContain(
+      'remote-brasil'
+    );
+    expect(
+      relatedCollectionSlugs(jobFacets({ workMode: 'remote', countries: ['br'] }))
+    ).toContain('remote-brasil');
+  });
+
   it('orders facet matches (Source A) before collection matches (Source B)', () => {
     const slugs = relatedCollectionSlugs(jobFacets({ skills: ['react'], collections: ['yc'] }));
     const reactIndex = slugs.indexOf('react');
@@ -167,8 +192,7 @@ describe('relatedCollectionSlugs', () => {
 
   it('pads with the popular fallback when a job matches nothing', () => {
     const slugs = relatedCollectionSlugs(jobFacets());
-    expect(slugs).toEqual(POPULAR_COLLECTION_FALLBACK.slice(0, slugs.length));
-    expect(slugs.length).toBeGreaterThan(0);
+    expect(slugs).toEqual(POPULAR_COLLECTION_FALLBACK);
   });
 
   it('never renders more than the requested target size', () => {

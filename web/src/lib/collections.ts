@@ -638,12 +638,15 @@ export function collectionSlugs(): string[] {
 
 // The facets of a viewed job that relatedCollectionSlugs matches against —
 // deliberately only what the Job wire object actually carries (see
-// web/src/lib/generated/contracts.ts). There is no `role` here: roletag's
-// seniority×category/named-role composition lives server-side only
-// (internal/roletag), and duplicating it client-side would break the
-// dict-only single-source-of-truth convention. A `role`-keyed
-// FILTER_COLLECTIONS entry (e.g. senior-backend) therefore never matches via
-// facets — it's only reachable through POPULAR_COLLECTION_FALLBACK.
+// web/src/lib/generated/contracts.ts): `category`/`seniority` come from
+// `job.enrichment.category`/`job.enrichment.seniority` (not top-level fields),
+// the rest map straight to `job.skills`/`work_mode`/`countries`/`regions`.
+// There is no `role` here: roletag's seniority×category/named-role
+// composition lives server-side only (internal/roletag), and duplicating it
+// client-side would break the dict-only single-source-of-truth convention. A
+// `role`-keyed FILTER_COLLECTIONS entry (e.g. senior-backend) therefore never
+// matches via facets — it's only reachable through
+// POPULAR_COLLECTION_FALLBACK.
 export type JobFacets = {
   category?: string;
   seniority?: string;
