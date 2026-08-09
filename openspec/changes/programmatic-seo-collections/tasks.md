@@ -35,11 +35,11 @@
 
 ## 4. See-also block on the job detail page
 
-- [ ] 4.1 Add a "see also" block to the job detail page
+- [x] 4.1 Add a "see also" block to the job detail page
       (`web/src/routes/jobs/[slug]`) rendering the slugs from the section-3
       matching function as links to their `/collections/[slug]` pages, using
       data the job page already loads (no new fetch).
-- [ ] 4.2 Test: the block renders the expected links for a job fixture with
+- [x] 4.2 Test: the block renders the expected links for a job fixture with
       facet matches, a job fixture with only company-collection matches, and
       a job fixture with no matches (fallback list).
 - [ ] 4.3 Manual verification: load a real job page locally and confirm the

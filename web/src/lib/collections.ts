@@ -726,3 +726,21 @@ export function relatedCollectionSlugs(job: JobFacets, target = 5): string[] {
 
   return slugs;
 }
+
+// relatedCollectionSlugs resolved to {slug, title} pairs via collectionBySlug
+// — the same resolver the landing route and sitemap use — so a slug that
+// somehow doesn't resolve is dropped here rather than rendered as a dead
+// link. This is what JobSeeAlso renders; kept as a pure function (rather than
+// resolving inline in the component) so it's unit-testable like the rest of
+// this module, matching web/'s no-component-test-harness convention.
+export function relatedCollectionLinks(
+  job: JobFacets,
+  target = 5
+): { slug: string; title: string }[] {
+  return relatedCollectionSlugs(job, target)
+    .map((slug) => {
+      const collection = collectionBySlug(slug);
+      return collection ? { slug, title: collection.title } : null;
+    })
+    .filter((link) => link !== null);
+}

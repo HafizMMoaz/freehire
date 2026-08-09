@@ -4,6 +4,7 @@ import {
   POPULAR_COLLECTION_FALLBACK,
   collectionBySlug,
   collectionSlugs,
+  relatedCollectionLinks,
   relatedCollectionSlugs,
 } from './collections';
 import { FACETS } from './facets';
@@ -209,5 +210,22 @@ describe('relatedCollectionSlugs', () => {
     for (const slug of slugs) {
       expect(collectionBySlug(slug), `related slug "${slug}"`).toBeDefined();
     }
+  });
+});
+
+describe('relatedCollectionLinks', () => {
+  it('resolves each slug to its collection title, for JobSeeAlso to render', () => {
+    const links = relatedCollectionLinks(jobFacets({ skills: ['react'] }));
+    expect(links).toContainEqual({ slug: 'react', title: 'React' });
+  });
+
+  it('resolves both filter and company collection kinds', () => {
+    const links = relatedCollectionLinks(jobFacets({ collections: ['yc'] }));
+    expect(links).toContainEqual({ slug: 'yc', title: 'Y Combinator' });
+  });
+
+  it('produces the same slugs, in the same order, as relatedCollectionSlugs', () => {
+    const job = jobFacets({ skills: ['react'], collections: ['yc'] });
+    expect(relatedCollectionLinks(job).map((l) => l.slug)).toEqual(relatedCollectionSlugs(job));
   });
 });
