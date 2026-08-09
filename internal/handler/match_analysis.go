@@ -221,14 +221,13 @@ func (h *matchHandlers) PostMatchAnalysis(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"data": matchAnalysisResponse{HasCV: true, Stale: false, Analysis: analysis}})
 }
 
-// runAnalysis builds the fit-chain input from the candidate's profile and the vacancy, and runs
-// the three-stage chain under the caller's own attribution. Shared by the on-demand endpoint and
-// the cold-start autopilot's inline precondition (ensureCachedAnalysis) — both assemble the exact
-// same input the exact same way; only what happens to the RESULT (credits, response shape,
-// whether the caller even asked for one) differs between them.
-func (h *matchHandlers) runAnalysis(c *fiber.Ctx, userID int64, job db.Job, profile userprofile.Profile, blockers []hardconstraint.Blocker) (*matchanalysis.Analysis, error) {
-	analyzer := h.matchAnalysis.As(h.llm.bind(c.Context(), userID, tagMatchAnalysis))
-	return analyzer.Analyze(c.Context(), matchanalysis.Input{
+// buildAnalysisInput assembles the fit chain's input from the candidate's profile and the
+// vacancy. Split out of runAnalysis so a caller that must run the chain from a plain
+// context — the autopilot's post-run refresh, which runs from the SSE writer's detached
+// goroutine after the fiber ctx is gone — can build the Input once, while c is still
+// valid, and carry only the plain value into that goroutine.
+func (h *matchHandlers) buildAnalysisInput(c *fiber.Ctx, job db.Job, userID int64, profile userprofile.Profile, blockers []hardconstraint.Blocker) matchanalysis.Input {
+	return matchanalysis.Input{
 		JobTitle:            job.Title,
 		JobDescription:      job.Description,
 		CompanyInfo:         h.companyInfo(c, job.CompanySlug),
@@ -241,7 +240,17 @@ func (h *matchHandlers) runAnalysis(c *fiber.Ctx, userID int64, job db.Job, prof
 		JobCountries:        job.Countries,
 		LocationPreferences: string(profile.LocationPreferences),
 		Blockers:            blockers,
-	})
+	}
+}
+
+// runAnalysis runs the three-stage fit chain under the caller's own attribution, over an
+// input built by buildAnalysisInput. Shared by the on-demand endpoint and the cold-start
+// autopilot's inline precondition (ensureCachedAnalysis) — both assemble the exact same
+// input the exact same way; only what happens to the RESULT (credits, response shape,
+// whether the caller even asked for one) differs between them.
+func (h *matchHandlers) runAnalysis(c *fiber.Ctx, userID int64, job db.Job, profile userprofile.Profile, blockers []hardconstraint.Blocker) (*matchanalysis.Analysis, error) {
+	analyzer := h.matchAnalysis.As(h.llm.bind(c.Context(), userID, tagMatchAnalysis))
+	return analyzer.Analyze(c.Context(), h.buildAnalysisInput(c, job, userID, profile, blockers))
 }
 
 // ensureCachedAnalysis computes and caches the fit analysis for (user, job) when none is cached
@@ -273,6 +282,43 @@ func (h *matchHandlers) ensureCachedAnalysis(c *fiber.Ctx, userID int64, job db.
 	}
 	cvUploadedAt, _ := h.cvUploadedAt(c, userID)
 	h.cacheAnalysis(c.Context(), userID, job, cvUploadedAt, analysis)
+}
+
+// prepareAutopilotRun ensures the fit analysis is cached before an autopilot run starts —
+// exactly ensureCachedAnalysis's fill-if-empty, so cv_context has something to read — and
+// returns the closure PostAssistantAutopilot calls once the run ends, which UNCONDITIONALLY
+// recomputes the chain and overwrites the (user, job) cache, even when nothing was cached
+// or an analysis was already there. This is what repeals the fit-analysis-post-autopilot-verify
+// design's predecessor rule that the fit analysis is a frozen snapshot of the base profile.
+//
+// The Input/Analyzer for the guaranteed refresh is assembled here, before returning, so it
+// closes over plain values rather than c — the closure runs later from the SSE writer's
+// detached goroutine, which only has a plain context.Context (see cacheAnalysis's own
+// comment on the same constraint). ensureCachedAnalysis assembles its own Input on a cache
+// miss; the two are not shared, so a cold cache costs the profile/blockers/bank reads
+// twice in one autopilot invocation — an accepted cost of keeping this function simple,
+// since a cache miss on the run's own vacancy is the rarer path. Never debits credits —
+// this path, like ensureCachedAnalysis, is unmetered.
+func (h *matchHandlers) prepareAutopilotRun(c *fiber.Ctx, userID int64, job db.Job) func(context.Context) {
+	h.ensureCachedAnalysis(c, userID, job)
+
+	profile, _ := h.userProfile.Get(c.Context(), userID)
+	blockers := h.jobBlockers(c.Context(), userID, job, profile)
+	analyzer := h.matchAnalysis.As(h.llm.bind(c.Context(), userID, tagMatchAnalysis))
+	input := h.buildAnalysisInput(c, job, userID, profile, blockers)
+	cvUploadedAt, _ := h.cvUploadedAt(c, userID)
+
+	return func(ctx context.Context) {
+		analysis, err := analyzer.Analyze(ctx, input)
+		if err != nil {
+			log.Printf("matchanalysis: post-autopilot refresh, user %d job %d: %v", userID, job.ID, err)
+			return
+		}
+		if analysis == nil {
+			return // LLM unconfigured — nothing to cache
+		}
+		h.cacheAnalysis(ctx, userID, job, cvUploadedAt, analysis)
+	}
 }
 
 // creditsBalance reports the caller's current points, or nil on a DB error (logged).
