@@ -13,52 +13,73 @@ import type { PageServerLoad } from './$types';
 
 type Api = ReturnType<typeof serverApi>;
 
-// A see-also card's live count. Every current collection is a single facet's
-// value under the whole catalogue (skills=react, category=backend,
-// collections=yc, …) — read straight off the shared, unfiltered
-// facetCounts() distribution passed in, no per-card request. Only the
-// remote+region/country combos (two AND'd keys, e.g. work_mode + regions)
-// need their own direct query: a facet distribution is a marginal count per
-// field under a filter, not a joint count across two fields.
-async function seeAlsoCount(
-  params: Record<string, string>,
-  facetsResult: FacetCounts | null,
-  api: Api
-): Promise<number | null> {
+// Splits a resolved collection's params into a filter (every key but the
+// last) and the one "variable" key/value a facet distribution under that
+// filter can read a count off. A single-key collection's filter is simply
+// empty — reading its count is then the whole-catalogue case, not a special
+// one: every collection sharing the same filter (every single-key one,
+// grouped under the empty filter; all ten remote+region/country combos,
+// grouped under work_mode=remote) reads off ONE shared facetCounts() call, no
+// matter how many of that group a job matches at once. A facet distribution
+// is a marginal count per field under a filter, not a joint count across
+// fields — which is why the OTHER keys have to be the filter, not also read
+// from the distribution.
+function splitParams(params: Record<string, string>): {
+  filter: Record<string, string>;
+  lastKey: string;
+  lastValue: string;
+} {
   const entries = Object.entries(params);
-  if (entries.length > 1) {
-    return (await api.searchJobs(new URLSearchParams(params), 0, 0).catch(() => null))?.total ?? null;
-  }
-  const [key, value] = entries[0]!; // length === 1 just checked above
-  // A missing entry here is never a genuine zero: every card reaching this
-  // branch is either the job's own facet/collection (so the job itself is
-  // ≥1) or a fallback pool entry curated to have a healthy count. It means
-  // Meilisearch's MaxValuesPerFacet cap dropped this value from the
-  // distribution — degrade to unresolved, not a false "0 jobs".
+  const [lastKey, lastValue] = entries[entries.length - 1]!;
+  return { filter: Object.fromEntries(entries.slice(0, -1)), lastKey, lastValue };
+}
+
+// A missing facets[key][value] entry is never a genuine zero: every card
+// reaching this is either the job's own facet/collection (so the job itself
+// is ≥1) or a fallback pool entry curated to have a healthy count. It means
+// Meilisearch's MaxValuesPerFacet cap dropped this value from the
+// distribution — degrade to unresolved, not a false "0 jobs".
+function readCount(facetsResult: FacetCounts | null, key: string, value: string): number | null {
   return facetsResult ? (facetsResult.facets[key]?.[value] ?? null) : null;
 }
 
 // The "see also" block's matched collections, each with its live open-job
-// count. Callers kick this off the moment `job` resolves (it needs `job`'s
-// own facets) so it overlaps with the page's other fetches instead of adding
-// a second sequential wave after them. In practice a job matches at most one
-// remote+region/country collection, so this is usually 1 request total
-// (the shared facetCounts() call), never more than 2.
+// count. Kicked off the moment `job` resolves (it needs `job`'s own facets)
+// so it overlaps with the page's other fetches instead of adding a second
+// sequential wave after them.
 async function buildSeeAlso(job: Job, api: Api): Promise<SeeAlsoCard[]> {
   const links = relatedCollectionLinks(jobFacetsFromJob(job));
-  const facetsResult = await api.facetCounts(new URLSearchParams()).catch(() => null);
+  const resolvedLinks = links.map((link) => ({ link, resolved: collectionBySlug(link.slug) }));
 
-  return Promise.all(
-    links.map(async (link): Promise<SeeAlsoCard> => {
-      const mark = backerBadges([link.slug])[0]?.mark ?? null;
-      // relatedCollectionLinks already resolves every slug it returns via this
-      // same collectionBySlug, so `resolved` is guaranteed here — this is TS
-      // narrowing, not a real fallback path.
-      const resolved = collectionBySlug(link.slug);
-      const count = resolved ? await seeAlsoCount(resolved.params, facetsResult, api) : null;
-      return { slug: link.slug, title: link.title, count, mark };
-    })
+  const filterGroups = new Map<string, Record<string, string>>();
+  for (const { resolved } of resolvedLinks) {
+    if (!resolved) continue;
+    const { filter } = splitParams(resolved.params);
+    filterGroups.set(new URLSearchParams(filter).toString(), filter);
+  }
+  const groupedFacets = new Map<string, FacetCounts | null>(
+    await Promise.all(
+      [...filterGroups.entries()].map(
+        async ([groupKey, filter]): Promise<[string, FacetCounts | null]> => [
+          groupKey,
+          await api.facetCounts(new URLSearchParams(filter)).catch(() => null),
+        ]
+      )
+    )
   );
+
+  return resolvedLinks.map(({ link, resolved }): SeeAlsoCard => {
+    const mark = backerBadges([link.slug])[0]?.mark ?? null;
+    // relatedCollectionLinks already resolves every slug it returns via this
+    // same collectionBySlug, so `resolved` is guaranteed here — this is TS
+    // narrowing, not a real fallback path.
+    if (!resolved) return { slug: link.slug, title: link.title, count: null, mark };
+
+    const { filter, lastKey, lastValue } = splitParams(resolved.params);
+    const groupKey = new URLSearchParams(filter).toString();
+    const count = readCount(groupedFacets.get(groupKey) ?? null, lastKey, lastValue);
+    return { slug: link.slug, title: link.title, count, mark };
+  });
 }
 
 // Server-render the job detail: fetch by slug so the article content is in the
