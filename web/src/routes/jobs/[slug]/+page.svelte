@@ -2,6 +2,7 @@
   import { page } from '$app/state';
   import JobApplyForm from '$lib/components/JobApplyForm.svelte';
   import JobRelated from '$lib/components/JobRelated.svelte';
+  import JobSeeAlso from '$lib/components/JobSeeAlso.svelte';
   import JobView from '$lib/components/JobView.svelte';
   import Seo from '$lib/components/Seo.svelte';
   import {
@@ -54,4 +55,6 @@
     copiesTotal={data.copiesTotal}
     slug={data.job.public_slug}
   />
+
+  <JobSeeAlso job={data.job} />
 </div>

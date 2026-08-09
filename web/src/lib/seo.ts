@@ -33,6 +33,17 @@ export function jobPageTitle(job: Job): string {
   return `${lead} · ${SITE}`;
 }
 
+/** "<total> <title> jobs" — a collection's heading with its live open-job
+ *  count, comma-grouped. Falls back to the plain "<title> jobs" when no count
+ *  is available (the count is optional on the underlying job-search response). */
+export function collectionHeading(title: string, total: number | undefined): string {
+  // Pinned locale: this feeds crawler-visible <title>/OG metadata, so SSR and
+  // the post-hydration client recompute must format the number identically
+  // regardless of the visitor's browser locale (relevant for collections like
+  // remote-brasil/remote-europe whose audience isn't en-US by default).
+  return total === undefined ? `${title} jobs` : `${total.toLocaleString('en-US')} ${title} jobs`;
+}
+
 // schema.org employmentType, from the enrich vocabulary (see internal/enrich).
 const EMPLOYMENT_TYPE: Record<string, string> = {
   full_time: 'FULL_TIME',

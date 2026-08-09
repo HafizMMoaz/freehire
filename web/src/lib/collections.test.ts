@@ -1,6 +1,25 @@
 import { describe, it, expect } from 'vitest';
-import { FILTER_COLLECTIONS, collectionBySlug, collectionSlugs } from './collections';
+import {
+  FILTER_COLLECTIONS,
+  POPULAR_COLLECTION_FALLBACK,
+  collectionBySlug,
+  collectionSlugs,
+  relatedCollectionLinks,
+  relatedCollectionSlugs,
+} from './collections';
 import { FACETS } from './facets';
+
+// Minimal JobFacets fixture — every field defaults to "no signal" so a test
+// only has to set the facet(s) it cares about.
+function jobFacets(overrides: Partial<Parameters<typeof relatedCollectionSlugs>[0]> = {}) {
+  return {
+    skills: [],
+    countries: [],
+    regions: [],
+    collections: [],
+    ...overrides,
+  };
+}
 
 describe('collectionBySlug', () => {
   it('resolves a company-membership collection to a collections facet param', () => {
@@ -98,5 +117,121 @@ describe('credential collections in the job-search facet', () => {
   it('lists credential slugs in the sitemap alongside every other collection', () => {
     expect(collectionSlugs()).toContain('uk-skilled-worker-sponsor');
     expect(collectionSlugs()).toContain('nl-recognised-sponsor');
+  });
+});
+
+describe('POPULAR_COLLECTION_FALLBACK', () => {
+  it('every fallback slug resolves to a real collection', () => {
+    // The fallback pool pads a sparse "see also" block — a typo here would
+    // silently link to a page that 404s.
+    for (const slug of POPULAR_COLLECTION_FALLBACK) {
+      expect(collectionBySlug(slug), `fallback slug "${slug}"`).toBeDefined();
+    }
+  });
+});
+
+describe('relatedCollectionSlugs', () => {
+  it('matches a job facet against FILTER_COLLECTIONS (Source A)', () => {
+    const slugs = relatedCollectionSlugs(jobFacets({ skills: ['react'] }));
+    expect(slugs).toContain('react');
+  });
+
+  it('matches the job collections field against the company registry (Source B)', () => {
+    const slugs = relatedCollectionSlugs(jobFacets({ collections: ['yc'] }));
+    expect(slugs).toContain('yc');
+  });
+
+  it('never matches on role — the job wire object carries no role field', () => {
+    // software-engineer is a `role`-keyed FILTER_COLLECTIONS entry; nothing in
+    // JobFacets can satisfy it, so it must never appear from a facet match.
+    const slugs = relatedCollectionSlugs(
+      jobFacets({ category: 'backend', seniority: 'senior', skills: ['react'] })
+    );
+    expect(slugs).not.toContain('software-engineer');
+  });
+
+  it('matches category, seniority, and region facets, not just skills', () => {
+    // Each of facetMatches' non-skills branches asserted positively, not just
+    // exercised as a side effect of another test.
+    expect(relatedCollectionSlugs(jobFacets({ category: 'backend' }))).toContain('backend');
+    expect(relatedCollectionSlugs(jobFacets({ seniority: 'senior' }))).toContain('senior');
+    expect(
+      relatedCollectionSlugs(jobFacets({ workMode: 'remote', regions: ['global'] }))
+    ).toContain('remote-worldwide');
+  });
+
+  it('requires every param on a multi-key entry (AND across keys, not OR)', () => {
+    // remote-brasil = { work_mode: 'remote', countries: 'br' }. Satisfying only
+    // one of its two keys must not match — this is the property that would
+    // silently break if collectionMatchesJob's `.every()` became `.some()`.
+    expect(relatedCollectionSlugs(jobFacets({ workMode: 'remote' }))).not.toContain(
+      'remote-brasil'
+    );
+    expect(relatedCollectionSlugs(jobFacets({ countries: ['br'] }))).not.toContain(
+      'remote-brasil'
+    );
+    expect(
+      relatedCollectionSlugs(jobFacets({ workMode: 'remote', countries: ['br'] }))
+    ).toContain('remote-brasil');
+  });
+
+  it('orders facet matches (Source A) before collection matches (Source B)', () => {
+    const slugs = relatedCollectionSlugs(jobFacets({ skills: ['react'], collections: ['yc'] }));
+    const reactIndex = slugs.indexOf('react');
+    const ycIndex = slugs.indexOf('yc');
+    expect(reactIndex).toBeGreaterThanOrEqual(0);
+    expect(ycIndex).toBeGreaterThanOrEqual(0);
+    expect(reactIndex).toBeLessThan(ycIndex);
+  });
+
+  it('de-duplicates a slug that both matches a facet and sits in the fallback pool', () => {
+    // 'javascript' is in POPULAR_COLLECTION_FALLBACK; a job that also matches
+    // it by skill must not render it twice.
+    const slugs = relatedCollectionSlugs(jobFacets({ skills: ['javascript'] }));
+    expect(slugs.filter((s) => s === 'javascript')).toHaveLength(1);
+  });
+
+  it('pads with the popular fallback when a job matches nothing', () => {
+    const slugs = relatedCollectionSlugs(jobFacets());
+    expect(slugs).toEqual(POPULAR_COLLECTION_FALLBACK);
+  });
+
+  it('never renders more than the requested target size', () => {
+    const slugs = relatedCollectionSlugs(
+      jobFacets({ category: 'backend', seniority: 'senior', skills: ['react', 'python', 'aws'] }),
+      3
+    );
+    expect(slugs.length).toBeLessThanOrEqual(3);
+  });
+
+  it('never exceeds the available collection pool and never links a dead slug', () => {
+    const slugs = relatedCollectionSlugs(jobFacets({ skills: ['react'] }), 1000);
+    expect(new Set(slugs).size).toBe(slugs.length); // no duplicates
+    for (const slug of slugs) {
+      expect(collectionBySlug(slug), `related slug "${slug}"`).toBeDefined();
+    }
+  });
+});
+
+describe('relatedCollectionLinks', () => {
+  it('resolves each slug to its collection title, for JobSeeAlso to render', () => {
+    const links = relatedCollectionLinks(jobFacets({ skills: ['react'] }));
+    expect(links).toContainEqual({ slug: 'react', title: 'React' });
+  });
+
+  it('resolves both filter and company collection kinds', () => {
+    const links = relatedCollectionLinks(jobFacets({ collections: ['yc'] }));
+    expect(links).toContainEqual({ slug: 'yc', title: 'Y Combinator' });
+  });
+
+  it('falls back to the popular collections when a job matches nothing', () => {
+    const links = relatedCollectionLinks(jobFacets());
+    expect(links.map((l) => l.slug)).toEqual(POPULAR_COLLECTION_FALLBACK);
+    expect(links.every((l) => typeof l.title === 'string' && l.title.length > 0)).toBe(true);
+  });
+
+  it('produces the same slugs, in the same order, as relatedCollectionSlugs', () => {
+    const job = jobFacets({ skills: ['react'], collections: ['yc'] });
+    expect(relatedCollectionLinks(job).map((l) => l.slug)).toEqual(relatedCollectionSlugs(job));
   });
 });

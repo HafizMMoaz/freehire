@@ -55,6 +55,33 @@ export const FILTER_COLLECTIONS: FilterCollection[] = [
     description: 'Fully remote roles open to candidates across Asia-Pacific.',
     params: { work_mode: 'remote', regions: 'apac' },
   },
+  // Single-country remote landings — the "remote jobs in <country>" pattern,
+  // alongside the regional ones above. Countries are ISO 3166-1 alpha-2. Each
+  // was confirmed to have a healthy live count (thousands) before shipping.
+  {
+    slug: 'remote-canada',
+    title: 'Remote Canada',
+    description: 'Fully remote roles open to candidates in Canada.',
+    params: { work_mode: 'remote', countries: 'ca' },
+  },
+  {
+    slug: 'remote-uk',
+    title: 'Remote UK',
+    description: 'Fully remote roles open to candidates in the United Kingdom.',
+    params: { work_mode: 'remote', countries: 'gb' },
+  },
+  {
+    slug: 'remote-india',
+    title: 'Remote India',
+    description: 'Fully remote roles open to candidates in India.',
+    params: { work_mode: 'remote', countries: 'in' },
+  },
+  {
+    slug: 'remote-poland',
+    title: 'Remote Poland',
+    description: 'Fully remote roles open to candidates in Poland.',
+    params: { work_mode: 'remote', countries: 'pl' },
+  },
   // Language & framework landings — the classic "<lang> jobs" search pattern, one
   // per canonical `skills` facet value. `slug`/`params.skills` MUST be the exact
   // skilltag canonical (e.g. `go` not `golang`, `nodejs` not `node`, `cpp`/`csharp`
@@ -347,9 +374,11 @@ export const FILTER_COLLECTIONS: FilterCollection[] = [
     description: 'Internship and trainee roles for students and new graduates in tech.',
     params: { seniority: 'intern' },
   },
-  // Infra-skill landings — the same "<skill> jobs" pattern as the language/framework
-  // set above, extended to cloud & platform tools. `slug`/`params.skills` MUST be the
-  // exact skilltag canonical. Each was confirmed to have a live count before shipping.
+  // Infra & ecosystem skill landings — the same "<skill> jobs" pattern as the
+  // language/framework set above, extended to any other skilltag canonical:
+  // cloud/platform tools, databases, CI/CD, ML frameworks, blockchain.
+  // `slug`/`params.skills` MUST be the exact skilltag canonical. Each was
+  // confirmed to have a live count before shipping.
   {
     slug: 'aws',
     title: 'AWS',
@@ -398,6 +427,84 @@ export const FILTER_COLLECTIONS: FilterCollection[] = [
     description: 'Open roles that use GraphQL for API design and data fetching.',
     params: { skills: 'graphql' },
   },
+  {
+    slug: 'mongodb',
+    title: 'MongoDB',
+    description: 'Open roles that use MongoDB as the primary document database.',
+    params: { skills: 'mongodb' },
+  },
+  {
+    slug: 'mysql',
+    title: 'MySQL',
+    description: 'Open roles that use MySQL as the primary relational database.',
+    params: { skills: 'mysql' },
+  },
+  {
+    slug: 'elasticsearch',
+    title: 'Elasticsearch',
+    description: 'Open roles that use Elasticsearch for search and log analytics.',
+    params: { skills: 'elasticsearch' },
+  },
+  {
+    slug: 'dotnet',
+    title: '.NET',
+    description: 'Open roles that use .NET for backend and enterprise applications.',
+    params: { skills: 'dotnet' },
+  },
+  {
+    slug: 'laravel',
+    title: 'Laravel',
+    description: 'Open roles that use Laravel for PHP web backends.',
+    params: { skills: 'laravel' },
+  },
+  {
+    slug: 'flutter',
+    title: 'Flutter',
+    description: 'Open roles that use Flutter for cross-platform mobile apps.',
+    params: { skills: 'flutter' },
+  },
+  {
+    slug: 'azure',
+    title: 'Azure',
+    description: 'Open roles that use Microsoft Azure for cloud infrastructure.',
+    params: { skills: 'azure' },
+  },
+  {
+    slug: 'gcp',
+    title: 'Google Cloud',
+    description: 'Open roles that use Google Cloud Platform for cloud infrastructure.',
+    params: { skills: 'gcp' },
+  },
+  {
+    slug: 'jenkins',
+    title: 'Jenkins',
+    description: 'Open roles that use Jenkins for CI/CD automation.',
+    params: { skills: 'jenkins' },
+  },
+  {
+    slug: 'ansible',
+    title: 'Ansible',
+    description: 'Open roles that use Ansible for infrastructure automation.',
+    params: { skills: 'ansible' },
+  },
+  {
+    slug: 'pytorch',
+    title: 'PyTorch',
+    description: 'Open roles that use PyTorch for machine learning.',
+    params: { skills: 'pytorch' },
+  },
+  {
+    slug: 'tensorflow',
+    title: 'TensorFlow',
+    description: 'Open roles that use TensorFlow for machine learning.',
+    params: { skills: 'tensorflow' },
+  },
+  {
+    slug: 'solidity',
+    title: 'Solidity',
+    description: 'Open roles that use Solidity for smart-contract and blockchain development.',
+    params: { skills: 'solidity' },
+  },
   // Named-role landings — the `role` facet (roletag: named roles + skill×seniority
   // combos). Only clearly-technical roles with an individually-verified live count
   // are listed; the facet also carries non-tech and seniority-only values, which are
@@ -425,6 +532,36 @@ export const FILTER_COLLECTIONS: FilterCollection[] = [
     title: 'Founding Engineer',
     description: 'Founding engineer roles building the first product at early-stage startups.',
     params: { role: 'founding_engineer' },
+  },
+  {
+    slug: 'senior-devops',
+    title: 'Senior DevOps',
+    description: 'Senior DevOps engineering roles owning build, deployment and infrastructure.',
+    params: { role: 'senior_devops' },
+  },
+  {
+    slug: 'senior-fullstack',
+    title: 'Senior Full-Stack',
+    description: 'Senior full-stack engineering roles spanning frontend and backend delivery.',
+    params: { role: 'senior_fullstack' },
+  },
+  {
+    slug: 'senior-data-engineering',
+    title: 'Senior Data Engineer',
+    description: 'Senior data engineering roles building pipelines and data platforms.',
+    params: { role: 'senior_data_engineering' },
+  },
+  {
+    slug: 'staff-engineer',
+    title: 'Staff Engineer',
+    description: 'Staff engineering roles driving technical strategy for a team or product area.',
+    params: { role: 'staff_engineer' },
+  },
+  {
+    slug: 'engineering-manager',
+    title: 'Engineering Manager',
+    description: 'Engineering management roles leading and growing a team of engineers.',
+    params: { role: 'engineering_manager' },
   },
 ];
 
@@ -497,4 +634,113 @@ export function collectionBySlug(slug: string): ResolvedCollection | undefined {
 // collection landing URLs. Slugs are unique across the two sets.
 export function collectionSlugs(): string[] {
   return [...FILTER_COLLECTIONS.map((c) => c.slug), ...COMPANY_COLLECTIONS.map((c) => c.slug)];
+}
+
+// The facets of a viewed job that relatedCollectionSlugs matches against —
+// deliberately only what the Job wire object actually carries (see
+// web/src/lib/generated/contracts.ts): `category`/`seniority` come from
+// `job.enrichment.category`/`job.enrichment.seniority` (not top-level fields),
+// the rest map straight to `job.skills`/`work_mode`/`countries`/`regions`.
+// There is no `role` here: roletag's seniority×category/named-role
+// composition lives server-side only (internal/roletag), and duplicating it
+// client-side would break the dict-only single-source-of-truth convention. A
+// `role`-keyed FILTER_COLLECTIONS entry (e.g. senior-backend) therefore never
+// matches via facets — it's only reachable through
+// POPULAR_COLLECTION_FALLBACK.
+export type JobFacets = {
+  category?: string;
+  seniority?: string;
+  skills: string[];
+  workMode?: string;
+  countries: string[];
+  regions: string[];
+  collections: string[];
+};
+
+// Popular collections padding a sparse "see also" block so it's never empty
+// or too thin. Slugs are verified to exist in FILTER_COLLECTIONS by a test.
+export const POPULAR_COLLECTION_FALLBACK = ['remote-worldwide', 'javascript', 'python', 'react'];
+
+// Whether a single FILTER_COLLECTIONS param entry is satisfied by the job's
+// facets. `role` (and any other key the job carries no data for) never
+// matches — see JobFacets' doc comment.
+function facetMatches(paramKey: string, paramValue: string | string[], job: JobFacets): boolean {
+  const values = Array.isArray(paramValue) ? paramValue : [paramValue];
+  switch (paramKey) {
+    case 'work_mode':
+      return job.workMode !== undefined && values.includes(job.workMode);
+    case 'countries':
+      return values.some((v) => job.countries.includes(v));
+    case 'regions':
+      return values.some((v) => job.regions.includes(v));
+    case 'skills':
+      return values.some((v) => job.skills.includes(v));
+    case 'category':
+      return job.category !== undefined && values.includes(job.category);
+    case 'seniority':
+      return job.seniority !== undefined && values.includes(job.seniority);
+    default:
+      return false;
+  }
+}
+
+// A collection matches a job when every one of its params is satisfied —
+// mirroring how the collection's own landing page pins ALL of its params as
+// a fixed scope (see collections/[slug]/+page.server.ts).
+function collectionMatchesJob(entry: FilterCollection, job: JobFacets): boolean {
+  return Object.entries(entry.params).every(([key, value]) => facetMatches(key, value, job));
+}
+
+// The job-detail-page "see also" block's link targets: a bounded, deduped,
+// always-full list of collection slugs, built with no additional HTTP
+// request from data the job page already has. Source A (the job's own
+// facets, against FILTER_COLLECTIONS) is listed before Source B (the job's
+// `collections` field — company membership — against the company registry),
+// then padded with POPULAR_COLLECTION_FALLBACK up to `target`. Every
+// returned slug resolves via collectionBySlug — this never invents a link to
+// a collection that doesn't exist.
+export function relatedCollectionSlugs(job: JobFacets, target = 5): string[] {
+  const slugs: string[] = [];
+  const seen = new Set<string>();
+  const add = (slug: string) => {
+    if (seen.has(slug)) return;
+    seen.add(slug);
+    slugs.push(slug);
+  };
+
+  for (const entry of FILTER_COLLECTIONS) {
+    if (slugs.length >= target) break;
+    if (collectionMatchesJob(entry, job)) add(entry.slug);
+  }
+
+  const companySlugs = new Set<string>(COMPANY_COLLECTIONS.map((c) => c.slug));
+  for (const slug of job.collections) {
+    if (slugs.length >= target) break;
+    if (companySlugs.has(slug)) add(slug);
+  }
+
+  for (const slug of POPULAR_COLLECTION_FALLBACK) {
+    if (slugs.length >= target) break;
+    add(slug);
+  }
+
+  return slugs;
+}
+
+// relatedCollectionSlugs resolved to {slug, title} pairs via collectionBySlug
+// — the same resolver the landing route and sitemap use — so a slug that
+// somehow doesn't resolve is dropped here rather than rendered as a dead
+// link. This is what JobSeeAlso renders; kept as a pure function (rather than
+// resolving inline in the component) so it's unit-testable like the rest of
+// this module, matching web/'s no-component-test-harness convention.
+export function relatedCollectionLinks(
+  job: JobFacets,
+  target = 5
+): { slug: string; title: string }[] {
+  return relatedCollectionSlugs(job, target)
+    .map((slug) => {
+      const collection = collectionBySlug(slug);
+      return collection ? { slug, title: collection.title } : null;
+    })
+    .filter((link) => link !== null);
 }

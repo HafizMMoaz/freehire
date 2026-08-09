@@ -2,7 +2,13 @@
   import { page } from '$app/state';
   import JobsView from '$lib/components/JobsView.svelte';
   import Seo from '$lib/components/Seo.svelte';
-  import { breadcrumbJsonLd, collectionPageJsonLd, jobListItems, jsonLdScript } from '$lib/seo';
+  import {
+    breadcrumbJsonLd,
+    collectionHeading,
+    collectionPageJsonLd,
+    jobListItems,
+    jsonLdScript,
+  } from '$lib/seo';
   import { backerBadges } from '$lib/backers';
   import type { PageData } from './$types';
 
@@ -12,8 +18,9 @@
   // Self-canonical: the landing page is the collection's canonical home, never the
   // bare /jobs the raw ?collections= filter would resolve to.
   const canonical = $derived(`${origin}/collections/${data.slug}`);
-  // Template copy from the collection's display title (see design): "<title> jobs".
-  const heading = $derived(`${data.collection.title} jobs`);
+  // Template copy from the collection's display title, with its live open-job
+  // count (see design): "<total> <title> jobs".
+  const heading = $derived(collectionHeading(data.collection.title, data.initial.total));
   // The backing brand's mark, where this collection names one. A filter collection
   // or an editorial theme has none, and then the heading stands alone.
   const mark = $derived(backerBadges([data.slug])[0]?.mark ?? null);
