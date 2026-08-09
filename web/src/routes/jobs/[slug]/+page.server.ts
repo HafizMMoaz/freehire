@@ -13,52 +13,77 @@ import type { PageServerLoad } from './$types';
 
 type Api = ReturnType<typeof serverApi>;
 
-// A see-also card's live count. Every current collection is a single facet's
-// value under the whole catalogue (skills=react, category=backend,
-// collections=yc, …) — read straight off the shared, unfiltered
-// facetCounts() distribution passed in, no per-card request. Only the
-// remote+region/country combos (two AND'd keys, e.g. work_mode + regions)
-// need their own direct query: a facet distribution is a marginal count per
-// field under a filter, not a joint count across two fields.
-async function seeAlsoCount(
-  params: Record<string, string>,
-  facetsResult: FacetCounts | null,
-  api: Api
-): Promise<number | null> {
-  const entries = Object.entries(params);
-  if (entries.length > 1) {
-    return (await api.searchJobs(new URLSearchParams(params), 0, 0).catch(() => null))?.total ?? null;
-  }
-  const [key, value] = entries[0]!; // length === 1 just checked above
-  // A missing entry here is never a genuine zero: every card reaching this
-  // branch is either the job's own facet/collection (so the job itself is
-  // ≥1) or a fallback pool entry curated to have a healthy count. It means
-  // Meilisearch's MaxValuesPerFacet cap dropped this value from the
-  // distribution — degrade to unresolved, not a false "0 jobs".
+// A missing facets[key][value] entry is never a genuine zero: every card
+// reaching seeAlsoCount is either the job's own facet/collection (so the job
+// itself is ≥1) or a fallback pool entry curated to have a healthy count. It
+// means Meilisearch's MaxValuesPerFacet cap dropped this value from the
+// distribution — degrade to unresolved, not a false "0 jobs".
+function readCount(facetsResult: FacetCounts | null, key: string, value: string): number | null {
   return facetsResult ? (facetsResult.facets[key]?.[value] ?? null) : null;
 }
 
 // The "see also" block's matched collections, each with its live open-job
-// count. Callers kick this off the moment `job` resolves (it needs `job`'s
-// own facets) so it overlaps with the page's other fetches instead of adding
-// a second sequential wave after them. In practice a job matches at most one
-// remote+region/country collection, so this is usually 1 request total
-// (the shared facetCounts() call), never more than 2.
+// count. Kicked off the moment `job` resolves (it needs `job`'s own facets)
+// so it overlaps with the page's other fetches instead of adding a second
+// sequential wave after them.
+//
+// Every current collection's count is readable off a facetCounts()
+// distribution, never a per-card searchJobs call:
+// - A single-key collection (skills=react, category=backend, collections=yc,
+//   …) reads straight off ONE shared, unfiltered distribution covering the
+//   whole catalogue.
+// - A multi-key collection (the ten remote+region/country combos, e.g.
+//   work_mode=remote AND regions=global) needs its LAST key's value read
+//   from a distribution filtered by its other keys — a facet distribution is
+//   a marginal count per field under a filter, not a joint count across
+//   fields. All ten currently share the same filter (work_mode=remote), so
+//   they're grouped by filter and share ONE extra call: a job open in
+//   several countries at once (matching several remote-* collections) still
+//   costs one request, not one per match.
 async function buildSeeAlso(job: Job, api: Api): Promise<SeeAlsoCard[]> {
   const links = relatedCollectionLinks(jobFacetsFromJob(job));
-  const facetsResult = await api.facetCounts(new URLSearchParams()).catch(() => null);
+  const resolvedLinks = links.map((link) => ({ link, resolved: collectionBySlug(link.slug) }));
 
-  return Promise.all(
-    links.map(async (link): Promise<SeeAlsoCard> => {
-      const mark = backerBadges([link.slug])[0]?.mark ?? null;
-      // relatedCollectionLinks already resolves every slug it returns via this
-      // same collectionBySlug, so `resolved` is guaranteed here — this is TS
-      // narrowing, not a real fallback path.
-      const resolved = collectionBySlug(link.slug);
-      const count = resolved ? await seeAlsoCount(resolved.params, facetsResult, api) : null;
-      return { slug: link.slug, title: link.title, count, mark };
-    })
+  const baseFacets = await api.facetCounts(new URLSearchParams()).catch(() => null);
+
+  const multiKeyGroups = new Map<string, { filter: Record<string, string>; lastKey: string }>();
+  for (const { resolved } of resolvedLinks) {
+    const entries = resolved ? Object.entries(resolved.params) : [];
+    if (entries.length <= 1) continue;
+    const [lastKey] = entries[entries.length - 1]!;
+    const filter = Object.fromEntries(entries.slice(0, -1));
+    multiKeyGroups.set(new URLSearchParams(filter).toString(), { filter, lastKey });
+  }
+  const groupedFacets = new Map<string, FacetCounts | null>(
+    await Promise.all(
+      [...multiKeyGroups.entries()].map(
+        async ([groupKey, { filter }]): Promise<[string, FacetCounts | null]> => [
+          groupKey,
+          await api.facetCounts(new URLSearchParams(filter)).catch(() => null),
+        ]
+      )
+    )
   );
+
+  return resolvedLinks.map(({ link, resolved }): SeeAlsoCard => {
+    const mark = backerBadges([link.slug])[0]?.mark ?? null;
+    // relatedCollectionLinks already resolves every slug it returns via this
+    // same collectionBySlug, so `resolved` is guaranteed here — this is TS
+    // narrowing, not a real fallback path.
+    if (!resolved) return { slug: link.slug, title: link.title, count: null, mark };
+
+    const entries = Object.entries(resolved.params);
+    let count: number | null;
+    if (entries.length === 1) {
+      const [key, value] = entries[0]!;
+      count = readCount(baseFacets, key, value);
+    } else {
+      const [lastKey, lastValue] = entries[entries.length - 1]!;
+      const groupKey = new URLSearchParams(Object.fromEntries(entries.slice(0, -1))).toString();
+      count = readCount(groupedFacets.get(groupKey) ?? null, lastKey, lastValue);
+    }
+    return { slug: link.slug, title: link.title, count, mark };
+  });
 }
 
 // Server-render the job detail: fetch by slug so the article content is in the
