@@ -10,11 +10,11 @@
 
 ## 2. Expand `FILTER_COLLECTIONS`
 
-- [ ] 2.1 For each candidate new entry (additional country-level remote
+- [x] 2.1 For each candidate new entry (additional country-level remote
       landings, additional skill landings, additional role landings — see
       design.md's Context), verify a healthy non-empty live count via
       `searchJobs(params, 0, 0).total` before adding it.
-- [ ] 2.2 Add the verified entries to `FILTER_COLLECTIONS` in
+- [x] 2.2 Add the verified entries to `FILTER_COLLECTIONS` in
       `web/src/lib/collections.ts`, following the existing entry shape and
       section grouping.
 

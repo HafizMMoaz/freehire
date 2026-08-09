@@ -55,6 +55,33 @@ export const FILTER_COLLECTIONS: FilterCollection[] = [
     description: 'Fully remote roles open to candidates across Asia-Pacific.',
     params: { work_mode: 'remote', regions: 'apac' },
   },
+  // Single-country remote landings — the "remote jobs in <country>" pattern,
+  // alongside the regional ones above. Countries are ISO 3166-1 alpha-2. Each
+  // was confirmed to have a healthy live count (thousands) before shipping.
+  {
+    slug: 'remote-canada',
+    title: 'Remote Canada',
+    description: 'Fully remote roles open to candidates in Canada.',
+    params: { work_mode: 'remote', countries: 'ca' },
+  },
+  {
+    slug: 'remote-uk',
+    title: 'Remote UK',
+    description: 'Fully remote roles open to candidates in the United Kingdom.',
+    params: { work_mode: 'remote', countries: 'gb' },
+  },
+  {
+    slug: 'remote-india',
+    title: 'Remote India',
+    description: 'Fully remote roles open to candidates in India.',
+    params: { work_mode: 'remote', countries: 'in' },
+  },
+  {
+    slug: 'remote-poland',
+    title: 'Remote Poland',
+    description: 'Fully remote roles open to candidates in Poland.',
+    params: { work_mode: 'remote', countries: 'pl' },
+  },
   // Language & framework landings — the classic "<lang> jobs" search pattern, one
   // per canonical `skills` facet value. `slug`/`params.skills` MUST be the exact
   // skilltag canonical (e.g. `go` not `golang`, `nodejs` not `node`, `cpp`/`csharp`
@@ -398,6 +425,84 @@ export const FILTER_COLLECTIONS: FilterCollection[] = [
     description: 'Open roles that use GraphQL for API design and data fetching.',
     params: { skills: 'graphql' },
   },
+  {
+    slug: 'mongodb',
+    title: 'MongoDB',
+    description: 'Open roles that use MongoDB as the primary document database.',
+    params: { skills: 'mongodb' },
+  },
+  {
+    slug: 'mysql',
+    title: 'MySQL',
+    description: 'Open roles that use MySQL as the primary relational database.',
+    params: { skills: 'mysql' },
+  },
+  {
+    slug: 'elasticsearch',
+    title: 'Elasticsearch',
+    description: 'Open roles that use Elasticsearch for search and log analytics.',
+    params: { skills: 'elasticsearch' },
+  },
+  {
+    slug: 'dotnet',
+    title: '.NET',
+    description: 'Open roles that use .NET for backend and enterprise applications.',
+    params: { skills: 'dotnet' },
+  },
+  {
+    slug: 'laravel',
+    title: 'Laravel',
+    description: 'Open roles that use Laravel for PHP web backends.',
+    params: { skills: 'laravel' },
+  },
+  {
+    slug: 'flutter',
+    title: 'Flutter',
+    description: 'Open roles that use Flutter for cross-platform mobile apps.',
+    params: { skills: 'flutter' },
+  },
+  {
+    slug: 'azure',
+    title: 'Azure',
+    description: 'Open roles that use Microsoft Azure for cloud infrastructure.',
+    params: { skills: 'azure' },
+  },
+  {
+    slug: 'gcp',
+    title: 'Google Cloud',
+    description: 'Open roles that use Google Cloud Platform for cloud infrastructure.',
+    params: { skills: 'gcp' },
+  },
+  {
+    slug: 'jenkins',
+    title: 'Jenkins',
+    description: 'Open roles that use Jenkins for CI/CD automation.',
+    params: { skills: 'jenkins' },
+  },
+  {
+    slug: 'ansible',
+    title: 'Ansible',
+    description: 'Open roles that use Ansible for infrastructure automation.',
+    params: { skills: 'ansible' },
+  },
+  {
+    slug: 'pytorch',
+    title: 'PyTorch',
+    description: 'Open roles that use PyTorch for machine learning.',
+    params: { skills: 'pytorch' },
+  },
+  {
+    slug: 'tensorflow',
+    title: 'TensorFlow',
+    description: 'Open roles that use TensorFlow for machine learning.',
+    params: { skills: 'tensorflow' },
+  },
+  {
+    slug: 'solidity',
+    title: 'Solidity',
+    description: 'Open roles that use Solidity for smart-contract and blockchain development.',
+    params: { skills: 'solidity' },
+  },
   // Named-role landings — the `role` facet (roletag: named roles + skill×seniority
   // combos). Only clearly-technical roles with an individually-verified live count
   // are listed; the facet also carries non-tech and seniority-only values, which are
@@ -425,6 +530,36 @@ export const FILTER_COLLECTIONS: FilterCollection[] = [
     title: 'Founding Engineer',
     description: 'Founding engineer roles building the first product at early-stage startups.',
     params: { role: 'founding_engineer' },
+  },
+  {
+    slug: 'senior-devops',
+    title: 'Senior DevOps',
+    description: 'Senior DevOps engineering roles owning build, deployment and infrastructure.',
+    params: { role: 'senior_devops' },
+  },
+  {
+    slug: 'senior-fullstack',
+    title: 'Senior Full-Stack',
+    description: 'Senior full-stack engineering roles spanning frontend and backend delivery.',
+    params: { role: 'senior_fullstack' },
+  },
+  {
+    slug: 'senior-data-engineer',
+    title: 'Senior Data Engineer',
+    description: 'Senior data engineering roles building pipelines and data platforms.',
+    params: { role: 'senior_data_engineering' },
+  },
+  {
+    slug: 'staff-engineer',
+    title: 'Staff Engineer',
+    description: 'Staff engineering roles driving technical strategy for a team or product area.',
+    params: { role: 'staff_engineer' },
+  },
+  {
+    slug: 'engineering-manager',
+    title: 'Engineering Manager',
+    description: 'Engineering management roles leading and growing a team of engineers.',
+    params: { role: 'engineering_manager' },
   },
 ];
 
