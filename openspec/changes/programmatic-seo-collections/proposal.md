@@ -22,8 +22,8 @@ patterns ("react jobs", "remote jobs germany") it could cover.
   registry's existing contract, not a behavior change.
 - A new "see also" block on the job detail page (`/jobs/[slug]`) links to a
   handful of existing `/collections/[slug]` pages, matched from the viewed
-  job's own facets (role, region, skills) and from its `collections` field
-  (company membership, e.g. `yc`) — padded with popular collections when a
+  job's own facets (category, seniority, region, skills) and from its
+  `collections` field (company membership, e.g. `yc`) — padded with popular collections when a
   job has few matches. Every link targets an already-existing collection
   slug; no thin or empty pages are ever linked.
 

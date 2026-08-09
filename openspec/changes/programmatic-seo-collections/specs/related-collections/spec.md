@@ -5,12 +5,13 @@
 The job detail page (`GET /jobs/:slug`) SHALL render a bounded "see also"
 block of internal links into existing `/collections/:slug` landing pages,
 built from the viewed job's own data with no additional HTTP request. Link
-candidates SHALL be drawn from two sources: the job's own facets (role,
-region, skills) matched against the `FILTER_COLLECTIONS` registry, and the
-job's `collections` field matched against the company-collection registry.
-Every rendered link SHALL target a slug that exists in one of these two
-registries — the block SHALL NOT construct or link to a slug that maps to no
-collection.
+candidates SHALL be drawn from two sources: the job's own facets (category,
+seniority, region, skills — the facets the job wire object actually carries;
+there is no client-side `role` field) matched against the `FILTER_COLLECTIONS`
+registry, and the job's `collections` field matched against the
+company-collection registry. Every rendered link SHALL target a slug that
+exists in one of these two registries — the block SHALL NOT construct or link
+to a slug that maps to no collection.
 
 #### Scenario: A job's skill facet produces a matching link
 

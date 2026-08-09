@@ -50,7 +50,10 @@ decision, not a technical constraint — rounding is a one-line change later if
 this proves noisy in Search Console.
 
 **"See also" fill order: job facets before job collections, then popular
-fallback.** Source A (role/region/skills → `FILTER_COLLECTIONS`) is more
+fallback.** Source A (category/seniority/skills/region → `FILTER_COLLECTIONS`,
+matched only on facets the job wire object actually carries — there is no
+client-side `role` field, and deriving one would duplicate the Go-side
+`internal/roletag` composition the dict-only convention keeps server-side) is more
 specific to the exact posting than Source B (company membership →
 `COLLECTIONS`), so A's matches are listed first. Both sources are matched
 against data the job page already loads — no new fetch. When the combined
