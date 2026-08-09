@@ -42,6 +42,6 @@
 - [x] 4.2 Test: the block renders the expected links for a job fixture with
       facet matches, a job fixture with only company-collection matches, and
       a job fixture with no matches (fallback list).
-- [ ] 4.3 Manual verification: load a real job page locally and confirm the
+- [x] 4.3 Manual verification: load a real job page locally and confirm the
       block shows correct, working links and the linked collection pages show
       the new live-count title.
