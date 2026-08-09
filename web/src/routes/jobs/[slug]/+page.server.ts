@@ -25,23 +25,46 @@ export const load: PageServerLoad = async ({ params, fetch }) => {
   // count. It needs `job`'s own facets, so it can only start once `job`
   // resolves — but it's kicked off right here (not after the Promise.all
   // below) so it overlaps with similar/copies/applyForm instead of adding a
-  // second sequential wave after them. Bounded to relatedCollectionLinks'
-  // target (~5), so this is a handful of small parallel requests, not a scan.
-  const seeAlsoPromise = jobPromise.then((job) =>
-    Promise.all(
-      relatedCollectionLinks(jobFacetsFromJob(job)).map(async (link): Promise<SeeAlsoCard> => {
+  // second sequential wave after them.
+  //
+  // Every current collection's count is a single facet's value under the
+  // WHOLE catalogue (skills=react, category=backend, collections=yc, …) —
+  // readable straight off one shared, unfiltered facetCounts() distribution,
+  // no per-card request needed. Only the remote+region/country combos
+  // (work_mode AND regions/countries — two keys) can't be read that way: a
+  // facet distribution is a marginal count per field under a filter, not a
+  // joint count across two fields, so those still need their own direct
+  // query. In practice a job matches at most one such combo, so this is
+  // usually 1 request total, never more than 2.
+  const seeAlsoPromise = jobPromise.then(async (job) => {
+    const links = relatedCollectionLinks(jobFacetsFromJob(job));
+    const facetsResult = await api.facetCounts(new URLSearchParams()).catch(() => null);
+
+    return Promise.all(
+      links.map(async (link): Promise<SeeAlsoCard> => {
+        const mark = backerBadges([link.slug])[0]?.mark ?? null;
         // relatedCollectionLinks already resolves every slug it returns via this
         // same collectionBySlug, so `resolved` is guaranteed here — this is TS
         // narrowing for the `resolved.params` access below, not a real fallback path.
         const resolved = collectionBySlug(link.slug);
-        const count = resolved
-          ? ((await api.searchJobs(new URLSearchParams(resolved.params), 0, 0).catch(() => null))
-              ?.total ?? null)
-          : null;
-        return { slug: link.slug, title: link.title, count, mark: backerBadges([link.slug])[0]?.mark ?? null };
+        if (!resolved) return { slug: link.slug, title: link.title, count: null, mark };
+
+        const paramEntries = Object.entries(resolved.params);
+        let count: number | null;
+        if (paramEntries.length === 1) {
+          // Just verified length === 1, so index 0 exists; noUncheckedIndexedAccess
+          // can't see that from the length check alone.
+          const [key, value] = paramEntries[0]!;
+          count = facetsResult ? (facetsResult.facets[key]?.[value] ?? 0) : null;
+        } else {
+          count =
+            (await api.searchJobs(new URLSearchParams(resolved.params), 0, 0).catch(() => null))
+              ?.total ?? null;
+        }
+        return { slug: link.slug, title: link.title, count, mark };
       })
-    )
-  );
+    );
+  });
 
   // Similar jobs are a non-essential discovery aid: a failure (search disabled,
   // no neighbours yet) must not break the page, so it degrades to an empty list.
