@@ -1,3 +1,5 @@
+import type { Job } from './types';
+
 // A filter collection is the second kind of collection: a curated card that maps
 // to an arbitrary /jobs facet filter rather than company membership. Unlike
 // COLLECTIONS it is frontend-only — no Go registry, no `collections` search-facet
@@ -598,6 +600,21 @@ export type ResolvedCollection = {
   params: Record<string, string>;
 };
 
+// One card in a "see also" style block (JobSeeAlso), mirroring the /collections
+// hub's CollectionCard: count is the collection's live open-job total, or null
+// when it couldn't be fetched — decorative, so a failure degrades to no count
+// rather than breaking the block. mark is the backing brand's icon (Y
+// Combinator, Techstars, …), null for a filter collection or unbranded
+// editorial collection. The type lives here (not in a route file) so both the
+// server load that computes it and the component that renders it import from
+// one place.
+export type SeeAlsoCard = {
+  slug: string;
+  title: string;
+  count: number | null;
+  mark: string | null;
+};
+
 // Flatten a filter collection's params to the single-valued scope shape. A
 // single-element list collapses to its element; a genuine multi-value param is
 // unsupported by `scope` today and takes its first value (no such data exists).
@@ -656,6 +673,22 @@ export type JobFacets = {
   regions: string[];
   collections: string[];
 };
+
+// Builds JobFacets from a wire Job — the one place that knows the
+// enrichment.* vs top-level split documented on JobFacets above. Callers
+// (currently jobs/[slug]/+page.server.ts) use this instead of hand-mapping
+// fields, so a future Job shape change only needs updating here.
+export function jobFacetsFromJob(job: Job): JobFacets {
+  return {
+    category: job.enrichment.category,
+    seniority: job.enrichment.seniority,
+    skills: job.skills,
+    workMode: job.work_mode,
+    countries: job.countries,
+    regions: job.regions,
+    collections: job.collections,
+  };
+}
 
 // Popular collections padding a sparse "see also" block so it's never empty
 // or too thin. Slugs are verified to exist in FILTER_COLLECTIONS by a test.

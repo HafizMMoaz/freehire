@@ -1,36 +1,34 @@
 <script lang="ts">
   import { resolve } from '$app/paths';
-  import { relatedCollectionLinks, type JobFacets } from '$lib/collections';
-  import type { Job } from '$lib/types';
+  import type { SeeAlsoCard } from '$lib/collections';
 
-  // A bounded row of links into existing /collections/:slug pages, built from
-  // this job's own facets and its company's collections — see design's
-  // relatedCollectionLinks. No fetch: everything it needs is already on `job`.
-  let { job }: { job: Job } = $props();
-
-  const facets = $derived<JobFacets>({
-    category: job.enrichment.category,
-    seniority: job.enrichment.seniority,
-    skills: job.skills,
-    workMode: job.work_mode,
-    countries: job.countries,
-    regions: job.regions,
-    collections: job.collections,
-  });
-
-  const links = $derived(relatedCollectionLinks(facets));
+  // A horizontally-scrolling row of links into existing /collections/:slug
+  // pages, each showing the collection's live open-job count — mirrors the
+  // /collections hub's card, minus the description (this block is a
+  // secondary discovery aid, not the hub itself). `cards` is computed
+  // server-side (+page.server.ts) from this job's own facets and its
+  // company's collections; no client-side fetch.
+  let { cards }: { cards: SeeAlsoCard[] } = $props();
 </script>
 
-{#if links.length > 0}
+{#if cards.length > 0}
   <section class="mt-8">
     <h2 class="mb-3 text-sm font-semibold text-muted-foreground">See also</h2>
-    <div class="flex flex-wrap gap-2">
-      {#each links as link (link.slug)}
+    <div class="flex gap-3 overflow-x-auto pb-1">
+      {#each cards as card (card.slug)}
         <a
-          href={resolve('/collections/[slug]', { slug: link.slug })}
-          class="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:bg-muted"
+          href={resolve('/collections/[slug]', { slug: card.slug })}
+          class="flex w-40 shrink-0 flex-col items-start gap-2 rounded-lg border border-border p-3 transition-colors hover:bg-muted"
         >
-          {link.title}
+          {#if card.mark}
+            <img src={card.mark} alt="" class="size-6 shrink-0 rounded-sm object-contain" />
+          {/if}
+          <span class="text-sm font-medium text-foreground">{card.title} jobs</span>
+          {#if card.count !== null}
+            <span class="rounded-full bg-secondary px-2 py-0.5 font-mono text-xs text-muted-foreground">
+              {card.count.toLocaleString()} jobs
+            </span>
+          {/if}
         </a>
       {/each}
     </div>
