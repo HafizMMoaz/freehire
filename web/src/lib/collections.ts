@@ -635,3 +635,91 @@ export function collectionBySlug(slug: string): ResolvedCollection | undefined {
 export function collectionSlugs(): string[] {
   return [...FILTER_COLLECTIONS.map((c) => c.slug), ...COMPANY_COLLECTIONS.map((c) => c.slug)];
 }
+
+// The facets of a viewed job that relatedCollectionSlugs matches against —
+// deliberately only what the Job wire object actually carries (see
+// web/src/lib/generated/contracts.ts). There is no `role` here: roletag's
+// seniority×category/named-role composition lives server-side only
+// (internal/roletag), and duplicating it client-side would break the
+// dict-only single-source-of-truth convention. A `role`-keyed
+// FILTER_COLLECTIONS entry (e.g. senior-backend) therefore never matches via
+// facets — it's only reachable through POPULAR_COLLECTION_FALLBACK.
+export type JobFacets = {
+  category?: string;
+  seniority?: string;
+  skills: string[];
+  workMode?: string;
+  countries: string[];
+  regions: string[];
+  collections: string[];
+};
+
+// Popular collections padding a sparse "see also" block so it's never empty
+// or too thin. Slugs are verified to exist in FILTER_COLLECTIONS by a test.
+export const POPULAR_COLLECTION_FALLBACK = ['remote-worldwide', 'javascript', 'python', 'react'];
+
+// Whether a single FILTER_COLLECTIONS param entry is satisfied by the job's
+// facets. `role` (and any other key the job carries no data for) never
+// matches — see JobFacets' doc comment.
+function facetMatches(paramKey: string, paramValue: string | string[], job: JobFacets): boolean {
+  const values = Array.isArray(paramValue) ? paramValue : [paramValue];
+  switch (paramKey) {
+    case 'work_mode':
+      return job.workMode !== undefined && values.includes(job.workMode);
+    case 'countries':
+      return values.some((v) => job.countries.includes(v));
+    case 'regions':
+      return values.some((v) => job.regions.includes(v));
+    case 'skills':
+      return values.some((v) => job.skills.includes(v));
+    case 'category':
+      return job.category !== undefined && values.includes(job.category);
+    case 'seniority':
+      return job.seniority !== undefined && values.includes(job.seniority);
+    default:
+      return false;
+  }
+}
+
+// A collection matches a job when every one of its params is satisfied —
+// mirroring how the collection's own landing page pins ALL of its params as
+// a fixed scope (see collections/[slug]/+page.server.ts).
+function collectionMatchesJob(entry: FilterCollection, job: JobFacets): boolean {
+  return Object.entries(entry.params).every(([key, value]) => facetMatches(key, value, job));
+}
+
+// The job-detail-page "see also" block's link targets: a bounded, deduped,
+// always-full list of collection slugs, built with no additional HTTP
+// request from data the job page already has. Source A (the job's own
+// facets, against FILTER_COLLECTIONS) is listed before Source B (the job's
+// `collections` field — company membership — against the company registry),
+// then padded with POPULAR_COLLECTION_FALLBACK up to `target`. Every
+// returned slug resolves via collectionBySlug — this never invents a link to
+// a collection that doesn't exist.
+export function relatedCollectionSlugs(job: JobFacets, target = 5): string[] {
+  const slugs: string[] = [];
+  const seen = new Set<string>();
+  const add = (slug: string) => {
+    if (seen.has(slug)) return;
+    seen.add(slug);
+    slugs.push(slug);
+  };
+
+  for (const entry of FILTER_COLLECTIONS) {
+    if (slugs.length >= target) break;
+    if (collectionMatchesJob(entry, job)) add(entry.slug);
+  }
+
+  const companySlugs = new Set<string>(COMPANY_COLLECTIONS.map((c) => c.slug));
+  for (const slug of job.collections) {
+    if (slugs.length >= target) break;
+    if (companySlugs.has(slug)) add(slug);
+  }
+
+  for (const slug of POPULAR_COLLECTION_FALLBACK) {
+    if (slugs.length >= target) break;
+    add(slug);
+  }
+
+  return slugs;
+}

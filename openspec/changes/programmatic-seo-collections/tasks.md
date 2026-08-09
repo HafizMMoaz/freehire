@@ -20,7 +20,7 @@
 
 ## 3. See-also matching logic
 
-- [ ] 3.1 Implement a pure function in `web/src/lib/collections.ts` (or a
+- [x] 3.1 Implement a pure function in `web/src/lib/collections.ts` (or a
       sibling module) that takes a job's facets (role, region, skills) and its
       `collections` field, and returns an ordered, deduped list of collection
       slugs: Source A (facet match against `FILTER_COLLECTIONS`) before
@@ -28,7 +28,7 @@
       padded with a fixed popular-collections fallback up to a target size,
       never exceeding the available pool and never inventing a non-existent
       slug.
-- [ ] 3.2 Unit tests for the matching function: Source A match, Source B
+- [x] 3.2 Unit tests for the matching function: Source A match, Source B
       match, both together (ordering), dedupe across sources and fallback, a
       job with zero matches (fallback-only), and a pool smaller than the
       target size.
