@@ -691,8 +691,20 @@ export function jobFacetsFromJob(job: Job): JobFacets {
 }
 
 // Popular collections padding a sparse "see also" block so it's never empty
-// or too thin. Slugs are verified to exist in FILTER_COLLECTIONS by a test.
-export const POPULAR_COLLECTION_FALLBACK = ['remote-worldwide', 'javascript', 'python', 'react'];
+// or too thin. Each was verified to have a healthy live count before being
+// added; slugs are verified to exist in FILTER_COLLECTIONS by a test.
+export const POPULAR_COLLECTION_FALLBACK = [
+  'remote-worldwide',
+  'javascript',
+  'typescript',
+  'python',
+  'react',
+  'go',
+  'senior',
+  'backend',
+  'frontend',
+  'aws',
+];
 
 // Whether a single FILTER_COLLECTIONS param entry is satisfied by the job's
 // facets. `role` (and any other key the job carries no data for) never
@@ -732,7 +744,7 @@ function collectionMatchesJob(entry: FilterCollection, job: JobFacets): boolean 
 // then padded with POPULAR_COLLECTION_FALLBACK up to `target`. Every
 // returned slug resolves via collectionBySlug — this never invents a link to
 // a collection that doesn't exist.
-export function relatedCollectionSlugs(job: JobFacets, target = 5): string[] {
+export function relatedCollectionSlugs(job: JobFacets, target = 10): string[] {
   const slugs: string[] = [];
   const seen = new Set<string>();
   const add = (slug: string) => {
@@ -768,7 +780,7 @@ export function relatedCollectionSlugs(job: JobFacets, target = 5): string[] {
 // this module, matching web/'s no-component-test-harness convention.
 export function relatedCollectionLinks(
   job: JobFacets,
-  target = 5
+  target = 10
 ): { slug: string; title: string }[] {
   return relatedCollectionSlugs(job, target)
     .map((slug) => {
