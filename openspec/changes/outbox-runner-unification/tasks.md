@@ -22,14 +22,21 @@
 
 ## 2. Migrate `internal/enrich` (RunPool)
 
-- [ ] 2.1 Wrap `enrich`'s existing `Store.Claim`/per-entry processing into a
+- [x] 2.1 Wrap `enrich`'s existing `Store.Claim`/per-entry processing into a
       `Claimer[enrich.Claimed]` + `Processor[enrich.Claimed]` closure, preserving
       the `maxAttempts=1` immediate dead-letter for a corrupted row.
-- [ ] 2.2 Replace `enrich`'s hand-rolled claim-wave loop with a call into
-      `outbox.RunPool`.
-- [ ] 2.3 Shrink `internal/enrich/runner_test.go` to package-specific logic only
+      (`enrich.Store.Claim` already satisfies `outbox.Claimer[Claimed]`
+      structurally — no adapter type was needed.)
+- [x] 2.2 Replace `enrich`'s hand-rolled claim-wave loop with a call into
+      `outbox.RunPool`. Required adding `outbox.RunOptions.OnWave` (not in the
+      original task scope) to preserve the per-wave progress-heartbeat log line
+      — see the design.md Decisions entry added during task group 1's revisit.
+- [x] 2.3 Shrink `internal/enrich/runner_test.go` to package-specific logic only
       (`Sanitize`/`Validate` wiring, corrupted-row dead-letter path); loop
       mechanics now live in `internal/outbox`'s own tests.
+      `TestRun_waveDrainsConcurrently` removed, subsumed by
+      `TestRunPool_RunsUpToConcurrencyItemsInParallel`. Reviewed via
+      requesting-code-review: ready to merge, one cosmetic naming nit fixed.
 
 ## 3. Migrate `internal/embed` (RunBatch)
 

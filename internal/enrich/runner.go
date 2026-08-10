@@ -78,10 +78,10 @@ func (r Runner) Run(ctx context.Context, opt RunOptions) (Stats, error) {
 		BatchSize:    opt.Concurrency,
 		LeaseSeconds: opt.LeaseSeconds,
 		Concurrency:  opt.Concurrency,
-		OnWave: func(s outbox.Stats) {
+		OnWave: func(cum outbox.Stats) {
 			// A heartbeat per wave so a long drain shows running totals instead of
 			// going silent for hours.
-			log.Printf("enrich: progress enriched=%d failed=%d dead=%d", s.Succeeded, s.Failed, s.DeadLettered)
+			log.Printf("enrich: progress enriched=%d failed=%d dead=%d", cum.Succeeded, cum.Failed, cum.DeadLettered)
 		},
 	}, rn.process)
 	stats := Stats{Enriched: s.Succeeded, Failed: s.Failed, DeadLettered: s.DeadLettered}
