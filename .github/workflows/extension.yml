@@ -1,0 +1,99 @@
+name: extension
+
+on:
+  push:
+    branches: [main]
+    paths: ['extension/**', 'design-system/**', '.github/workflows/extension.yml']
+  pull_request:
+    branches: [main]
+    paths: ['extension/**', 'design-system/**', '.github/workflows/extension.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: extension-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      # extension/'s "freehire-design-system" is an npm `file:../design-system`
+      # dependency — a symlink, same as web's pnpm `link:`. Neither package
+      # manager installs a linked/`file:` package's own dependencies, so
+      # tailwind-variants, clsx, tailwind-merge and @lucide/svelte have to be
+      # installed inside design-system/ before anything imports a primitive, or
+      # the build fails loudly with MODULE_NOT_FOUND.
+      - name: Install design-system dependencies
+        working-directory: design-system
+        run: pnpm install --frozen-lockfile
+
+      # `npm ci` runs `wxt prepare` (postinstall), which generates .wxt/.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Type check
+        run: npm run check
+
+      # Production build (.env.production -> freehire.me),
+      # zipped exactly as it is uploaded to the Chrome Web Store.
+      - name: Build and zip
+        run: npm run zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-mv3
+          path: extension/.output/*.zip
+          # .output is a dotted directory, and upload-artifact skips hidden
+          # paths unless told otherwise.
+          include-hidden-files: true
+          if-no-files-found: error
+
+      # A workflow-artifact download expires after 90 days — fine for reviewing
+      # a PR's build, wrong for "give me the build we shipped in June." A push to
+      # main additionally publishes a GitHub Release tagged by the version in
+      # package.json, which does not expire. Skipped on `pull_request` (a PR
+      # build isn't a release) and made idempotent (a re-run of the same commit,
+      # or two commits that don't bump the version, must not fail on a
+      # already-exists tag).
+      - name: Read extension version
+        if: github.event_name == 'push'
+        id: version
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: extension-v${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists, skipping."
+          else
+            gh release create "$TAG" .output/*.zip \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "extension v${{ steps.version.outputs.version }}" \
+              --notes "Automated build from commit $GITHUB_SHA."
+          fi
