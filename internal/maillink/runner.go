@@ -12,6 +12,7 @@ import (
 
 	"github.com/strelov1/freehire/internal/mailclassify"
 	"github.com/strelov1/freehire/internal/mailmatch"
+	"github.com/strelov1/freehire/internal/outbox"
 )
 
 const (
@@ -121,49 +122,70 @@ func (r *Runner) WithLearner(l Learner) *Runner {
 
 // Run enqueues every unclassified email, then drains the outbox wave by wave
 // until it is empty.
-// Stats is what a run reports upward. Failed counts entries whose processing errored this
-// run; DeadLettered counts the subset that reached max_attempts and will not be retried.
-// cmd/classify-mail turns them into its exit code, so a mail queue that quietly stops working
-// is visible to the scheduler rather than only in journalctl.
+// Stats is what a run reports upward. Failed and DeadLettered are mutually
+// exclusive — a dead-lettered entry counts only in DeadLettered, matching
+// internal/outbox.Outcome's one-outcome-per-item shape (and applyform/adzunadesc's
+// RunStats, migrated onto the same shared runner just before this package: see
+// applyform.RunStats' doc comment for the pre-migration double-count this convention
+// corrects). cmd/classify-mail turns them into its exit code, so a mail queue that
+// quietly stops working is visible to the scheduler rather than only in journalctl.
 type Stats struct {
 	Failed       int
 	DeadLettered int
 }
 
+// claimAdapter adapts Store to outbox.Claimer: Store.ClaimBatch takes its two size
+// arguments in the opposite order (leaseSeconds, batchSize) from outbox.Claimer's
+// Claim(ctx, batch, leaseSeconds).
+type claimAdapter struct {
+	store Store
+}
+
+func (c claimAdapter) Claim(ctx context.Context, batch, leaseSeconds int) ([]Claimed, error) {
+	return c.store.ClaimBatch(ctx, leaseSeconds, batch)
+}
+
 func (r *Runner) Run(ctx context.Context) (Stats, error) {
-	var stats Stats
 	if _, err := r.store.EnqueuePending(ctx); err != nil {
-		return stats, err
+		return Stats{}, err
 	}
 	// A wave is mostly one user's mail, and their application list is the same for
 	// every message in it — see appCache for why the thread links are NOT cached
-	// alongside it.
-	apps := appCache{store: r.store, byUser: map[int64][]Application{}}
-	for {
-		batch, err := r.store.ClaimBatch(ctx, r.leaseSeconds, r.batchSize)
-		if err != nil {
-			return stats, err
+	// alongside it. Created once for the whole Run (not per wave), exactly as before:
+	// the closure below captures it, and outbox.RunPool calls that same closure across
+	// every wave in this Run.
+	cache := appCache{store: r.store, byUser: map[int64][]Application{}}
+	result, err := outbox.RunPool(ctx, claimAdapter{store: r.store}, outbox.RunOptions{
+		BatchSize:    r.batchSize,
+		LeaseSeconds: r.leaseSeconds,
+		// Strictly sequential — no goroutine spawned at all (see internal/outbox's
+		// Claimer doc comment on RunPool's Concurrency<=1 branch). appCache.byUser is
+		// a plain, non-synchronized map, and a later message in the same thread must
+		// see the same wave's earlier link (ThreadLinks is read live, not cached) —
+		// both require true in-order processing, not just a small pool.
+		Concurrency: 1,
+	}, func(ctx context.Context, c Claimed) outbox.Outcome {
+		err := r.process(ctx, cache, c)
+		if err == nil {
+			return outbox.Succeeded
 		}
-		if len(batch) == 0 {
-			return stats, nil
+		deadLettered, ferr := r.store.Fail(ctx, c.OutboxID, err.Error(), r.maxAttempts)
+		if ferr != nil {
+			// The dead-letter state is unknown and is not guessed — it still counts as
+			// failed (the entry is left to its lease expiry either way).
+			log.Printf("maillink: fail outbox %d: %v", c.OutboxID, ferr)
+			return outbox.Failed
 		}
-		for _, c := range batch {
-			if err := r.process(ctx, apps, c); err != nil {
-				stats.Failed++
-				// Tallied where the bookkeeping error is already logged: a Fail that itself
-				// fails leaves the entry to its lease expiry, so it counts as failed but its
-				// dead-letter state is unknown and is not guessed.
-				deadLettered, ferr := r.store.Fail(ctx, c.OutboxID, err.Error(), r.maxAttempts)
-				if ferr != nil {
-					log.Printf("maillink: fail outbox %d: %v", c.OutboxID, ferr)
-					continue
-				}
-				if deadLettered {
-					stats.DeadLettered++
-				}
-			}
+		if deadLettered {
+			return outbox.DeadLettered
 		}
+		return outbox.Failed
+	})
+	stats := Stats{Failed: result.Failed, DeadLettered: result.DeadLettered}
+	if err != nil {
+		return stats, err
 	}
+	return stats, nil
 }
 
 // appCache memoises one user's applications for the length of a run.

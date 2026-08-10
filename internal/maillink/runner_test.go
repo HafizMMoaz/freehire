@@ -250,8 +250,10 @@ func TestRunnerTalliesFailuresAndDeadLetters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if stats.Failed != 2 || stats.DeadLettered != 2 {
-		t.Errorf("stats = %+v, want Failed=2 DeadLettered=2", stats)
+	// Failed and DeadLettered are mutually exclusive (see Stats' doc comment) — a
+	// dead-lettered entry counts only in DeadLettered, not also in Failed.
+	if stats.Failed != 0 || stats.DeadLettered != 2 {
+		t.Errorf("stats = %+v, want Failed=0 DeadLettered=2", stats)
 	}
 	if store.failCalls != 2 {
 		t.Errorf("Fail called %d times, want 2", store.failCalls)
