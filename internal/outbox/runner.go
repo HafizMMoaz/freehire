@@ -58,6 +58,11 @@ type RunOptions struct {
 	// MaxPerRun bounds how much of the backlog one Run takes, shared by RunPool and
 	// RunBatch; 0 is unbounded.
 	MaxPerRun int
+	// OnWave, if set, is called after each wave is claimed and processed, with the
+	// cumulative Stats so far — the hook a caller's own per-wave progress-heartbeat
+	// log line (e.g. "enrich: progress enriched=... failed=... dead=...") is built
+	// from, so migrating onto Runner doesn't silently drop that log line.
+	OnWave func(Stats)
 }
 
 // Processor handles one claimed item end to end, including whatever Store.Complete /
@@ -91,6 +96,9 @@ func RunPool[C any](ctx context.Context, claimer Claimer[C], opt RunOptions, pro
 		} else {
 			runPoolWave(ctx, batch, opt.Concurrency, process, &stats)
 		}
+		if opt.OnWave != nil {
+			opt.OnWave(stats)
+		}
 	}
 }
 
@@ -121,9 +129,12 @@ func RunBatch[C any](ctx context.Context, claimer Claimer[C], opt RunOptions, pr
 			for _, item := range batch {
 				tally(&stats, processOne(ctx, item))
 			}
-			continue
+		} else {
+			stats.Succeeded += len(batch)
 		}
-		stats.Succeeded += len(batch)
+		if opt.OnWave != nil {
+			opt.OnWave(stats)
+		}
 	}
 }
 

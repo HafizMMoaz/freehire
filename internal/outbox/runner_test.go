@@ -237,6 +237,60 @@ func TestRunBatch_MaxPerRunStopsAndShrinksNextClaim(t *testing.T) {
 	}
 }
 
+func TestRunPool_CallsOnWaveWithCumulativeStatsAfterEachWave(t *testing.T) {
+	claimer := &fakeClaimer{waves: [][]int{{1, 2}, {3}}}
+	process := func(ctx context.Context, item int) Outcome { return Succeeded }
+
+	var mu sync.Mutex
+	var seen []Stats
+	onWave := func(s Stats) {
+		mu.Lock()
+		seen = append(seen, s)
+		mu.Unlock()
+	}
+
+	_, err := RunPool(context.Background(), claimer, RunOptions{
+		BatchSize: 2, LeaseSeconds: 60, Concurrency: 1, OnWave: onWave,
+	}, process)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []Stats{{Succeeded: 2}, {Succeeded: 3}}
+	if len(seen) != len(want) {
+		t.Fatalf("OnWave calls = %v, want %v", seen, want)
+	}
+	for i := range want {
+		if seen[i] != want[i] {
+			t.Errorf("OnWave call %d = %+v, want %+v (must be cumulative, not per-wave delta)", i, seen[i], want[i])
+		}
+	}
+}
+
+func TestRunBatch_CallsOnWaveWithCumulativeStatsAfterEachWave(t *testing.T) {
+	claimer := &fakeClaimer{waves: [][]int{{1, 2}, {3}}}
+	processBatch := func(ctx context.Context, items []int) error { return nil }
+	processOne := func(ctx context.Context, item int) Outcome { return Succeeded }
+
+	var seen []Stats
+	onWave := func(s Stats) { seen = append(seen, s) }
+
+	_, err := RunBatch(context.Background(), claimer, RunOptions{
+		BatchSize: 2, LeaseSeconds: 60, OnWave: onWave,
+	}, processBatch, processOne)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []Stats{{Succeeded: 2}, {Succeeded: 3}}
+	if len(seen) != len(want) {
+		t.Fatalf("OnWave calls = %v, want %v", seen, want)
+	}
+	for i := range want {
+		if seen[i] != want[i] {
+			t.Errorf("OnWave call %d = %+v, want %+v", i, seen[i], want[i])
+		}
+	}
+}
+
 func TestRunBatch_SucceedsWholeWaveViaOneBatchCall(t *testing.T) {
 	claimer := &fakeClaimer{waves: [][]int{{1, 2, 3}}}
 	var batchCalls, itemCalls int

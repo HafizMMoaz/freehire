@@ -32,6 +32,15 @@ document carries the decisions forward into OpenSpec's tracked format.
 
 ## Decisions
 
+- **`RunOptions.OnWave func(Stats)`, added while migrating `enrich`.** Discovered
+  mid-implementation: `enrich`, `embed`, and `search-drain` each log a per-wave
+  progress heartbeat with the *cumulative* running total (e.g. `"enrich: progress
+  enriched=%d failed=%d dead=%d"`), which a bare call into `RunPool`/`RunBatch`
+  would have silently dropped — an external-behavior change the proposal
+  explicitly rules out. `OnWave`, called with the cumulative `Stats` after each
+  wave, lets those three callers reproduce their exact log line; `applyform`,
+  `adzunadesc`, and `maillink` have no such log today and simply leave it unset.
+
 - **`RunOptions` carries no `MaxAttempts` or per-call timeout.** The brainstorming
   design doc's illustrative sketch
   (`docs/superpowers/specs/2026-08-09-outbox-runner-unification-design.md`) included
