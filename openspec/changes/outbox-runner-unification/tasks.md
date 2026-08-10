@@ -75,15 +75,22 @@
 
 ## 5. Migrate `internal/applyform` (RunPool)
 
-- [ ] 5.1 Wrap `applyform`'s per-capture fetch+save into a
+- [x] 5.1 Wrap `applyform`'s per-capture fetch+save into a
       `Claimer[applyform.Claimed]` + `Processor[applyform.Claimed]` closure,
       preserving `ErrPostingGone` → `Discard` and the `MaxPerRun` backlog bound.
-- [ ] 5.2 Replace `applyform`'s hand-rolled claim-wave loop (including its
+      Added `cancelAwareClaimer` for the post-wave `ctx.Err()` early-exit
+      (caller-owned per task group 1's design decision) — review caught that
+      it must NOT guard the very first claim (the original never did), fixed.
+- [x] 5.2 Replace `applyform`'s hand-rolled claim-wave loop (including its
       `MaxPerRun`-aware batch-size shrinking) with a call into `outbox.RunPool`.
-- [ ] 5.3 Shrink `internal/applyform/runner_test.go` to package-specific logic
+- [x] 5.3 Shrink `internal/applyform/runner_test.go` to package-specific logic
       only (`ErrPostingGone` → `Discard` mapping, `RunStats.Degraded()`
       heuristic); confirm `Degraded()` still derives correctly from the
-      `outbox.Stats` embedded in `applyform.RunStats`.
+      `outbox.Stats` embedded in `applyform.RunStats`. No tests removed — all
+      17 are legitimate integration coverage through a real Store/Fetcher.
+      Reviewed via requesting-code-review: two Important findings (first-claim
+      cancellation parity, a pre-existing Failed/DeadLettered double-count
+      this migration incidentally corrects) fixed and documented.
 
 ## 6. Migrate `internal/adzunadesc` (RunPool)
 
