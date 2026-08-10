@@ -195,7 +195,7 @@ func TestRunBatch_AbortsRunOnClaimError(t *testing.T) {
 	wantErr := errors.New("pool unreachable")
 	claimer := &fakeClaimer{waves: [][]int{{1, 2}}, errOnCall: 2, errAfter: wantErr}
 
-	processBatch := func(ctx context.Context, items []int) error { return nil }
+	processBatch := func(ctx context.Context, items []int) (Stats, error) { return Stats{Succeeded: len(items)}, nil }
 	processOne := func(ctx context.Context, item int) Outcome { return Succeeded }
 
 	stats, err := RunBatch(context.Background(), claimer, RunOptions{BatchSize: 2, LeaseSeconds: 60}, processBatch, processOne)
@@ -209,7 +209,7 @@ func TestRunBatch_AbortsRunOnClaimError(t *testing.T) {
 
 func TestRunBatch_MaxPerRunStopsAndShrinksNextClaim(t *testing.T) {
 	claimer := &fakeClaimer{waves: [][]int{{1, 2, 3}, {4}}}
-	processBatch := func(ctx context.Context, items []int) error { return nil }
+	processBatch := func(ctx context.Context, items []int) (Stats, error) { return Stats{Succeeded: len(items)}, nil }
 	processOne := func(ctx context.Context, item int) Outcome { return Succeeded }
 
 	stats, err := RunBatch(context.Background(), claimer, RunOptions{
@@ -268,7 +268,7 @@ func TestRunPool_CallsOnWaveWithCumulativeStatsAfterEachWave(t *testing.T) {
 
 func TestRunBatch_CallsOnWaveWithCumulativeStatsAfterEachWave(t *testing.T) {
 	claimer := &fakeClaimer{waves: [][]int{{1, 2}, {3}}}
-	processBatch := func(ctx context.Context, items []int) error { return nil }
+	processBatch := func(ctx context.Context, items []int) (Stats, error) { return Stats{Succeeded: len(items)}, nil }
 	processOne := func(ctx context.Context, item int) Outcome { return Succeeded }
 
 	var seen []Stats
@@ -295,9 +295,9 @@ func TestRunBatch_SucceedsWholeWaveViaOneBatchCall(t *testing.T) {
 	claimer := &fakeClaimer{waves: [][]int{{1, 2, 3}}}
 	var batchCalls, itemCalls int
 
-	processBatch := func(ctx context.Context, items []int) error {
+	processBatch := func(ctx context.Context, items []int) (Stats, error) {
 		batchCalls++
-		return nil
+		return Stats{Succeeded: len(items)}, nil
 	}
 	processOne := func(ctx context.Context, item int) Outcome {
 		itemCalls++
@@ -322,8 +322,8 @@ func TestRunBatch_SucceedsWholeWaveViaOneBatchCall(t *testing.T) {
 func TestRunBatch_FallsBackToPerItemOnBatchFailure(t *testing.T) {
 	claimer := &fakeClaimer{waves: [][]int{{1, 2, 3}}}
 
-	processBatch := func(ctx context.Context, items []int) error {
-		return errors.New("meili down")
+	processBatch := func(ctx context.Context, items []int) (Stats, error) {
+		return Stats{}, errors.New("meili down")
 	}
 	var mu sync.Mutex
 	seen := map[int]bool{}
@@ -346,5 +346,72 @@ func TestRunBatch_FallsBackToPerItemOnBatchFailure(t *testing.T) {
 	}
 	if stats.Succeeded != 2 || stats.Failed != 1 {
 		t.Errorf("stats = %+v, want Succeeded=2 Failed=1", stats)
+	}
+}
+
+// TestRunBatch_ClosureReportsOwnPartialStatsWithoutOuterFallback covers a
+// BatchProcessor that internally splits its wave into sub-groups and handles each
+// with its own batch-attempt-then-per-item-fallback cycle (internal/embed's actual
+// shape: an open-jobs group and a closed-jobs group, each pushed as its own
+// Meilisearch call). Returning (Stats, nil) means "I fully handled every item myself,
+// including my own fallback" — RunBatch must trust the returned Stats verbatim and
+// must NOT also invoke its own processOne, which would re-process (and potentially
+// double-complete) items the closure already finished.
+func TestRunBatch_ClosureReportsOwnPartialStatsWithoutOuterFallback(t *testing.T) {
+	claimer := &fakeClaimer{waves: [][]int{{1, 2, 3}}}
+	var outerFallbackCalls int
+
+	// Simulates: item 1 succeeded via the group's batch call, items 2 and 3 failed
+	// and were already routed to Fail internally by the closure's own fallback.
+	processBatch := func(ctx context.Context, items []int) (Stats, error) {
+		return Stats{Succeeded: 1, Failed: 2}, nil
+	}
+	processOne := func(ctx context.Context, item int) Outcome {
+		outerFallbackCalls++
+		return Succeeded
+	}
+
+	stats, err := RunBatch(context.Background(), claimer, RunOptions{BatchSize: 3, LeaseSeconds: 60}, processBatch, processOne)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if outerFallbackCalls != 0 {
+		t.Errorf("outer processOne was called %d times, want 0 (the closure already handled every item itself)", outerFallbackCalls)
+	}
+	if stats.Succeeded != 1 || stats.Failed != 2 {
+		t.Errorf("stats = %+v, want Succeeded=1 Failed=2 (trusted verbatim from the closure)", stats)
+	}
+}
+
+// TestRunBatch_ClosureCanSkipAWaveWithZeroStatsAndNilError covers the
+// skip-on-timeout shape (internal/embed, internal/searchdrain): a batch call whose
+// context merely expired leaves the wave claimed for a later run's lease-expiry
+// retry, rather than falling back per-item (which would turn one slow-but-fine batch
+// into many equally slow calls). Reporting (Stats{}, nil) must tally nothing and
+// must not trigger the outer per-item fallback either.
+func TestRunBatch_ClosureCanSkipAWaveWithZeroStatsAndNilError(t *testing.T) {
+	claimer := &fakeClaimer{waves: [][]int{{1, 2, 3}}}
+	var outerFallbackCalls int
+
+	processBatch := func(ctx context.Context, items []int) (Stats, error) {
+		return Stats{}, nil // "handled" (left claimed for lease-expiry retry), no outcome yet
+	}
+	processOne := func(ctx context.Context, item int) Outcome {
+		outerFallbackCalls++
+		return Succeeded
+	}
+
+	stats, err := RunBatch(context.Background(), claimer, RunOptions{BatchSize: 3, LeaseSeconds: 60}, processBatch, processOne)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if outerFallbackCalls != 0 {
+		t.Errorf("outer processOne was called %d times, want 0", outerFallbackCalls)
+	}
+	if stats != (Stats{}) {
+		t.Errorf("stats = %+v, want zero value", stats)
+	}
+	if claimer.calls < 2 {
+		t.Errorf("claim calls = %d, want >=2 (the loop must keep going after a skipped wave, not stop)", claimer.calls)
 	}
 }

@@ -103,14 +103,25 @@ func RunPool[C any](ctx context.Context, claimer Claimer[C], opt RunOptions, pro
 }
 
 // BatchProcessor handles a whole wave in one call (e.g. one Meilisearch bulk push).
-// A nil error means every item in the wave succeeded and was already completed by
-// the call; a non-nil error means the whole wave failed and RunBatch falls back to
-// processing it item by item through Processor.
-type BatchProcessor[C any] func(ctx context.Context, items []C) error
+// A nil error means the closure fully handled every item itself — including any
+// internal sub-grouping and its own per-item fallback, as internal/embed's open/closed
+// split does — and the returned Stats is trusted verbatim; RunBatch adds it to the
+// running total and does NOT also invoke Processor. A non-nil error means the call
+// itself failed outright (the closure could not attempt anything) and RunBatch falls
+// back to processing the wave item by item through Processor; the returned Stats is
+// ignored in that case.
+//
+// Returning (Stats{}, nil) — no error, an all-zero Stats — is deliberately meaningful:
+// it says "I chose to do nothing with this wave" (e.g. a call context merely timed out,
+// so the closure leaves the wave claimed for a later run's lease-expiry retry rather
+// than falling back per-item, which would turn one slow-but-fine batch into many
+// equally slow calls). RunBatch tallies nothing for that wave and does not fall back.
+type BatchProcessor[C any] func(ctx context.Context, items []C) (Stats, error)
 
 // RunBatch drains via one BatchProcessor call per wave, falling back to per-item
-// Processor calls only when the batch call itself fails — so one poison/corrupted
-// item can't sink an otherwise-healthy wave.
+// Processor calls only when the batch call itself fails outright — so one
+// poison/corrupted item can't sink an otherwise-healthy wave, and a closure that
+// handles its own sub-grouping/fallback (internal/embed) never gets double-processed.
 func RunBatch[C any](ctx context.Context, claimer Claimer[C], opt RunOptions, processBatch BatchProcessor[C], processOne Processor[C]) (Stats, error) {
 	var stats Stats
 	for {
@@ -125,12 +136,16 @@ func RunBatch[C any](ctx context.Context, claimer Claimer[C], opt RunOptions, pr
 		if len(batch) == 0 {
 			return stats, nil
 		}
-		if err := processBatch(ctx, batch); err != nil {
+		waveStats, err := processBatch(ctx, batch)
+		if err != nil {
 			for _, item := range batch {
 				tally(&stats, processOne(ctx, item))
 			}
 		} else {
-			stats.Succeeded += len(batch)
+			stats.Succeeded += waveStats.Succeeded
+			stats.Failed += waveStats.Failed
+			stats.DeadLettered += waveStats.DeadLettered
+			stats.Discarded += waveStats.Discarded
 		}
 		if opt.OnWave != nil {
 			opt.OnWave(stats)

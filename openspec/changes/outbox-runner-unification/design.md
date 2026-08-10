@@ -32,6 +32,26 @@ document carries the decisions forward into OpenSpec's tracked format.
 
 ## Decisions
 
+- **`BatchProcessor[C]` returns `(Stats, error)`, not a bare `error` — changed while
+  migrating `embed`.** The original sketch assumed one homogeneous batch call per
+  wave, succeed-or-fail as a whole. `embed`'s real shape splits a wave into two
+  independent groups (open jobs to (re-)embed, closed jobs to remove), each with
+  its own batch-call-then-per-item-fallback cycle — and both `embed` and
+  `search-drain` also need to leave a wave claimed, untouched, on a mere call
+  timeout (`skipOnTimeout`) rather than fall back per-item into what would become
+  many equally slow calls. A bare `error` return can't express "I already handled
+  this myself, here's the real per-outcome tally" or "I chose to do nothing" — only
+  "fully succeeded" or "fully failed, please retry every item for me." Forcing
+  `embed`'s dual-group shape through the binary contract would have meant treating
+  a closed-group failure as a whole-wave failure, triggering RunBatch's own
+  fallback over items the open-group call had *already* completed (and whose
+  outbox rows were already deleted) — a double-processing bug. The richer contract
+  (nil error ⇒ trust the returned `Stats` verbatim, no fallback; non-nil error ⇒
+  fall back to `Processor` per item, `Stats` ignored) lets a closure that manages
+  its own sub-grouping report an accurate partial result, while a simple
+  single-call closure (`search-drain`) still gets RunBatch's generic fallback for
+  free by returning `(Stats{}, err)` on failure.
+
 - **`RunOptions.OnWave func(Stats)`, added while migrating `enrich`.** Discovered
   mid-implementation: `enrich`, `embed`, and `search-drain` each log a per-wave
   progress heartbeat with the *cumulative* running total (e.g. `"enrich: progress
