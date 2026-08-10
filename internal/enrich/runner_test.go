@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -277,56 +276,10 @@ func TestRun_oneFailureDoesNotAbortBatch(t *testing.T) {
 	}
 }
 
-func TestRun_waveDrainsConcurrently(t *testing.T) {
-	const wave = 3
-	claimed := make([]Claimed, wave)
-	jobs := map[int64]JobInput{}
-	for i := range claimed {
-		id := int64(i + 1)
-		claimed[i] = Claimed{OutboxID: id, JobID: id, TargetVersion: Version}
-		jobs[id] = JobInput{Title: "j"}
-	}
-	store := &fakeStore{claims: [][]Claimed{claimed}, jobs: jobs}
-
-	// Barrier: each worker signals arrival then blocks on release. The main goroutine
-	// only releases once all `wave` workers have arrived, so a sequential drain (which
-	// would block on the first worker forever) cannot reach the barrier and times out.
-	var arrived sync.WaitGroup
-	arrived.Add(wave)
-	release := make(chan struct{})
-	prov := &funcProvider{fn: func(JobInput) (Enrichment, error) {
-		arrived.Done()
-		<-release
-		return Enrichment{Seniority: "senior"}, nil
-	}}
-
-	allArrived := make(chan struct{})
-	go func() { arrived.Wait(); close(allArrived) }()
-
-	done := make(chan Stats)
-	go func() {
-		stats, err := Runner{Provider: prov, Store: store}.Run(context.Background(), opts())
-		if err != nil {
-			t.Errorf("Run: %v", err)
-		}
-		done <- stats
-	}()
-
-	select {
-	case <-allArrived:
-		close(release)
-	case <-time.After(2 * time.Second):
-		t.Fatal("workers did not run concurrently: not all entries reached the barrier (sequential drain)")
-	}
-
-	stats := <-done
-	if stats.Enriched != wave || stats.Failed != 0 {
-		t.Errorf("stats = %+v, want Enriched:%d", stats, wave)
-	}
-	if len(store.completed) != wave {
-		t.Errorf("completed = %d entries, want %d", len(store.completed), wave)
-	}
-}
+// Wave-level parallelism (multiple claimed entries processed concurrently) is now
+// internal/outbox's responsibility, covered generically by
+// TestRunPool_RunsUpToConcurrencyItemsInParallel — no need to re-prove it here with a
+// real Provider fake.
 
 func TestRun_jobFetchErrorIsFailed(t *testing.T) {
 	store := &fakeStore{

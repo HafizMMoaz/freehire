@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"sync"
 	"time"
 
+	"github.com/strelov1/freehire/internal/outbox"
 	"github.com/strelov1/freehire/internal/pgerr"
 )
 
@@ -72,47 +72,37 @@ func (r Runner) Run(ctx context.Context, opt RunOptions) (Stats, error) {
 	log.Printf("enrich: enqueued %d pending, draining (concurrency=%d)", enqueued, opt.Concurrency)
 
 	rn := &run{provider: r.Provider, store: r.Store, opt: opt}
-	for {
-		// Claim a wave the size of the concurrency, then drain it in parallel: each
-		// entry starts processing at once, so its lease window stays ≈ one LLM call.
-		batch, err := r.Store.Claim(ctx, opt.Concurrency, opt.LeaseSeconds)
-		if err != nil {
-			return rn.stats, fmt.Errorf("claim: %w", err)
-		}
-		if len(batch) == 0 {
-			return rn.stats, nil
-		}
-		var wg sync.WaitGroup
-		for _, entry := range batch {
-			wg.Add(1)
-			go func(e Claimed) {
-				defer wg.Done()
-				rn.process(ctx, e)
-			}(entry)
-		}
-		wg.Wait()
-		// A heartbeat per wave so a long drain shows running totals instead of
-		// going silent for hours.
-		log.Printf("enrich: progress enriched=%d failed=%d dead=%d", rn.stats.Enriched, rn.stats.Failed, rn.stats.DeadLettered)
+	s, err := outbox.RunPool(ctx, r.Store, outbox.RunOptions{
+		// The wave is sized to the concurrency, then drained in parallel: each entry
+		// starts processing at once, so its lease window stays ≈ one LLM call.
+		BatchSize:    opt.Concurrency,
+		LeaseSeconds: opt.LeaseSeconds,
+		Concurrency:  opt.Concurrency,
+		OnWave: func(s outbox.Stats) {
+			// A heartbeat per wave so a long drain shows running totals instead of
+			// going silent for hours.
+			log.Printf("enrich: progress enriched=%d failed=%d dead=%d", s.Succeeded, s.Failed, s.DeadLettered)
+		},
+	}, rn.process)
+	stats := Stats{Enriched: s.Succeeded, Failed: s.Failed, DeadLettered: s.DeadLettered}
+	if err != nil {
+		return stats, fmt.Errorf("claim: %w", err)
 	}
+	return stats, nil
 }
 
-// run accumulates one Run's options and tallies so the per-entry helpers carry the
-// receiver instead of threading opt and a *Stats through every call. A wave's workers
-// process entries concurrently, so the tallies are guarded by mu.
+// run carries one Run's dependencies and options so the per-entry helpers use the
+// receiver instead of threading them through every call.
 type run struct {
 	provider Provider
 	store    Store
 	opt      RunOptions
-
-	mu    sync.Mutex
-	stats Stats
 }
 
-// process handles one claimed entry. Any failure routes to fail so the run
-// continues with the remaining entries. Each entry logs its outcome and duration
-// so a long drain is observable in real time.
-func (rn *run) process(ctx context.Context, entry Claimed) {
+// process handles one claimed entry and reports what happened; internal/outbox's
+// RunPool tallies the result. Each entry logs its outcome and duration so a long
+// drain is observable in real time.
+func (rn *run) process(ctx context.Context, entry Claimed) outbox.Outcome {
 	start := time.Now()
 
 	job, err := rn.store.Job(ctx, entry.JobID)
@@ -121,38 +111,36 @@ func (rn *run) process(ctx context.Context, entry Claimed) {
 		// runs would only burn the attempt budget on a job that can never load, so
 		// dead-letter it immediately (maxAttempts=1) instead.
 		if pgerr.IsDataCorrupted(err) {
-			rn.failN(ctx, entry, fmt.Errorf("load job: %w", err), 1)
+			outcome := rn.failN(ctx, entry, fmt.Errorf("load job: %w", err), 1)
 			log.Printf("enrich: job=%d dead-lettered (corrupted row) in %s: %v", entry.JobID, time.Since(start).Round(time.Millisecond), err)
-			return
+			return outcome
 		}
-		rn.fail(ctx, entry, fmt.Errorf("load job: %w", err))
+		outcome := rn.fail(ctx, entry, fmt.Errorf("load job: %w", err))
 		log.Printf("enrich: job=%d load failed in %s: %v", entry.JobID, time.Since(start).Round(time.Millisecond), err)
-		return
+		return outcome
 	}
 
 	enr, err := rn.enrich(ctx, job)
 	if err != nil {
-		rn.fail(ctx, entry, err)
+		outcome := rn.fail(ctx, entry, err)
 		log.Printf("enrich: job=%d FAILED in %s: %v", entry.JobID, time.Since(start).Round(time.Millisecond), err)
-		return
+		return outcome
 	}
 
 	payload, err := json.Marshal(enr)
 	if err != nil {
-		rn.fail(ctx, entry, fmt.Errorf("marshal: %w", err))
+		outcome := rn.fail(ctx, entry, fmt.Errorf("marshal: %w", err))
 		log.Printf("enrich: job=%d marshal failed: %v", entry.JobID, err)
-		return
+		return outcome
 	}
 
 	if err := rn.store.Complete(ctx, entry, payload); err != nil {
-		rn.fail(ctx, entry, fmt.Errorf("write back: %w", err))
+		outcome := rn.fail(ctx, entry, fmt.Errorf("write back: %w", err))
 		log.Printf("enrich: job=%d write-back failed: %v", entry.JobID, err)
-		return
+		return outcome
 	}
-	rn.mu.Lock()
-	rn.stats.Enriched++
-	rn.mu.Unlock()
 	log.Printf("enrich: job=%d ok in %s", entry.JobID, time.Since(start).Round(time.Millisecond))
+	return outbox.Succeeded
 }
 
 // enrich asks the provider for a payload and validates it, retrying once on a
@@ -185,14 +173,14 @@ func (rn *run) enrich(ctx context.Context, job JobInput) (Enrichment, error) {
 	return Enrichment{}, lastErr
 }
 
-func (rn *run) fail(ctx context.Context, entry Claimed, cause error) {
-	rn.failN(ctx, entry, cause, rn.opt.MaxAttempts)
+func (rn *run) fail(ctx context.Context, entry Claimed, cause error) outbox.Outcome {
+	return rn.failN(ctx, entry, cause, rn.opt.MaxAttempts)
 }
 
 // failN records a failure with an explicit attempt ceiling. fail uses the run's
 // configured MaxAttempts; the corrupted-row path passes 1 to force an immediate
 // dead-letter (an unreadable row will never succeed on retry).
-func (rn *run) failN(ctx context.Context, entry Claimed, cause error, maxAttempts int) {
+func (rn *run) failN(ctx context.Context, entry Claimed, cause error, maxAttempts int) outbox.Outcome {
 	dead, err := rn.store.Fail(ctx, entry.OutboxID, cause.Error(), maxAttempts)
 	if err != nil {
 		// The attempt still counts as a failure below, but log the cause: a
@@ -200,13 +188,10 @@ func (rn *run) failN(ctx context.Context, entry Claimed, cause error, maxAttempt
 		// otherwise hide behind an opaque Failed tally with no way to diagnose it.
 		log.Printf("enrich: outbox=%d fail-bookkeeping error: %v", entry.OutboxID, err)
 	}
-	rn.mu.Lock()
-	defer rn.mu.Unlock()
 	// Only a recorded dead-letter is distinct; a non-dead attempt and a Fail that
 	// couldn't even be recorded both count as a plain failure.
 	if err == nil && dead {
-		rn.stats.DeadLettered++
-		return
+		return outbox.DeadLettered
 	}
-	rn.stats.Failed++
+	return outbox.Failed
 }
