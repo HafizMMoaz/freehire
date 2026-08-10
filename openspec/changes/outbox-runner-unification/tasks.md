@@ -61,14 +61,17 @@
 
 ## 4. Migrate `internal/searchdrain` (RunBatch)
 
-- [ ] 4.1 Wrap `searchdrain`'s wave-push indexing into a
+- [x] 4.1 Wrap `searchdrain`'s wave-push indexing into a
       `Claimer[searchdrain.Claimed]` + `BatchProcessor` + `Processor` (per-item
       fallback) closure, preserving the `skipOnTimeout` no-fallback-on-context-
-      timeout behavior.
-- [ ] 4.2 Replace `searchdrain`'s hand-rolled claim-wave loop with a call into
+      timeout behavior. Same pattern as `embed` (no open/closed split needed —
+      one homogeneous group per wave, so simpler).
+- [x] 4.2 Replace `searchdrain`'s hand-rolled claim-wave loop with a call into
       `outbox.RunBatch`.
-- [ ] 4.3 Shrink `internal/searchdrain/runner_test.go` to package-specific logic
-      only (document building, `skipOnTimeout` branching).
+- [x] 4.3 Shrink `internal/searchdrain/runner_test.go` to package-specific logic
+      only (document building, `skipOnTimeout` branching). No tests removed —
+      all 6 existing tests are domain-specific. Reviewed via
+      requesting-code-review: ready to merge, no issues found.
 
 ## 5. Migrate `internal/applyform` (RunPool)
 
