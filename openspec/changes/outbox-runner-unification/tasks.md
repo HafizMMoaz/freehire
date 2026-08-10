@@ -1,17 +1,24 @@
 ## 1. Foundation: `internal/outbox`
 
-- [ ] 1.1 Define `Outcome`, `Stats`, `RunOptions`, `Claimer[C]`, `Processor[C]`,
+- [x] 1.1 Define `Outcome`, `Stats`, `RunOptions`, `Claimer[C]`, `Processor[C]`,
       `BatchProcessor[C]` per the design doc's API shape
       (`docs/superpowers/specs/2026-08-09-outbox-runner-unification-design.md`).
-- [ ] 1.2 Implement `RunPool[C any]`: bounded-concurrency drain when
+- [x] 1.2 Implement `RunPool[C any]`: bounded-concurrency drain when
       `Concurrency > 1`; a plain sequential loop (no goroutine spawned) when
-      `Concurrency <= 1`, honoring `MaxPerRun` and context cancellation.
-- [ ] 1.3 Implement `RunBatch[C any]`: one `BatchProcessor` call per wave,
-      falling back to per-item `Processor` calls only on a batch-level error.
-- [ ] 1.4 Unit-test `internal/outbox` with a fake `Claimer`/`Processor`/
+      `Concurrency <= 1`, honoring `MaxPerRun` (shrinks the next claim size,
+      stops before claiming past the budget). No built-in context-cancellation
+      handling — deliberately caller-owned; see the `Claimer` doc comment in
+      `internal/outbox/runner.go` and the design doc's Decisions section.
+- [x] 1.3 Implement `RunBatch[C any]`: one `BatchProcessor` call per wave,
+      falling back to per-item `Processor` calls only on a batch-level error;
+      honors `MaxPerRun` symmetrically with `RunPool`.
+- [x] 1.4 Unit-test `internal/outbox` with a fake `Claimer`/`Processor`/
       `BatchProcessor`: claim-until-empty termination, `MaxPerRun` budget
-      shrinking, context-cancellation exit, `RunPool` sequential-vs-pooled
-      branching, `RunBatch` fallback-on-failure.
+      shrinking (both entry points), claim-error abort (both entry points),
+      `RunPool` sequential-vs-pooled branching (incl. strict in-order
+      processing at `Concurrency<=1`), `RunBatch` fallback-on-failure.
+      Reviewed via requesting-code-review; two Important findings (RunBatch's
+      missing `MaxPerRun`, untested claim-error path) fixed before completion.
 
 ## 2. Migrate `internal/enrich` (RunPool)
 
