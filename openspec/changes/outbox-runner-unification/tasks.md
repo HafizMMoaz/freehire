@@ -113,17 +113,30 @@
 
 ## 7. Migrate `internal/maillink` (RunPool, sequential)
 
-- [ ] 7.1 Add a `Claim(ctx, batch, leaseSeconds)`-ordered adapter over
+- [x] 7.1 Add a `Claim(ctx, batch, leaseSeconds)`-ordered adapter over
       `Store.ClaimBatch(ctx, leaseSeconds, batchSize)` (argument order differs)
-      so `maillink` satisfies `Claimer[maillink.Claimed]`.
-- [ ] 7.2 Wrap `maillink`'s per-email classify+link into a
+      so `maillink` satisfies `Claimer[maillink.Claimed]`. Added a direct unit
+      test for the adapter (review found no test discriminated a positional
+      swap — both args are `int`, so it compiles either way); verified the
+      test actually fails on a deliberately reintroduced swap before keeping it.
+- [x] 7.2 Wrap `maillink`'s per-email classify+link into a
       `Processor[maillink.Claimed]` closure, preserving the `appCache` per-wave
-      reuse.
-- [ ] 7.3 Replace `maillink`'s hand-rolled sequential loop with a call into
+      reuse. Same pre-existing Failed/DeadLettered double-count as
+      applyform/adzunadesc found and fixed the same way.
+- [x] 7.3 Replace `maillink`'s hand-rolled sequential loop with a call into
       `outbox.RunPool` at `Concurrency: 1`, confirming the sequential (no
-      goroutine) path is what actually runs.
-- [ ] 7.4 Shrink `internal/maillink/runner_test.go` to package-specific logic
-      only (thread-continuity ordering, `appCache` behavior).
+      goroutine) path is what actually runs. Confirmed by trace against
+      `internal/outbox/runner.go` and by a real same-wave thread-continuity
+      test (see 7.4) — the property this whole design decision (task group 1)
+      exists to preserve.
+- [x] 7.4 Shrink `internal/maillink/runner_test.go` to package-specific logic
+      only (thread-continuity ordering, `appCache` behavior). No tests
+      removed; added `TestRunnerAppliesThreadContinuityWithinTheSameWave`
+      (review found the existing appCache test only counted calls, it
+      couldn't distinguish live from stale ThreadLinks data — the new test
+      uses a stateful fake where Save() writes the link a second same-thread
+      email must then see). Reviewed via requesting-code-review: no
+      correctness bug found in the migrated code; both coverage gaps closed.
 
 ## 8. Verification
 
