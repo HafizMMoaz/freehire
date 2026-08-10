@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/strelov1/freehire/internal/db"
+	"github.com/strelov1/freehire/internal/outbox"
 	"github.com/strelov1/freehire/internal/pgerr"
 )
 
@@ -83,18 +84,20 @@ type Runner struct {
 // entry is recorded and never aborts the run.
 func (r Runner) Run(ctx context.Context, opt RunOptions) (Stats, error) {
 	rn := &run{store: r.Store, indexer: r.Indexer, opt: opt}
-	for {
-		batch, err := r.Store.Claim(ctx, opt.BatchSize, opt.LeaseSeconds)
-		if err != nil {
-			return rn.stats, fmt.Errorf("claim: %w", err)
-		}
-		if len(batch) == 0 {
-			return rn.stats, nil
-		}
-		rn.processBatch(ctx, batch)
-		log.Printf("search-drain: progress indexed=%d failed=%d dead=%d",
-			rn.stats.Indexed, rn.stats.Failed, rn.stats.DeadLettered)
+	_, err := outbox.RunBatch(ctx, r.Store, outbox.RunOptions{
+		BatchSize:    opt.BatchSize,
+		LeaseSeconds: opt.LeaseSeconds,
+		OnWave: func(outbox.Stats) {
+			// A heartbeat per wave so a long drain shows running totals instead of
+			// going silent for hours.
+			log.Printf("search-drain: progress indexed=%d failed=%d dead=%d",
+				rn.stats.Indexed, rn.stats.Failed, rn.stats.DeadLettered)
+		},
+	}, rn.processWave, rn.unreachableFallback)
+	if err != nil {
+		return rn.stats, fmt.Errorf("claim: %w", err)
 	}
+	return rn.stats, nil
 }
 
 // run accumulates one Run's options and tallies. Waves are processed sequentially,
@@ -104,6 +107,28 @@ type run struct {
 	indexer Indexer
 	opt     RunOptions
 	stats   Stats
+}
+
+// processWave is search-drain's outbox.BatchProcessor: run the existing
+// batch-attempt-then-per-item-fallback cycle (processBatch, unchanged below) and
+// report this wave's delta. Always returns a nil error — processBatch fully handles
+// every item itself (including its own fallback and skipOnTimeout), so
+// outbox.RunBatch's outer per-item Processor (unreachableFallback) is never invoked.
+func (rn *run) processWave(ctx context.Context, batch []Claimed) (outbox.Stats, error) {
+	before := rn.stats
+	rn.processBatch(ctx, batch)
+	return outbox.Stats{
+		Succeeded:    rn.stats.Indexed - before.Indexed,
+		Failed:       rn.stats.Failed - before.Failed,
+		DeadLettered: rn.stats.DeadLettered - before.DeadLettered,
+	}, nil
+}
+
+// unreachableFallback satisfies outbox.RunBatch's Processor parameter. processWave
+// never returns an error, so outbox.RunBatch never calls this — panicking documents
+// that invariant rather than silently returning a fabricated outcome.
+func (rn *run) unreachableFallback(context.Context, Claimed) outbox.Outcome {
+	panic("search-drain: outer per-item fallback invoked, but processWave never returns an error")
 }
 
 // processBatch indexes a whole wave in one batch and completes it in one call. Any

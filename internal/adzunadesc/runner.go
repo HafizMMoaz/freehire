@@ -5,8 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"sync"
 	"time"
+
+	"github.com/strelov1/freehire/internal/outbox"
 )
 
 // errURLDrifted marks a claim whose job's stored URL has moved to the ad-network tracking
@@ -56,7 +57,11 @@ type RunOptions struct {
 	CallTimeout time.Duration
 }
 
-// RunStats is what the run did.
+// RunStats is what the run did. Failed and DeadLettered are mutually exclusive — a
+// dead-lettered capture counts only in DeadLettered, matching internal/outbox.Outcome's
+// one-outcome-per-item shape (and applyform.RunStats, migrated onto the same shared
+// runner just before this package: see its doc comment for the pre-migration
+// double-count this convention corrects).
 type RunStats struct {
 	Captured int
 	Failed   int
@@ -80,99 +85,84 @@ func (s RunStats) Degraded() bool {
 // recovery from being unable to claim. Every other failure belongs to one capture and is
 // recorded against it.
 func Run(ctx context.Context, s Store, fetch FetchFunc, opts RunOptions) (RunStats, error) {
-	var stats RunStats
-
-	for {
-		batch := opts.BatchSize
-		if opts.MaxPerRun > 0 {
-			remaining := opts.MaxPerRun - (stats.Captured + stats.Failed + stats.Skipped)
-			if remaining <= 0 {
-				return stats, nil
-			}
-			batch = min(batch, remaining)
-		}
-
-		claims, err := s.Claim(ctx, batch, opts.LeaseSeconds)
-		if err != nil {
-			return stats, fmt.Errorf("claim adzuna description captures: %w", err)
-		}
-		if len(claims) == 0 {
-			return stats, nil
-		}
-
-		wave := runWave(ctx, s, fetch, opts, claims)
-		stats.Captured += wave.Captured
-		stats.Failed += wave.Failed
-		stats.Skipped += wave.Skipped
-		stats.DeadLettered += wave.DeadLettered
-
-		if ctx.Err() != nil {
-			return stats, nil
-		}
+	rn := &run{store: s, fetch: fetch, opts: opts}
+	result, err := outbox.RunPool(ctx, &cancelAwareClaimer{store: s}, outbox.RunOptions{
+		BatchSize:    opts.BatchSize,
+		LeaseSeconds: opts.LeaseSeconds,
+		Concurrency:  opts.Concurrency,
+		MaxPerRun:    opts.MaxPerRun,
+	}, rn.process)
+	stats := RunStats{
+		Captured:     result.Succeeded,
+		Failed:       result.Failed,
+		Skipped:      result.Discarded,
+		DeadLettered: result.DeadLettered,
 	}
+	if err != nil {
+		return stats, fmt.Errorf("claim adzuna description captures: %w", err)
+	}
+	return stats, nil
 }
 
-// runWave processes one claim wave through a bounded pool.
-func runWave(ctx context.Context, s Store, fetch FetchFunc, opts RunOptions, claims []Claimed) RunStats {
-	concurrency := max(opts.Concurrency, 1)
+// cancelAwareClaimer adapts Store to outbox.Claimer, checking ctx.Err() before every
+// claim AFTER the first — see internal/applyform's identical adapter (this package
+// mirrors it) for the full rationale, including why the first call is deliberately
+// unguarded: the original loop never checked ctx before its first claim, only between
+// waves, so an already-cancelled ctx at Run()'s very start still made one real claim
+// attempt (a visible error) rather than a silent zero-stats no-op.
+type cancelAwareClaimer struct {
+	store Store
+	calls int
+}
 
-	var (
-		mu    sync.Mutex
-		stats RunStats
-		wg    sync.WaitGroup
-	)
-	slots := make(chan struct{}, concurrency)
-
-	for _, c := range claims {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			slots <- struct{}{}
-			defer func() { <-slots }()
-
-			err := captureOne(ctx, s, fetch, opts, c)
-			if err == nil {
-				mu.Lock()
-				stats.Captured++
-				mu.Unlock()
-				return
-			}
-
-			if errors.Is(err, errURLDrifted) {
-				if discardErr := s.Discard(ctx, c.OutboxID); discardErr != nil {
-					log.Printf("adzunadesc: discard drifted capture %d: %v", c.OutboxID, discardErr)
-				}
-				mu.Lock()
-				stats.Skipped++
-				mu.Unlock()
-				return
-			}
-
-			// A terminal error (see fetch.go) will answer the same way on a retry, so it
-			// dead-letters on this first attempt regardless of opts.MaxAttempts — no point
-			// spending two more requests to learn the same thing twice.
-			maxAttempts := opts.MaxAttempts
-			if terminal(err) {
-				maxAttempts = 1
-			}
-			dead, failErr := s.Fail(ctx, c.OutboxID, err.Error(), maxAttempts)
-			if failErr != nil {
-				log.Printf("adzunadesc: record failure for capture %d: %v", c.OutboxID, failErr)
-			} else if dead {
-				log.Printf("adzunadesc: capture %d (job %d) dead-lettered: %v", c.OutboxID, c.JobID, err)
-			}
-
-			mu.Lock()
-			defer mu.Unlock()
-			stats.Failed++
-			if failErr == nil && dead {
-				stats.DeadLettered++
-			}
-		}()
+func (c *cancelAwareClaimer) Claim(ctx context.Context, batch, leaseSeconds int) ([]Claimed, error) {
+	if c.calls > 0 && ctx.Err() != nil {
+		return nil, nil
 	}
-	wg.Wait()
+	c.calls++
+	return c.store.Claim(ctx, batch, leaseSeconds)
+}
 
-	return stats
+// run carries one Run's dependencies and options so process uses the receiver instead
+// of threading them through every call.
+type run struct {
+	store Store
+	fetch FetchFunc
+	opts  RunOptions
+}
+
+// process fetches and stores one posting's description and reports what happened;
+// outbox.RunPool tallies the result.
+func (rn *run) process(ctx context.Context, c Claimed) outbox.Outcome {
+	err := captureOne(ctx, rn.store, rn.fetch, rn.opts, c)
+	if err == nil {
+		return outbox.Succeeded
+	}
+
+	if errors.Is(err, errURLDrifted) {
+		if discardErr := rn.store.Discard(ctx, c.OutboxID); discardErr != nil {
+			log.Printf("adzunadesc: discard drifted capture %d: %v", c.OutboxID, discardErr)
+		}
+		return outbox.Discarded
+	}
+
+	// A terminal error (see fetch.go) will answer the same way on a retry, so it
+	// dead-letters on this first attempt regardless of opts.MaxAttempts — no point
+	// spending two more requests to learn the same thing twice.
+	maxAttempts := rn.opts.MaxAttempts
+	if terminal(err) {
+		maxAttempts = 1
+	}
+	dead, failErr := rn.store.Fail(ctx, c.OutboxID, err.Error(), maxAttempts)
+	if failErr != nil {
+		log.Printf("adzunadesc: record failure for capture %d: %v", c.OutboxID, failErr)
+	} else if dead {
+		log.Printf("adzunadesc: capture %d (job %d) dead-lettered: %v", c.OutboxID, c.JobID, err)
+	}
+	if failErr == nil && dead {
+		return outbox.DeadLettered
+	}
+	return outbox.Failed
 }
 
 // captureOne fetches and stores one posting's description.

@@ -10,22 +10,26 @@ import (
 )
 
 type fakeStore struct {
-	appsReads   int
-	threadReads int
-	apps        []Application
-	threadLinks map[string]int64
-	stage       string
-	claimed     []Claimed
-	claimedOnce bool
-	saved       []Result
-	savedOutbox []int64
-	failCalls   int
-	deadLetter  bool
-	failErr     error
+	appsReads       int
+	threadReads     int
+	apps            []Application
+	threadLinks     map[string]int64
+	stage           string
+	claimed         []Claimed
+	claimedOnce     bool
+	gotLeaseSeconds int
+	gotBatchSize    int
+	saved           []Result
+	savedOutbox     []int64
+	failCalls       int
+	deadLetter      bool
+	failErr         error
 }
 
 func (s *fakeStore) EnqueuePending(context.Context) (int64, error) { return 0, nil }
-func (s *fakeStore) ClaimBatch(context.Context, int, int) ([]Claimed, error) {
+func (s *fakeStore) ClaimBatch(_ context.Context, leaseSeconds, batchSize int) ([]Claimed, error) {
+	s.gotLeaseSeconds = leaseSeconds
+	s.gotBatchSize = batchSize
 	if s.claimedOnce {
 		return nil, nil
 	}
@@ -44,6 +48,21 @@ func (s *fakeStore) CurrentStage(context.Context, int64, int64) (string, error) 
 func (s *fakeStore) Save(_ context.Context, outboxID, _ int64, r Result, _ string) error {
 	s.saved = append(s.saved, r)
 	s.savedOutbox = append(s.savedOutbox, outboxID)
+	// Mirrors the real Store: linking an email writes job_id onto it, and
+	// ThreadLinks derives the thread->job map from already-written emails — so a
+	// link this save just made must be visible to ThreadLinks for the rest of the
+	// wave. Looked up by outboxID since Result carries no ThreadID of its own.
+	if r.JobID != 0 {
+		for _, c := range s.claimed {
+			if c.OutboxID == outboxID {
+				if s.threadLinks == nil {
+					s.threadLinks = map[string]int64{}
+				}
+				s.threadLinks[c.ThreadID] = r.JobID
+				break
+			}
+		}
+	}
 	return nil
 }
 
@@ -233,6 +252,65 @@ func TestRunnerReadsApplicationsOncePerUserButThreadLinksEveryTime(t *testing.T)
 	}
 }
 
+// This is the property the whole migration onto outbox.RunPool's sequential
+// (Concurrency: 1, no-goroutine) branch exists to preserve: a second email in the
+// same thread, with no name match of its own, must still resolve to the first
+// email's job via thread continuity — which only works if the first email's Save
+// (writing the link) fully completes before the second email's ThreadLinks read
+// begins. A concurrent (or reordered) implementation would make this flaky at best.
+func TestRunnerAppliesThreadContinuityWithinTheSameWave(t *testing.T) {
+	store := &fakeStore{
+		apps: []Application{{JobID: 5, Company: "Acme"}},
+		claimed: []Claimed{
+			{
+				OutboxID: 1, EmailID: 100, UserID: 1, ThreadID: "t1",
+				FromName: "Acme Hiring Team", Subject: "Acme Application Update",
+			},
+			{
+				// No extractable/matching company name of its own — can only resolve via
+				// the thread-continuity tier, which requires message 1's freshly-written
+				// link to already be visible.
+				OutboxID: 2, EmailID: 101, UserID: 1, ThreadID: "t1",
+				FromName: "Jane Doe", Subject: "Re: your interview",
+			},
+		},
+	}
+	cls := &fakeClassifier{out: mailclassify.Classification{Signal: mailclassify.SignalInterviewInvitation, Confidence: 0.95}}
+	r := New(store, cls, "test-model")
+
+	if _, err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(store.saved) != 2 {
+		t.Fatalf("saved %d results, want 2", len(store.saved))
+	}
+	if store.saved[0].JobID != 5 {
+		t.Fatalf("message 1 = %+v, want auto-linked to job 5 by name match", store.saved[0])
+	}
+	if store.saved[1].JobID != 5 {
+		t.Errorf("message 2 = %+v, want linked to job 5 via same-wave thread continuity", store.saved[1])
+	}
+}
+
+// claimAdapter bridges Store.ClaimBatch's reversed argument order
+// (leaseSeconds, batchSize) to outbox.Claimer.Claim's (batch, leaseSeconds). Both are
+// plain ints, so a positional swap here would compile silently and pass any test that
+// doesn't check which value landed where.
+func TestClaimAdapterPassesBatchAndLeaseSecondsToCorrectPositions(t *testing.T) {
+	store := &fakeStore{}
+	adapter := claimAdapter{store: store}
+
+	if _, err := adapter.Claim(context.Background(), 7, 42); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if store.gotBatchSize != 7 {
+		t.Errorf("Store.ClaimBatch's batchSize = %d, want 7", store.gotBatchSize)
+	}
+	if store.gotLeaseSeconds != 42 {
+		t.Errorf("Store.ClaimBatch's leaseSeconds = %d, want 42", store.gotLeaseSeconds)
+	}
+}
+
 // A queue that fails everything must say so upward. Nothing else reads
 // email_classification_outbox.failed_at, so before this the worker logged "done" and returned 0
 // while every entry dead-lettered — the state worker.ExitCode exists to surface.
@@ -250,8 +328,10 @@ func TestRunnerTalliesFailuresAndDeadLetters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if stats.Failed != 2 || stats.DeadLettered != 2 {
-		t.Errorf("stats = %+v, want Failed=2 DeadLettered=2", stats)
+	// Failed and DeadLettered are mutually exclusive (see Stats' doc comment) — a
+	// dead-lettered entry counts only in DeadLettered, not also in Failed.
+	if stats.Failed != 0 || stats.DeadLettered != 2 {
+		t.Errorf("stats = %+v, want Failed=0 DeadLettered=2", stats)
 	}
 	if store.failCalls != 2 {
 		t.Errorf("Fail called %d times, want 2", store.failCalls)

@@ -5,8 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"sync"
 	"time"
+
+	"github.com/strelov1/freehire/internal/outbox"
 )
 
 // Claimed is one capture leased to this run. Provider and ExternalID come straight off the
@@ -68,6 +69,14 @@ type RunOptions struct {
 // RunStats is what the run did. DeadLettered is counted apart from Failed because a
 // failure is a retry and a dead letter is work abandoned — a queue quietly filling with
 // the latter is not a healthy queue.
+//
+// Before this package's migration onto internal/outbox, the implementation
+// contradicted that documented intent: a dead-lettered capture incremented BOTH
+// Failed and DeadLettered (a pre-existing double-count this doc comment's "apart
+// from" never described). internal/outbox.Outcome is structurally one-outcome-per-
+// item, so migrating onto it corrects Failed/DeadLettered to the mutually exclusive
+// counters already documented here — matching how enrich/embed/search-drain already
+// counted them. Found and fixed by code review, not the original design.
 type RunStats struct {
 	Captured int
 	Failed   int
@@ -104,104 +113,90 @@ func (s RunStats) Degraded() bool {
 // recorded against it, so one platform having a bad afternoon costs its own postings and
 // nothing else.
 func Run(ctx context.Context, s Store, fetchers map[string]Fetcher, opts RunOptions) (RunStats, error) {
-	var stats RunStats
-
-	for {
-		batch := opts.BatchSize
-		if opts.MaxPerRun > 0 {
-			// Never claim past the budget: a leased entry this run will not touch is one
-			// no other run can take until its lease lapses.
-			remaining := opts.MaxPerRun - (stats.Captured + stats.Failed + stats.Gone)
-			if remaining <= 0 {
-				return stats, nil
-			}
-			batch = min(batch, remaining)
-		}
-
-		claims, err := s.Claim(ctx, batch, opts.LeaseSeconds)
-		if err != nil {
-			return stats, fmt.Errorf("claim apply-form captures: %w", err)
-		}
-		if len(claims) == 0 {
-			return stats, nil
-		}
-
-		wave := runWave(ctx, s, fetchers, opts, claims)
-		stats.Captured += wave.Captured
-		stats.Failed += wave.Failed
-		stats.Gone += wave.Gone
-		stats.DeadLettered += wave.DeadLettered
-
-		// A context cancellation shows up as every capture in the wave failing; stopping
-		// here keeps a cancelled run from burning the remaining attempts of the whole
-		// backlog on a shutdown.
-		if ctx.Err() != nil {
-			return stats, nil
-		}
+	rn := &run{store: s, fetchers: fetchers, opts: opts}
+	result, err := outbox.RunPool(ctx, &cancelAwareClaimer{store: s}, outbox.RunOptions{
+		BatchSize:    opts.BatchSize,
+		LeaseSeconds: opts.LeaseSeconds,
+		Concurrency:  opts.Concurrency,
+		MaxPerRun:    opts.MaxPerRun,
+	}, rn.process)
+	stats := RunStats{
+		Captured:     result.Succeeded,
+		Failed:       result.Failed,
+		Gone:         result.Discarded,
+		DeadLettered: result.DeadLettered,
 	}
+	if err != nil {
+		return stats, fmt.Errorf("claim apply-form captures: %w", err)
+	}
+	return stats, nil
 }
 
-// runWave processes one claim wave through a bounded pool.
-func runWave(ctx context.Context, s Store, fetchers map[string]Fetcher, opts RunOptions, claims []Claimed) RunStats {
-	concurrency := max(opts.Concurrency, 1)
+// cancelAwareClaimer adapts Store to outbox.Claimer, checking ctx.Err() before every
+// claim AFTER the first. A context cancellation shows up as every capture in a wave
+// failing, so stopping here — rather than letting the next claim attempt or per-item
+// fetch surface the cancellation as an ordinary error — keeps a cancelled run from
+// burning the remaining attempts of a large backlog on a shutdown, matching the
+// original behavior's post-wave ctx.Err() check (an empty claim is outbox.RunPool's
+// ordinary clean-stop path, so this reproduces it without RunPool needing to know
+// about cancellation).
+//
+// The first call is deliberately NOT guarded: the original loop called Claim
+// unconditionally before ever checking ctx, so an already-cancelled ctx at the very
+// start of Run() still made one real claim attempt (surfacing as a claim error if the
+// store's own call respects the cancellation) rather than a silent zero-stats no-op.
+// Guarding every call uniformly — including the first — would swap that visible
+// failure signal for a clean-looking empty-queue run, indistinguishable from a
+// healthy drain; found by code review, not by design.
+type cancelAwareClaimer struct {
+	store Store
+	calls int
+}
 
-	var (
-		mu    sync.Mutex
-		stats RunStats
-		wg    sync.WaitGroup
-	)
-	slots := make(chan struct{}, concurrency)
-
-	for _, c := range claims {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			slots <- struct{}{}
-			defer func() { <-slots }()
-
-			err := captureOne(ctx, s, fetchers, opts, c)
-			if err == nil {
-				mu.Lock()
-				stats.Captured++
-				mu.Unlock()
-				return
-			}
-
-			// The platform does not have this posting and never will again. Retrying to
-			// reach the same answer spends requests and ends in a dead letter that reads
-			// like a fault, so the entry is retired instead.
-			if errors.Is(err, ErrPostingGone) {
-				if discardErr := s.Discard(ctx, c.OutboxID); discardErr != nil {
-					log.Printf("apply-form: retire gone capture %d: %v", c.OutboxID, discardErr)
-				}
-				mu.Lock()
-				stats.Gone++
-				mu.Unlock()
-				return
-			}
-
-			// Recording the failure is itself a database call, so it happens OUTSIDE the
-			// counter lock — holding the lock across it would serialize the whole wave's
-			// failure path behind one round trip and quietly undo the bounded pool
-			// whenever a platform starts erroring, which is exactly when it matters.
-			dead, failErr := s.Fail(ctx, c.OutboxID, err.Error(), opts.MaxAttempts)
-			if failErr != nil {
-				log.Printf("apply-form: record failure for capture %d: %v", c.OutboxID, failErr)
-			} else if dead {
-				log.Printf("apply-form: capture %d (job %d) dead-lettered: %v", c.OutboxID, c.JobID, err)
-			}
-
-			mu.Lock()
-			defer mu.Unlock()
-			stats.Failed++
-			if failErr == nil && dead {
-				stats.DeadLettered++
-			}
-		}()
+func (c *cancelAwareClaimer) Claim(ctx context.Context, batch, leaseSeconds int) ([]Claimed, error) {
+	if c.calls > 0 && ctx.Err() != nil {
+		return nil, nil
 	}
-	wg.Wait()
+	c.calls++
+	return c.store.Claim(ctx, batch, leaseSeconds)
+}
 
-	return stats
+// run carries one Run's dependencies and options so process uses the receiver instead
+// of threading them through every call.
+type run struct {
+	store    Store
+	fetchers map[string]Fetcher
+	opts     RunOptions
+}
+
+// process fetches and stores one posting's form and reports what happened;
+// outbox.RunPool tallies the result.
+func (rn *run) process(ctx context.Context, c Claimed) outbox.Outcome {
+	err := captureOne(ctx, rn.store, rn.fetchers, rn.opts, c)
+	if err == nil {
+		return outbox.Succeeded
+	}
+
+	// The platform does not have this posting and never will again. Retrying to reach
+	// the same answer spends requests and ends in a dead letter that reads like a
+	// fault, so the entry is retired instead.
+	if errors.Is(err, ErrPostingGone) {
+		if discardErr := rn.store.Discard(ctx, c.OutboxID); discardErr != nil {
+			log.Printf("apply-form: retire gone capture %d: %v", c.OutboxID, discardErr)
+		}
+		return outbox.Discarded
+	}
+
+	dead, failErr := rn.store.Fail(ctx, c.OutboxID, err.Error(), rn.opts.MaxAttempts)
+	if failErr != nil {
+		log.Printf("apply-form: record failure for capture %d: %v", c.OutboxID, failErr)
+	} else if dead {
+		log.Printf("apply-form: capture %d (job %d) dead-lettered: %v", c.OutboxID, c.JobID, err)
+	}
+	if failErr == nil && dead {
+		return outbox.DeadLettered
+	}
+	return outbox.Failed
 }
 
 // captureOne fetches and stores one posting's form.

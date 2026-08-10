@@ -228,6 +228,9 @@ func TestRunCountsDeadLetters(t *testing.T) {
 	if stats.DeadLettered != 1 {
 		t.Errorf("dead-lettered = %d, want 1", stats.DeadLettered)
 	}
+	if stats.Failed != 0 {
+		t.Errorf("failed = %d, want 0 (DeadLettered and Failed are mutually exclusive, per RunStats' own doc comment)", stats.Failed)
+	}
 }
 
 // The enqueue gate and this registry share one source of truth, so a claim for a provider
@@ -338,6 +341,10 @@ func TestRunWithoutABudgetDrainsEverything(t *testing.T) {
 }
 
 // A cancelled run stops rather than working through the backlog burning retry budget.
+// A context already cancelled before Run() is even called must still make its FIRST
+// claim attempt — the original loop never guarded the first Claim call, only the ones
+// between waves, so an already-cancelled ctx surfaced as an ordinary claim error (a
+// visible failure) rather than a silent, indistinguishable-from-healthy empty run.
 func TestRunStopsWhenCancelled(t *testing.T) {
 	store := newFakeStore(
 		[]Claimed{claim(1, 100, "greenhouse", "b:one")},
@@ -348,11 +355,18 @@ func TestRunStopsWhenCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, err := Run(ctx, store, map[string]Fetcher{"greenhouse": fetcher}, testOptions()); err != nil {
+	stats, err := Run(ctx, store, map[string]Fetcher{"greenhouse": fetcher}, testOptions())
+	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if len(store.waves) == 0 {
 		t.Error("a cancelled run drained every wave, want it to stop")
+	}
+	if store.maxClaims != 1 {
+		t.Errorf("claim calls = %d, want 1 (the first claim is never guarded, only the ones between waves)", store.maxClaims)
+	}
+	if stats.Captured != 1 {
+		t.Errorf("stats = %+v, want the first wave fully captured before stopping", stats)
 	}
 }
 

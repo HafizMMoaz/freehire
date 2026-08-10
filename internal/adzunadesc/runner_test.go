@@ -18,11 +18,13 @@ type fakeStore struct {
 	deadLetteredID []int64
 	discardedID    []int64
 	claimErr       error
+	claimCalls     int
 }
 
 func (s *fakeStore) Claim(_ context.Context, batch, _ int) ([]Claimed, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.claimCalls++
 	if s.claimErr != nil {
 		return nil, s.claimErr
 	}
@@ -136,8 +138,10 @@ func TestRunRetriesThenDeadLettersAFailingFetch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if stats.Failed != 1 || stats.DeadLettered != 1 {
-		t.Errorf("stats = %+v, want Failed=1 DeadLettered=1", stats)
+	// Failed and DeadLettered are mutually exclusive (see RunStats' doc comment) — a
+	// capture that dead-letters counts only in DeadLettered, not also in Failed.
+	if stats.Failed != 0 || stats.DeadLettered != 1 {
+		t.Errorf("stats = %+v, want Failed=0 DeadLettered=1", stats)
 	}
 	if !stats.Degraded() {
 		t.Error("a dead letter should mark the run degraded")
@@ -162,8 +166,8 @@ func TestRunDeadLettersATerminalFailureOnTheFirstAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if stats.Failed != 1 || stats.DeadLettered != 1 {
-		t.Errorf("stats = %+v, want Failed=1 DeadLettered=1 (dead-lettered on the first attempt)", stats)
+	if stats.Failed != 0 || stats.DeadLettered != 1 {
+		t.Errorf("stats = %+v, want Failed=0 DeadLettered=1 (dead-lettered on the first attempt)", stats)
 	}
 	if store.failed[1] != 1 {
 		t.Errorf("Fail was called %d times for outbox 1, want exactly 1", store.failed[1])
@@ -194,5 +198,34 @@ func TestRunReturnsErrorWhenClaimFails(t *testing.T) {
 	_, err := Run(context.Background(), store, fetch, RunOptions{BatchSize: 10, Concurrency: 1})
 	if err == nil {
 		t.Fatal("expected an error when the queue itself is unusable")
+	}
+}
+
+// A context already cancelled before Run() is even called must still make its FIRST
+// claim attempt (mirrors internal/applyform's identical test/rationale): the original
+// loop never guarded the first Claim call, only the ones between waves, so this must
+// not silently turn into a zero-stats no-op indistinguishable from an empty queue.
+func TestRunStopsWhenCancelled(t *testing.T) {
+	store := &fakeStore{pending: []Claimed{
+		{OutboxID: 1, JobID: 10, URL: "https://www.adzuna.co.uk/jobs/details/1"},
+		{OutboxID: 2, JobID: 20, URL: "https://www.adzuna.co.uk/jobs/details/2"},
+	}}
+	fetch := func(_ context.Context, _ string) (string, error) { return "text", nil }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	stats, err := Run(ctx, store, fetch, RunOptions{BatchSize: 1, Concurrency: 1})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(store.pending) == 0 {
+		t.Error("a cancelled run drained every wave, want it to stop")
+	}
+	if store.claimCalls != 1 {
+		t.Errorf("claim calls = %d, want 1 (the first claim is never guarded, only the ones between waves)", store.claimCalls)
+	}
+	if stats.Captured != 1 {
+		t.Errorf("stats = %+v, want the first wave fully captured before stopping", stats)
 	}
 }
