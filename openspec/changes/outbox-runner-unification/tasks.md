@@ -94,13 +94,22 @@
 
 ## 6. Migrate `internal/adzunadesc` (RunPool)
 
-- [ ] 6.1 Wrap `adzunadesc`'s per-item fetch+hydrate (including its chained
-      `EnqueueSearchOutbox` on success) into a `Claimer[adzunadesc.Claimed]` +
-      `Processor[adzunadesc.Claimed]` closure.
-- [ ] 6.2 Replace `adzunadesc`'s hand-rolled claim-wave loop with a call into
+- [x] 6.1 Wrap `adzunadesc`'s per-item fetch+hydrate into a
+      `Claimer[adzunadesc.Claimed]` + `Processor[adzunadesc.Claimed]` closure.
+      (`EnqueueSearchOutbox` chaining lives inside the real `Store.Save`
+      implementation behind the interface, outside this package — untouched.)
+      Proactively applied both fixes review caught in applyform's migration:
+      `cancelAwareClaimer`'s first-claim-unguarded rule, and mutually
+      exclusive Failed/DeadLettered (corrected the same pre-existing
+      double-count applyform had; updated the two tests that asserted the
+      old values, added a cancellation test since none existed before).
+- [x] 6.2 Replace `adzunadesc`'s hand-rolled claim-wave loop with a call into
       `outbox.RunPool`.
-- [ ] 6.3 Shrink `internal/adzunadesc/runner_test.go` to package-specific logic
-      only.
+- [x] 6.3 Shrink `internal/adzunadesc/runner_test.go` to package-specific logic
+      only. No tests removed (only 2 updated for the Failed/DeadLettered fix,
+      1 added for cancellation) — all are domain-specific, mirroring
+      applyform. Reviewed via requesting-code-review: ready to merge, no
+      issues found — confirmed both proactive fixes hold under inspection.
 
 ## 7. Migrate `internal/maillink` (RunPool, sequential)
 
