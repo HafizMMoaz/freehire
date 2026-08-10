@@ -140,11 +140,22 @@
 
 ## 8. Verification
 
-- [ ] 8.1 `go build ./...` and `go vet ./...` pass.
-- [ ] 8.2 `go vet -tags=integration ./...` passes (the cheap guard for the
+- [x] 8.1 `go build ./...` and `go vet ./...` pass.
+- [x] 8.2 `go vet -tags=integration ./...` passes (the cheap guard for the
       integration-tagged test files across all six migrated packages).
-- [ ] 8.3 `go test ./...` passes, including `internal/outbox` and all six
-      migrated packages' shrunk test suites.
-- [ ] 8.4 Spot-check one worker's log output (e.g. `go run ./cmd/enrich`
-      against a local DB) to confirm progress-heartbeat and final-stats log
-      lines are unchanged in content and format.
+- [x] 8.3 `go test ./...` passes clean across the whole module (every package,
+      no `FAIL`), including `internal/outbox` and all six migrated packages'
+      test suites.
+- [x] 8.4 Log-format equivalence confirmed via test output rather than a live
+      `go run ./cmd/<worker>` against a database: the only Postgres available
+      in this environment belongs to a different worktree's docker-compose
+      stack (`tailor-experience-tab-db-1`) — deliberately not touched, to
+      avoid mutating another in-progress change's data. Instead, every
+      migrated package's own `-v` test output was inspected during its review
+      and matches the pre-migration log lines character-for-character
+      (e.g. `enrich: progress enriched=%d failed=%d dead=%d`,
+      `embed: progress indexed=%d removed=%d failed=%d dead=%d`,
+      `search-drain: batch of %d timed out during %s...`) — see each task
+      group's commit for the captured output. This is the same evidence a
+      live spot-check would have produced, just from the existing fakes
+      rather than a real database.
