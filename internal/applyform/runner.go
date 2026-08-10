@@ -69,6 +69,14 @@ type RunOptions struct {
 // RunStats is what the run did. DeadLettered is counted apart from Failed because a
 // failure is a retry and a dead letter is work abandoned — a queue quietly filling with
 // the latter is not a healthy queue.
+//
+// Before this package's migration onto internal/outbox, the implementation
+// contradicted that documented intent: a dead-lettered capture incremented BOTH
+// Failed and DeadLettered (a pre-existing double-count this doc comment's "apart
+// from" never described). internal/outbox.Outcome is structurally one-outcome-per-
+// item, so migrating onto it corrects Failed/DeadLettered to the mutually exclusive
+// counters already documented here — matching how enrich/embed/search-drain already
+// counted them. Found and fixed by code review, not the original design.
 type RunStats struct {
 	Captured int
 	Failed   int
@@ -106,7 +114,7 @@ func (s RunStats) Degraded() bool {
 // nothing else.
 func Run(ctx context.Context, s Store, fetchers map[string]Fetcher, opts RunOptions) (RunStats, error) {
 	rn := &run{store: s, fetchers: fetchers, opts: opts}
-	result, err := outbox.RunPool(ctx, cancelAwareClaimer{store: s}, outbox.RunOptions{
+	result, err := outbox.RunPool(ctx, &cancelAwareClaimer{store: s}, outbox.RunOptions{
 		BatchSize:    opts.BatchSize,
 		LeaseSeconds: opts.LeaseSeconds,
 		Concurrency:  opts.Concurrency,
@@ -125,20 +133,31 @@ func Run(ctx context.Context, s Store, fetchers map[string]Fetcher, opts RunOpti
 }
 
 // cancelAwareClaimer adapts Store to outbox.Claimer, checking ctx.Err() before every
-// claim. A context cancellation shows up as every capture in the wave failing, so
-// stopping here — rather than letting the next claim attempt or per-item fetch surface
-// the cancellation as an ordinary error — keeps a cancelled run from burning the
-// remaining attempts of a large backlog on a shutdown, matching the original behavior's
-// post-wave ctx.Err() check (an empty claim is outbox.RunPool's ordinary clean-stop
-// path, so this reproduces it without RunPool needing to know about cancellation).
+// claim AFTER the first. A context cancellation shows up as every capture in a wave
+// failing, so stopping here — rather than letting the next claim attempt or per-item
+// fetch surface the cancellation as an ordinary error — keeps a cancelled run from
+// burning the remaining attempts of a large backlog on a shutdown, matching the
+// original behavior's post-wave ctx.Err() check (an empty claim is outbox.RunPool's
+// ordinary clean-stop path, so this reproduces it without RunPool needing to know
+// about cancellation).
+//
+// The first call is deliberately NOT guarded: the original loop called Claim
+// unconditionally before ever checking ctx, so an already-cancelled ctx at the very
+// start of Run() still made one real claim attempt (surfacing as a claim error if the
+// store's own call respects the cancellation) rather than a silent zero-stats no-op.
+// Guarding every call uniformly — including the first — would swap that visible
+// failure signal for a clean-looking empty-queue run, indistinguishable from a
+// healthy drain; found by code review, not by design.
 type cancelAwareClaimer struct {
 	store Store
+	calls int
 }
 
-func (c cancelAwareClaimer) Claim(ctx context.Context, batch, leaseSeconds int) ([]Claimed, error) {
-	if ctx.Err() != nil {
+func (c *cancelAwareClaimer) Claim(ctx context.Context, batch, leaseSeconds int) ([]Claimed, error) {
+	if c.calls > 0 && ctx.Err() != nil {
 		return nil, nil
 	}
+	c.calls++
 	return c.store.Claim(ctx, batch, leaseSeconds)
 }
 
