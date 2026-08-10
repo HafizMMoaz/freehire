@@ -32,6 +32,16 @@ document carries the decisions forward into OpenSpec's tracked format.
 
 ## Decisions
 
+- **`RunOptions` carries no `MaxAttempts` or per-call timeout.** The brainstorming
+  design doc's illustrative sketch
+  (`docs/superpowers/specs/2026-08-09-outbox-runner-unification-design.md`) included
+  both, but the actual `internal/outbox` implementation omits them: both govern a
+  single `Processor` call's own retry/timeout behavior, which lives inside each
+  caller's closure alongside its own `Store` calls (confirmed against `applyform`,
+  `adzunadesc`, `embed`, `searchdrain`'s existing `RunOptions`), not in the shared
+  loop. Noted here explicitly so the deviation from that earlier sketch reads as
+  intentional, not an oversight.
+
 - **Keep six separate tables; do not merge into one generic outbox table.**
   Alternative considered: a single physical table with a `queue` discriminator
   and a JSONB payload. Rejected because it would put all six queues' insert/
@@ -87,6 +97,20 @@ document carries the decisions forward into OpenSpec's tracked format.
   runner having to model it. The runner only tallies whichever `Outcome`
   (`Succeeded`/`Failed`/`DeadLettered`/`Discarded`) the closure reports.
 
+- **`RunPool`/`RunBatch` have no built-in context-cancellation early-exit.**
+  Discovered mid-implementation: only two of the four `RunPool` callers
+  (`applyform`, `adzunadesc`) check `ctx.Err()` after a wave and return
+  `(stats, nil)` to avoid burning a large backlog's retry attempts on
+  shutdown; `enrich` and `maillink` have no such check today and instead let a
+  cancelled context surface as an ordinary error from the next `Claim` call.
+  Baking either behavior into the shared runner would silently change the
+  other pair's exit code on SIGTERM — exactly the kind of behavior change this
+  change promises not to make. Resolution: `internal/outbox` stays
+  cancellation-agnostic; `applyform` and `adzunadesc`'s own `Claimer` adapters
+  reproduce their historical early-exit locally (check `ctx.Err()` first,
+  return `(nil, nil)` instead of querying — the runner's ordinary
+  empty-batch-stops-cleanly path then reproduces the exact same outcome).
+
 - **All six workers migrate in one change, not a phased rollout.** The per-queue
   diff is small (swap an internal loop, not any external contract), and the
   queues are similar enough that a multi-week phased migration would only leave
@@ -97,8 +121,9 @@ document carries the decisions forward into OpenSpec's tracked format.
 - [Risk] A subtle behavior change in the shared loop (e.g. lease-timing edge
   case) would affect all six workers at once instead of just one. → Mitigation:
   `internal/outbox` gets its own unit tests covering claim-until-empty
-  termination, `MaxPerRun` budget shrinking, context cancellation, and the
-  batch-failure-triggers-fallback path — the loop mechanics currently
+  termination, `MaxPerRun` budget shrinking, `RunPool`'s sequential-vs-pooled
+  branching, and the batch-failure-triggers-fallback path — the loop mechanics
+  currently
   duplicated (and separately tested) six times move to one well-tested place
   instead of six less-scrutinized copies.
 - [Risk] `internal/maillink`'s `Store.ClaimBatch(ctx, leaseSeconds, batchSize)`

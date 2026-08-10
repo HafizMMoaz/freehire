@@ -15,17 +15,24 @@ type fakeClaimer struct {
 	waves          [][]int
 	calls          int
 	requestedBatch []int
+	// errOnCall, if set, makes the Nth Claim call (1-indexed) return errAfter instead
+	// of a wave.
+	errOnCall int
+	errAfter  error
 }
 
 func (f *fakeClaimer) Claim(ctx context.Context, batch, leaseSeconds int) ([]int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.requestedBatch = append(f.requestedBatch, batch)
-	if f.calls >= len(f.waves) {
+	f.calls++
+	if f.errOnCall != 0 && f.calls == f.errOnCall {
+		return nil, f.errAfter
+	}
+	if f.calls > len(f.waves) {
 		return nil, nil
 	}
-	w := f.waves[f.calls]
-	f.calls++
+	w := f.waves[f.calls-1]
 	return w, nil
 }
 
@@ -161,6 +168,74 @@ func TestRunPool_ConcurrencyOneProcessesInStrictSubmissionOrder(t *testing.T) {
 // which this test's claim-until-empty contract already covers generically —
 // TestRunPool_ProcessesAllItemsUntilClaimEmpty exercises the exact same path a
 // cancellation-aware Claimer would take.
+
+func TestRunPool_AbortsRunOnClaimError(t *testing.T) {
+	wantErr := errors.New("pool unreachable")
+	claimer := &fakeClaimer{waves: [][]int{{1, 2}}, errOnCall: 2, errAfter: wantErr}
+
+	var itemCalls int
+	process := func(ctx context.Context, item int) Outcome {
+		itemCalls++
+		return Succeeded
+	}
+
+	stats, err := RunPool(context.Background(), claimer, RunOptions{BatchSize: 2, LeaseSeconds: 60, Concurrency: 1}, process)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err = %v, want %v", err, wantErr)
+	}
+	if stats.Succeeded != 2 {
+		t.Errorf("Succeeded = %d, want 2 (the first wave, processed before the failing claim)", stats.Succeeded)
+	}
+	if itemCalls != 2 {
+		t.Errorf("itemCalls = %d, want 2 (no processing should be attempted after a claim error)", itemCalls)
+	}
+}
+
+func TestRunBatch_AbortsRunOnClaimError(t *testing.T) {
+	wantErr := errors.New("pool unreachable")
+	claimer := &fakeClaimer{waves: [][]int{{1, 2}}, errOnCall: 2, errAfter: wantErr}
+
+	processBatch := func(ctx context.Context, items []int) error { return nil }
+	processOne := func(ctx context.Context, item int) Outcome { return Succeeded }
+
+	stats, err := RunBatch(context.Background(), claimer, RunOptions{BatchSize: 2, LeaseSeconds: 60}, processBatch, processOne)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err = %v, want %v", err, wantErr)
+	}
+	if stats.Succeeded != 2 {
+		t.Errorf("Succeeded = %d, want 2 (the first wave, processed before the failing claim)", stats.Succeeded)
+	}
+}
+
+func TestRunBatch_MaxPerRunStopsAndShrinksNextClaim(t *testing.T) {
+	claimer := &fakeClaimer{waves: [][]int{{1, 2, 3}, {4}}}
+	processBatch := func(ctx context.Context, items []int) error { return nil }
+	processOne := func(ctx context.Context, item int) Outcome { return Succeeded }
+
+	stats, err := RunBatch(context.Background(), claimer, RunOptions{
+		BatchSize:    3,
+		LeaseSeconds: 60,
+		MaxPerRun:    4,
+	}, processBatch, processOne)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.Succeeded != 4 {
+		t.Errorf("Succeeded = %d, want 4", stats.Succeeded)
+	}
+	if claimer.calls != 2 {
+		t.Errorf("claim calls = %d, want 2 (must stop before a 3rd claim once budget is spent)", claimer.calls)
+	}
+	wantRequested := []int{3, 1}
+	if len(claimer.requestedBatch) != len(wantRequested) {
+		t.Fatalf("requestedBatch = %v, want %v", claimer.requestedBatch, wantRequested)
+	}
+	for i, want := range wantRequested {
+		if claimer.requestedBatch[i] != want {
+			t.Errorf("requestedBatch[%d] = %d, want %d (should shrink to the remaining budget)", i, claimer.requestedBatch[i], want)
+		}
+	}
+}
 
 func TestRunBatch_SucceedsWholeWaveViaOneBatchCall(t *testing.T) {
 	claimer := &fakeClaimer{waves: [][]int{{1, 2, 3}}}

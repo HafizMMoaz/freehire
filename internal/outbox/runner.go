@@ -45,12 +45,18 @@ type Claimer[C any] interface {
 	Claim(ctx context.Context, batch, leaseSeconds int) ([]C, error)
 }
 
-// RunOptions are the per-run knobs.
+// RunOptions are the per-run knobs. MaxAttempts and any per-call timeout are
+// deliberately absent here — they govern a single Processor call's own retry/timeout
+// behavior, which stays inside each caller's closure alongside its Store calls, not in
+// the shared loop.
 type RunOptions struct {
 	BatchSize    int
 	LeaseSeconds int
-	Concurrency  int
-	// MaxPerRun bounds how much of the backlog one Run takes; 0 is unbounded.
+	// Concurrency is RunPool-only; RunBatch ignores it (its concurrency lives inside
+	// whatever the caller's BatchProcessor does in one call).
+	Concurrency int
+	// MaxPerRun bounds how much of the backlog one Run takes, shared by RunPool and
+	// RunBatch; 0 is unbounded.
 	MaxPerRun int
 }
 
@@ -67,13 +73,9 @@ type Processor[C any] func(ctx context.Context, item C) Outcome
 func RunPool[C any](ctx context.Context, claimer Claimer[C], opt RunOptions, process Processor[C]) (Stats, error) {
 	var stats Stats
 	for {
-		batchSize := opt.BatchSize
-		if opt.MaxPerRun > 0 {
-			remaining := opt.MaxPerRun - processed(stats)
-			if remaining <= 0 {
-				return stats, nil
-			}
-			batchSize = min(batchSize, remaining)
+		batchSize, budgetSpent := nextBatchSize(opt, stats)
+		if budgetSpent {
+			return stats, nil
 		}
 		batch, err := claimer.Claim(ctx, batchSize, opt.LeaseSeconds)
 		if err != nil {
@@ -104,7 +106,11 @@ type BatchProcessor[C any] func(ctx context.Context, items []C) error
 func RunBatch[C any](ctx context.Context, claimer Claimer[C], opt RunOptions, processBatch BatchProcessor[C], processOne Processor[C]) (Stats, error) {
 	var stats Stats
 	for {
-		batch, err := claimer.Claim(ctx, opt.BatchSize, opt.LeaseSeconds)
+		batchSize, budgetSpent := nextBatchSize(opt, stats)
+		if budgetSpent {
+			return stats, nil
+		}
+		batch, err := claimer.Claim(ctx, batchSize, opt.LeaseSeconds)
 		if err != nil {
 			return stats, err
 		}
@@ -142,8 +148,19 @@ func runPoolWave[C any](ctx context.Context, batch []C, concurrency int, process
 	wg.Wait()
 }
 
-func processed(s Stats) int {
-	return s.Succeeded + s.Failed + s.DeadLettered + s.Discarded
+// nextBatchSize applies opt.MaxPerRun (shared by RunPool and RunBatch) to
+// opt.BatchSize, reporting whether the budget is already spent — in which case the
+// caller must stop without claiming again.
+func nextBatchSize(opt RunOptions, stats Stats) (size int, budgetSpent bool) {
+	if opt.MaxPerRun <= 0 {
+		return opt.BatchSize, false
+	}
+	processed := stats.Succeeded + stats.Failed + stats.DeadLettered + stats.Discarded
+	remaining := opt.MaxPerRun - processed
+	if remaining <= 0 {
+		return 0, true
+	}
+	return min(opt.BatchSize, remaining), false
 }
 
 func tally(stats *Stats, o Outcome) {
