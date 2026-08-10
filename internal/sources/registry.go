@@ -251,6 +251,9 @@ func All(c HTTPClient) map[string]Source {
 		// hh.ru: multi-company aggregator, enumerated by professional_role (board), reading the
 		// server-rendered search page's embedded state.
 		NewHH(c),
+		// SolidJobs: Polish job board, multi-company aggregator enumerated by division (board),
+		// same keyword-as-board shape as whatjobs.
+		NewSolidJobs(c),
 		// RU-domestic single-company adapters (boardless, except Yandex which selects
 		// host+language by board).
 		NewYandex(c),
