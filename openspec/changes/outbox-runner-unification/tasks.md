@@ -40,13 +40,24 @@
 
 ## 3. Migrate `internal/embed` (RunBatch)
 
-- [ ] 3.1 Wrap `embed`'s open/closed batch indexing into a
+- [x] 3.1 Wrap `embed`'s open/closed batch indexing into a
       `Claimer[embed.Claimed]` + `BatchProcessor[embed.Claimed]` +
       `Processor[embed.Claimed]` (per-item fallback) closure.
-- [ ] 3.2 Replace `embed`'s hand-rolled claim-wave loop with a call into
+      Required changing `outbox.BatchProcessor`'s contract from bare `error`
+      to `(Stats, error)` (see design.md) — embed's own open/closed split
+      already does its own internal batch-then-fallback per group, so it
+      always returns a nil error with an accurate per-wave `Stats` delta;
+      `Processor[embed.Claimed]` is wired but structurally unreachable
+      (`unreachableFallback`, panics if ever called — confirmed via review
+      that this is safe under `worker.Main`'s panic-capture wrapper).
+- [x] 3.2 Replace `embed`'s hand-rolled claim-wave loop with a call into
       `outbox.RunBatch`.
-- [ ] 3.3 Shrink `internal/embed/runner_test.go` to package-specific logic only
+- [x] 3.3 Shrink `internal/embed/runner_test.go` to package-specific logic only
       (open/closed branching, vector-provenance stamping on complete).
+      No tests removed — embed never had a pure loop-mechanics test to begin
+      with; all 6 existing tests were already domain-specific. Reviewed via
+      requesting-code-review together with the BatchProcessor contract
+      change: ready to merge, no blocking issues.
 
 ## 4. Migrate `internal/searchdrain` (RunBatch)
 
