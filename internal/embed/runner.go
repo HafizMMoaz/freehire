@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/strelov1/freehire/internal/db"
+	"github.com/strelov1/freehire/internal/outbox"
 	"github.com/strelov1/freehire/internal/pgerr"
 )
 
@@ -104,27 +105,22 @@ func (r Runner) Run(ctx context.Context, opt RunOptions) (Stats, error) {
 	log.Printf("embed: enqueued %d pending, draining (batch=%d)", enqueued, opt.BatchSize)
 
 	rn := &run{store: r.Store, indexer: r.Indexer, opt: opt}
-	for {
-		batch, err := r.Store.Claim(ctx, opt.BatchSize, opt.LeaseSeconds)
-		if err != nil {
-			return rn.stats, fmt.Errorf("claim: %w", err)
-		}
-		if len(batch) == 0 {
-			return rn.stats, nil
-		}
-		var open, closed []Claimed
-		for _, e := range batch {
-			if e.Closed {
-				closed = append(closed, e)
-			} else {
-				open = append(open, e)
-			}
-		}
-		rn.processOpenBatch(ctx, open)
-		rn.processClosedBatch(ctx, closed)
-		log.Printf("embed: progress indexed=%d removed=%d failed=%d dead=%d",
-			rn.stats.Indexed, rn.stats.Removed, rn.stats.Failed, rn.stats.DeadLettered)
+	_, err = outbox.RunBatch(ctx, r.Store, outbox.RunOptions{
+		BatchSize:    opt.BatchSize,
+		LeaseSeconds: opt.LeaseSeconds,
+		OnWave: func(outbox.Stats) {
+			// A heartbeat per wave so a long drain shows running totals instead of
+			// going silent for hours. Reads rn.stats directly (not the generic
+			// outbox.Stats parameter) because it distinguishes Indexed from Removed,
+			// which outbox's four generic buckets don't carry.
+			log.Printf("embed: progress indexed=%d removed=%d failed=%d dead=%d",
+				rn.stats.Indexed, rn.stats.Removed, rn.stats.Failed, rn.stats.DeadLettered)
+		},
+	}, rn.processWave, rn.unreachableFallback)
+	if err != nil {
+		return rn.stats, fmt.Errorf("claim: %w", err)
 	}
+	return rn.stats, nil
 }
 
 // run accumulates one Run's options and tallies. Waves are processed sequentially (the
@@ -134,6 +130,40 @@ type run struct {
 	indexer Indexer
 	opt     RunOptions
 	stats   Stats
+}
+
+// processWave is embed's outbox.BatchProcessor: split the wave into its open and
+// closed groups and hand each to its own batch-attempt-then-per-item-fallback cycle
+// (unchanged below). Always returns a nil error — embed fully handles every item
+// itself, including its own fallback, so outbox.RunBatch's outer per-item Processor
+// (unreachableFallback) is never invoked. The returned outbox.Stats is this wave's
+// delta, computed from rn.stats before/after, for outbox's own bookkeeping (MaxPerRun,
+// OnWave); Run's own public Stats return value comes from rn.stats directly, which
+// keeps the Indexed/Removed split outbox.Stats has no room for.
+func (rn *run) processWave(ctx context.Context, batch []Claimed) (outbox.Stats, error) {
+	var open, closed []Claimed
+	for _, e := range batch {
+		if e.Closed {
+			closed = append(closed, e)
+		} else {
+			open = append(open, e)
+		}
+	}
+	before := rn.stats
+	rn.processOpenBatch(ctx, open)
+	rn.processClosedBatch(ctx, closed)
+	return outbox.Stats{
+		Succeeded:    (rn.stats.Indexed - before.Indexed) + (rn.stats.Removed - before.Removed),
+		Failed:       rn.stats.Failed - before.Failed,
+		DeadLettered: rn.stats.DeadLettered - before.DeadLettered,
+	}, nil
+}
+
+// unreachableFallback satisfies outbox.RunBatch's Processor parameter. processWave
+// never returns an error, so outbox.RunBatch never calls this — panicking documents
+// that invariant rather than silently returning a fabricated outcome.
+func (rn *run) unreachableFallback(context.Context, Claimed) outbox.Outcome {
+	panic("embed: outer per-item fallback invoked, but processWave never returns an error")
 }
 
 // processOpenBatch embeds+upserts a whole wave of open jobs in one batch and completes
