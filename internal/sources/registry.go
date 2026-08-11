@@ -205,6 +205,7 @@ func All(c HTTPClient) map[string]Source {
 		NewRemoteOK(c),
 		NewJobicy(c),
 		NewWeWorkRemotely(c),
+		NewNoDesk(c),
 		NewCryptocurrencyJobs(c),
 		NewJobspresso(c),
 		NewStartupAndVC(c),
