@@ -15,6 +15,14 @@ export const accountNav = [
   // Mail inbox: connect Gmail and/or claim a freehire mailbox to track application
   // replies. Open to every signed-in user.
   { href: '/my/inbox', label: 'Inbox' },
+  // Personal skill-demand trend: how the market for the candidate's own profile
+  // skills is moving, week over week. A check-in section, not a daily one — sits
+  // with the occasional group below rather than the four everyday sections above.
+  // Beta-gated (users.beta_tester) while the history is thin post-launch —
+  // betaOnly drives visibleAccountNav's filter below, beta drives the "Beta"
+  // pill my/+layout.svelte renders next to the label. The endpoint itself is
+  // not gated, only the nav link.
+  { href: '/my/market-pulse', label: 'Market Pulse', betaOnly: true, beta: true },
   // The agent: open to every signed-in user. It runs in our backend, and unlike the CV
   // builder below, nothing meters its spend yet.
   { href: '/my/assistant', label: 'Agent' },
