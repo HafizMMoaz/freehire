@@ -22,6 +22,9 @@ type remotli struct {
 
 const remotliListURL = "https://remotli.ch/api/jobs?page=%d"
 
+// remotliMaxPages bounds pagination so a wrong or missing totalPages cannot loop.
+const remotliMaxPages = 100
+
 // NewRemotli builds the Remotli adapter over the given HTTP client.
 func NewRemotli(c JSONGetter) Source { return remotli{http: c} }
 
@@ -59,7 +62,7 @@ type remotliPosting struct {
 
 func (s remotli) Fetch(ctx context.Context, _ CompanyEntry) ([]Job, error) {
 	var jobs []Job
-	for page := 1; ; page++ {
+	for page := 1; page <= remotliMaxPages; page++ {
 		var resp remotliResponse
 		url := fmt.Sprintf(remotliListURL, page)
 		if err := s.http.GetJSON(ctx, url, &resp); err != nil {
