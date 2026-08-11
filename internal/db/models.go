@@ -608,6 +608,13 @@ type PrunedJob struct {
 	PrunedAt    pgtype.Timestamptz `json:"pruned_at"`
 }
 
+type PushTicketOutbox struct {
+	ID        int64              `json:"id"`
+	Token     string             `json:"token"`
+	TicketID  string             `json:"ticket_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type ReferralOffer struct {
 	UserID         int64              `json:"user_id"`
 	CompanySlug    string             `json:"company_slug"`
@@ -805,4 +812,13 @@ type UserProfile struct {
 	Specializations     []string           `json:"specializations"`
 	LocationPreferences json.RawMessage    `json:"location_preferences"`
 	ExcludedSkills      []string           `json:"excluded_skills"`
+}
+
+type UserPushToken struct {
+	ID         int64              `json:"id"`
+	UserID     int64              `json:"user_id"`
+	Token      string             `json:"token"`
+	Platform   string             `json:"platform"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	LastSeenAt pgtype.Timestamptz `json:"last_seen_at"`
 }

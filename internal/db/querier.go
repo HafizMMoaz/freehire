@@ -163,6 +163,11 @@ type Querier interface {
 	// Delivery happens OUTSIDE this transaction, so no network call is held under a
 	// row lock. Mirrors ClaimDueReminders.
 	ClaimDueNudges(ctx context.Context, arg ClaimDueNudgesParams) ([]int64, error)
+	// Tickets old enough for Expo to have an answer, oldest first. Read-only
+	// (this queue has no lease/claim bookkeeping — see DeletePushTickets):
+	// cmd/push-receipts is a run-once-and-exit cron worker, not a long-running
+	// pool of overlapping consumers, so a plain scan is enough.
+	ClaimDuePushTickets(ctx context.Context, arg ClaimDuePushTicketsParams) ([]PushTicketOutbox, error)
 	// Lease a batch of due, pending reminders by stamping claimed_at, earliest deadline
 	// first. FOR UPDATE OF r + SKIP LOCKED lets overlapping worker passes take disjoint
 	// rows so a reminder fires at most once; the lease predicate reclaims rows whose
@@ -660,6 +665,14 @@ type Querier interface {
 	// by the company-info backfill are preserved: they intentionally have no job, so
 	// the NOT is_reference guard keeps the backfill directory from being swept away.
 	DeleteOrphanCompanies(ctx context.Context) (int64, error)
+	// Removes tickets once their receipt has been checked, regardless of outcome
+	// (delivered, pruned-as-dead, or any other terminal receipt status) — this
+	// queue has no retry bookkeeping of its own; an unprocessed batch (e.g. Expo
+	// unreachable) simply stays queued for the next scheduled run.
+	DeletePushTickets(ctx context.Context, ids []int64) error
+	// Explicit unregistration (sign-out), scoped to the caller so one account
+	// cannot unregister another's device.
+	DeletePushToken(ctx context.Context, arg DeletePushTokenParams) (int64, error)
 	// Withdraw ("stop being a referrer"): the owner deletes their own offer. The user_id
 	// guard scopes it to the caller — a non-owner or absent id deletes zero rows, which the
 	// repository maps to ErrOfferNotFound. Hard delete frees the UNIQUE (user_id,
@@ -800,6 +813,9 @@ type Querier interface {
 	// COALESCE(posted_at, created_at) onto the outbox row so ClaimSemanticBatch can sort by
 	// it without joining jobs on every claim (see that query's doc comment).
 	EnqueuePendingSemanticJobs(ctx context.Context, targetModel string) (int64, error)
+	// Queues a successfully-sent Expo ticket for a later receipt check — the
+	// send response itself does not say whether the push was actually delivered.
+	EnqueuePushTicket(ctx context.Context, arg EnqueuePushTicketParams) error
 	// Queue a job for the live facet index. Called by cmd/ingest inside the same
 	// transaction as the job's upsert, only when the write inserted or changed indexed
 	// content (mirrors the gate the old inline SubmitJobs push used). ON CONFLICT keeps
@@ -1766,6 +1782,8 @@ type Querier interface {
 	// guard — far above any plausible backlog; a queue that deep needs bulk triage,
 	// not a longer page.
 	ListPendingSubmissions(ctx context.Context) ([]ListPendingSubmissionsRow, error)
+	// The caller's own registered devices, for a test send or a future delivery.
+	ListPushTokensForUser(ctx context.Context, userID int64) ([]UserPushToken, error)
 	// The "my offers" list: one member's offers with moderation status, newest first.
 	// Joins the catalogue for the company's display name (LEFT so an offer survives a
 	// company the catalogue no longer knows — the UI falls back to the slug).
@@ -2075,6 +2093,12 @@ type Querier interface {
 	// company hires for, so "has any skill" answers a different question than the caller
 	// is asking.
 	PruneCandidates(ctx context.Context, arg PruneCandidatesParams) ([]PruneCandidatesRow, error)
+	// Removes a token the Expo Push API reported as permanently undeliverable
+	// (DeviceNotRegistered). No owner check: the token is dead regardless of
+	// who currently holds it. This is the notifier's internal cleanup path, not
+	// a caller-facing "delete a token" request — that goes through
+	// DeletePushToken's owner check instead.
+	PruneDeadPushToken(ctx context.Context, token string) error
 	// Permanently remove a batch of jobs and record what was removed, in ONE statement.
 	// Splitting the two would let the archive drift from the deletion, and the archive is
 	// the only way to answer, after an irreversible removal, whether something was taken
@@ -3055,6 +3079,11 @@ type Querier interface {
 	UpsertManualJob(ctx context.Context, arg UpsertManualJobParams) (Job, error)
 	// Create or replace the caller's notification rule in one statement. Returns the stored row.
 	UpsertNotificationSettings(ctx context.Context, arg UpsertNotificationSettingsParams) (NotificationSetting, error)
+	// Register (or refresh) a device's push token. A token identifies one device
+	// install, not one user, so the conflict target is the token itself: if it
+	// already belongs to a different account, this reassigns it to the caller
+	// rather than duplicating or leaving it with the previous owner.
+	UpsertPushToken(ctx context.Context, arg UpsertPushTokenParams) (UserPushToken, error)
 	// Link (or relink) a user's Telegram chat, captured from the inbound /start. One
 	// row per user; relinking from a different chat overwrites the chat_id.
 	UpsertTelegramLink(ctx context.Context, arg UpsertTelegramLinkParams) error
