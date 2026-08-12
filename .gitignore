@@ -80,7 +80,10 @@ skills-lock.json
 # Spec Kit — local-only (not part of the freehire tree). Keep on disk for personal
 # workflows; never commit tooling, constitution memory, or generated feature specs.
 .specify/
-.cursor/
+# Ignore Cursor local state; keep shared agent rules in the tree.
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
 /specs/
 
 # Python
@@ -139,3 +142,5 @@ extension/*.zip
 # Go / Vitest coverage profiles and HTML (make cover, pnpm test:coverage).
 /coverage/
 /web/coverage/
+.pnpm-store/
+.tmp-containers/
