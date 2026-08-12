@@ -46,6 +46,11 @@ go vet -tags=integration ./...            # compiles the tagged tests — run be
 go test -tags=integration ./internal/db/  # queue integration tests (needs Docker; testcontainers)
 ```
 
+**Before committing** any `*.go` file: `gofmt -w` those paths (`gofmt -l .` must print
+nothing), then `go vet ./...` and `go test ./...`. Do not commit if they fail. Skip this
+suite when the commit has no Go. Integration-tagged tests stay push-time (`go vet
+-tags=integration ./...` before every push; the full tagged suite when behaviour changed).
+
 **`go test ./...` compiles no `//go:build integration` file, and those files are not
 confined to `internal/db`** — there are 152 of them across 13 packages, and `internal/handler`
 holds 65, which call unexported constructors like `newCVHandlers`. A changed signature
