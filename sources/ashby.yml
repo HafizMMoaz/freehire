@@ -8160,3 +8160,9 @@
   board: xyme
 - company: YOUMMDAY
   board: yoummday
+- company: LeoVegas Group
+  board: leovegasgroup
+
+# migrated from lever.yml — board moved off Lever (issue #1529), live-verified 2026-08-11
+- company: Tunnl
+  board: tunnl

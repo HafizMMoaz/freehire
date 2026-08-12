@@ -86,6 +86,25 @@ type Querier interface {
 	// what makes this safe to run over a week the live weekly writer already
 	// recorded: the real snapshot is never overwritten by a backfilled one.
 	BackfillInsightsSkillHistoryWeek(ctx context.Context, arg BackfillInsightsSkillHistoryWeekParams) (int64, error)
+	// One-time correction for applications the pre-preparing-stage EnsureOnBoard wrote as
+	// stage='applied' with no applied_at (see cv-tailoring's board placement in
+	// internal/handler/cv.go, which now writes 'preparing' directly — this repairs what it wrote
+	// before that changed).
+	//
+	// The WHERE clause alone cannot tell tailoring's placement apart from a candidate's own
+	// manual, undated drag into the Applied column, which produces the identical
+	// stage='applied'/applied_at=NULL shape (see JobBoard.svelte's persistMove) and must NOT be
+	// relabeled. A tailored CV on record for the same (user, job) is the strongest available
+	// corroborating evidence of the former; the EXISTS join is that evidence, not a performance
+	// detail.
+	//
+	// Idempotent: a second run matches nothing, because a row this statement (or the current
+	// EnsureOnBoard) already moved to 'preparing' no longer reads stage='applied'.
+	//
+	// Writes a stage_set ledger event per corrected row, source='system': the platform is
+	// correcting its own past write, not the candidate doing anything (see appevent.SourceSystem).
+	// Returns the count of applications corrected.
+	BackfillPreparingStage(ctx context.Context) (int64, error)
 	// Find the ashby board already carrying a job with this Ashby job id — for company careers
 	// pages that embed Ashby via the ashby_jid widget param (the board slug is JS-rendered, absent
 	// from the URL/markup). external_id is "<board>:<uuid>"; served by the
@@ -475,6 +494,11 @@ type Querier interface {
 	// Served by the partial index threads_subject_open_created_idx; scoped to a single
 	// subject so it stays cheap (not the cross-subject count the design rules out).
 	CountOpenThreadsBySubject(ctx context.Context, arg CountOpenThreadsBySubjectParams) (int64, error)
+	// Read-only counterpart to BackfillPreparingStage, for cmd/backfill-preparing-stage's
+	// --dry-run: how many applications the correction below would touch, without touching them.
+	// Kept in exact lockstep with that query's WHERE clause deliberately — see its comment for
+	// what the shape means and why the EXISTS join is the evidence, not the WHERE alone.
+	CountPreparingBackfillCandidates(ctx context.Context) (int64, error)
 	CountRecentRepliesByUser(ctx context.Context, arg CountRecentRepliesByUserParams) (int64, error)
 	// Rate-limit count: threads a user opened since a cutoff. Served by
 	// threads_author_created_idx.
@@ -1995,8 +2019,11 @@ type Querier interface {
 	MarkFuzzyDuplicatesForCompany(ctx context.Context, arg MarkFuzzyDuplicatesForCompanyParams) (int64, error)
 	// Mark a job as applied for a user. Idempotent and independent of a prior view:
 	// it inserts the row (viewed_at defaults) or updates applied_at in place, and
-	// seeds stage='applied' only when the stage is unset (an advanced stage survives
-	// a re-apply, via COALESCE). When (and only when) applied_at transitions from
+	// seeds stage='applied' when the stage is unset OR still 'preparing' — CV
+	// tailoring's board placement (internal/handler/cv.go's EnsureOnBoard) sets
+	// 'preparing' with no applied_at, and a real apply signal is exactly the event
+	// that should promote it. Any other existing stage survives a re-apply
+	// unchanged. When (and only when) applied_at transitions from
 	// unset to set, bump the job's materialized applied_count in the same statement;
 	// `prior` sees the pre-upsert applied_at, so a re-apply never re-bumps.
 	// MUST run inside a transaction that took LockJobForApply first: `prior` reads
@@ -2067,6 +2094,13 @@ type Querier interface {
 	// landed. The UPDATE itself is gated on the loser still existing, for the same reason in
 	// the other direction. Either both sides of the merge happen or neither does. Claim,
 	// claim_key, employment_id and source_ref stay on the keep — only richness fields move.
+	//
+	// Both rows are additionally gated on updated_at still matching what Store.MergeAtoms read
+	// when it chose keep/lose and computed @context/@metrics/@skills: that computation happens
+	// in Go, outside any transaction, so a write landing in the gap (an edit, another merge)
+	// must not be silently clobbered by an UPDATE built from a stale snapshot. A mismatch here
+	// yields no row exactly like a concurrent delete already did, and the caller reports both
+	// the same way — reload and retry — rather than pretending a still-present row vanished.
 	MergeExperienceAtoms(ctx context.Context, arg MergeExperienceAtomsParams) (MergeExperienceAtomsRow, error)
 	// The revision a follow-on edit might be folded into. Only the newest is a candidate:
 	// coalescing into anything older would reorder the log.
@@ -2683,6 +2717,8 @@ type Querier interface {
 	// source ISN'T swept), this targets specific sources that ARE swept but only jobs the
 	// sweep already should have closed by its own 48h window (cmd/ingest's staleAfter) —
 	// evidence the sweep is structurally unable to reach them, not a race with it.
+	// external_id rides along for sources verified by a per-posting API keyed on it rather
+	// than by fetching the stored url (echojobs: see cmd/liveness/echojobs.go).
 	SelectStaleRegisteredCandidates(ctx context.Context, arg SelectStaleRegisteredCandidatesParams) ([]SelectStaleRegisteredCandidatesRow, error)
 	// Name a session from its first user message. Applied only while the label is still unset,
 	// so a long conversation keeps the name it was born with.
@@ -2973,6 +3009,12 @@ type Querier interface {
 	// A full owner-scoped replacement, used by the profile UI where the user is editing the
 	// fields directly and means what they typed — including blanking one.
 	UpdateExperienceEmployment(ctx context.Context, arg UpdateExperienceEmploymentParams) (ExperienceEmployment, error)
+	// Targeted company/company_slug rewrite for cmd/backfill-himalayas-companyname: repairs rows
+	// ingested while the adapter stored Himalayas' companyName sentinel verbatim (see
+	// sources.HimalayasCompanyNameSentinel). Same shape as UpdateJobDescription: only the two
+	// company columns and the refreshed content_hash move, stamping updated_at so `reindex --since`
+	// picks the row back up.
+	UpdateJobCompany(ctx context.Context, arg UpdateJobCompanyParams) (int64, error)
 	// One-off re-derive (cmd/backfill-derive): rewrite in a single pass every column that
 	// ingest computes as a pure function of a row's own raw/immutable fields — the
 	// deterministic dictionary facets (countries, regions, cities, work_mode, skills,
