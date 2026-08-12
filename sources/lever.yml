@@ -4427,3 +4427,11 @@
 # lever boards mined from remote.io (2026-08-09, live-validated)
 - company: TrueML
   board: trueml
+- company: Acron Aviation
+  board: acronaviation
+- company: Board Intelligence
+  board: boardintelligence
+- company: Qrypt
+  board: qrypt
+- company: VTG
+  board: vtg

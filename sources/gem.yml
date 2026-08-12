@@ -454,3 +454,21 @@
   board: soundhound
 - company: Taro
   board: taro
+- company: Arc
+  board: arc
+- company: Caelum Research Corporation
+  board: caelumresearch
+- company: CB Smart Recruit
+  board: cb-smart-recruit
+- company: CodeGen
+  board: codegen
+- company: Mason
+  board: mason
+- company: SAVA
+  board: sava
+- company: SecureVision
+  board: securevision
+- company: Synthbee, Inc.
+  board: synthbee
+- company: 'TraceRoot.AI '
+  board: traceroot-ai
